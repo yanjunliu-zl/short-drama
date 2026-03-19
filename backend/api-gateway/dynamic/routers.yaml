@@ -1,0 +1,84 @@
+# Traefik 路由配置
+
+http:
+  routers:
+    # 用户服务路由
+    user-service:
+      rule: "PathPrefix(`/api/v1/users`)"
+      entryPoints:
+        - web
+      middlewares:
+        - cors
+        - rate-limit
+        - security-headers
+      service: user-service
+      tls:
+        certResolver: letsencrypt
+
+    # 剧本服务路由
+    script-service:
+      rule: "PathPrefix(`/api/v1/scripts`)"
+      entryPoints:
+        - web
+      middlewares:
+        - cors
+        - rate-limit
+        - security-headers
+      service: script-service
+      tls:
+        certResolver: letsencrypt
+
+    # 视频服务路由
+    video-service:
+      rule: "PathPrefix(`/api/v1/videos`)"
+      entryPoints:
+        - web
+      middlewares:
+        - cors
+        - rate-limit
+        - security-headers
+      service: video-service
+      tls:
+        certResolver: letsencrypt
+
+    # Traefik仪表板路由
+    traefik-dashboard:
+      rule: "Host(`traefik.localhost`)"
+      entryPoints:
+        - web
+      middlewares:
+        - auth
+      service: api@internal
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    # 用户服务
+    user-service:
+      loadBalancer:
+        servers:
+          - url: "http://user-service:8080"
+        healthCheck:
+          path: /health
+          interval: 30s
+          timeout: 5s
+
+    # 剧本服务
+    script-service:
+      loadBalancer:
+        servers:
+          - url: "http://script-service:8000"
+        healthCheck:
+          path: /health
+          interval: 30s
+          timeout: 5s
+
+    # 视频服务
+    video-service:
+      loadBalancer:
+        servers:
+          - url: "http://video-service:8000"
+        healthCheck:
+          path: /health
+          interval: 30s
+          timeout: 5s

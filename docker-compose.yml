@@ -1,0 +1,319 @@
+version: '3.8'
+
+networks:
+  shortdrama-network:
+    driver: bridge
+    name: shortdrama-network
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  go-mod-cache:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+services:
+  # 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: shortdrama-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: shortdrama
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: admin123
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend/config/mysql/conf.d:/etc/mysql/conf.d:ro
+    networks:
+      - shortdrama-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  # 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: shortdrama-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./backend/config/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - shortdrama-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 消息队列
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: shortdrama-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "5672:5672"   # AMQP协议端口
+      - "15672:15672" # 管理界面端口
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - shortdrama-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # API网关 - Traefik
+  traefik:
+    image: traefik:v3.0
+    container_name: shortdrama-traefik
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--log.level=DEBUG"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8081:8080"  # 仪表板
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./backend/api-gateway/traefik.yaml:/etc/traefik/traefik.yml:ro
+      - ./backend/api-gateway/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      - shortdrama-network
+    depends_on:
+      - mysql
+      - redis
+      - rabbitmq
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.api.service=api@internal"
+      - "traefik.http.routers.api.middlewares=auth"
+      - "traefik.http.middlewares.auth.basicauth.users=admin:$$apr1$$6lJ9lL5q$$0.8G8XJc8Q9p0.5k.5.5k."
+
+  # 用户服务 (GoZero)
+  user-service:
+    build:
+      context: ./backend/services/user-service
+      dockerfile: Dockerfile
+    container_name: shortdrama-user-service
+    restart: unless-stopped
+    environment:
+      - APP_ENV=development
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=admin
+      - DB_PASSWORD=admin123
+      - DB_NAME=shortdrama
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin123
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./backend/services/user-service:/app
+      - /Users/liuming/go/pkg/mod:/go/pkg/mod
+    networks:
+      - shortdrama-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.user-service.rule=PathPrefix(`/api/v1/users`)"
+      - "traefik.http.routers.user-service.entrypoints=web"
+      - "traefik.http.services.user-service.loadbalancer.server.port=8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 剧本生成服务 (FastAPI)
+  script-service:
+    build:
+      context: ./backend/services/script-service
+      dockerfile: Dockerfile
+    container_name: shortdrama-script-service
+    restart: unless-stopped
+    environment:
+      - APP_ENV=development
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=admin
+      - DB_PASSWORD=admin123
+      - DB_NAME=shortdrama
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin123
+      - MODEL_PATH=/app/models
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/services/script-service:/app
+      - ./backend/data/models:/app/models
+    networks:
+      - shortdrama-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.script-service.rule=PathPrefix(`/api/v1/scripts`)"
+      - "traefik.http.routers.script-service.entrypoints=web"
+      - "traefik.http.services.script-service.loadbalancer.server.port=8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # 视频处理服务 (FastAPI + Celery)
+  video-service:
+    build:
+      context: ./backend/services/video-service
+      dockerfile: Dockerfile
+    container_name: shortdrama-video-service
+    restart: unless-stopped
+    environment:
+      - APP_ENV=development
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=admin
+      - DB_PASSWORD=admin123
+      - DB_NAME=shortdrama
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin123
+      - CELERY_BROKER_URL=amqp://admin:admin123@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend/services/video-service:/app
+      - ./backend/data/videos:/app/videos
+      - ./backend/data/templates:/app/templates
+    networks:
+      - shortdrama-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.video-service.rule=PathPrefix(`/api/v1/videos`)"
+      - "traefik.http.routers.video-service.entrypoints=web"
+      - "traefik.http.services.video-service.loadbalancer.server.port=8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Celery Worker (视频处理)
+  video-worker:
+    build:
+      context: ./backend/services/video-service
+      dockerfile: Dockerfile.worker
+    container_name: shortdrama-video-worker
+    restart: unless-stopped
+    environment:
+      - APP_ENV=development
+      - CELERY_BROKER_URL=amqp://admin:admin123@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./backend/services/video-service:/app
+      - ./backend/data/videos:/app/videos
+    networks:
+      - shortdrama-network
+    depends_on:
+      - rabbitmq
+      - redis
+    command: celery -A app.workers.celery_app worker --loglevel=info
+
+  # 监控 - Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: shortdrama-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./backend/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - shortdrama-network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+
+  # 监控 - Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: shortdrama-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./backend/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./backend/monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - shortdrama-network
+    depends_on:
+      - prometheus
+

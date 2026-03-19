@@ -1,0 +1,67 @@
+# Traefik 中间件配置
+
+http:
+  middlewares:
+    # 压缩中间件
+    compress:
+      compress: {}
+
+    # 限流中间件
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 50
+
+    # 认证中间件
+    auth:
+      basicAuth:
+        users:
+          - "admin:$apr1$6lJ9lL5q$0.8G8XJc8Q9p0.5k.5.5k."
+
+    # 跨域中间件
+    cors:
+      headers:
+        accessControlAllowCredentials: true
+        accessControlAllowHeaders:
+          - "*"
+        accessControlAllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+          - PATCH
+        accessControlAllowOriginList:
+          - "http://localhost:3000"
+          - "http://localhost:8080"
+          - "https://shortdrama.com"
+        accessControlMaxAge: 100
+        addVaryHeader: true
+
+    # 安全头中间件
+    security-headers:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        frameDeny: true
+        sslRedirect: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 31536000
+
+    # 重试中间件
+    retry:
+      retry:
+        attempts: 3
+        initialInterval: 500ms
+
+    # 断路器中间件
+    circuit-breaker:
+      circuitBreaker:
+        expression: "NetworkErrorRatio() > 0.5"
+
+    # 请求日志中间件
+    request-log:
+      plugin:
+        traefik-plugin-request-log:
+          format: "common"
