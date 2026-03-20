@@ -1,6 +1,4 @@
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios'
-import { store } from '@/store'
-import { clearAuth, refreshToken } from '@/store/slices/authSlice'
 import { notification } from 'antd'
 
 // 创建axios实例
@@ -15,8 +13,8 @@ const axiosInstance: AxiosInstance = axios.create({
 // 请求拦截器
 axiosInstance.interceptors.request.use(
   (config) => {
-    const state = store.getState()
-    const token = state.auth.token
+    // 从localStorage获取token
+    const token = localStorage.getItem('token')
 
     // 添加认证token
     if (token) {
@@ -64,28 +62,43 @@ axiosInstance.interceptors.response.use(
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true
 
-      try {
-        // 尝试刷新token
-        await store.dispatch(refreshToken())
-        const state = store.getState()
-        const newToken = state.auth.token
+      const refreshToken = localStorage.getItem('refreshToken')
 
-        // 更新请求头并重试
-        originalRequest.headers.Authorization = `Bearer ${newToken}`
-        return axiosInstance(originalRequest)
-      } catch (refreshError) {
-        // 刷新token失败，清除认证状态
-        store.dispatch(clearAuth())
-        notification.error({
-          message: '会话过期',
-          description: '请重新登录',
-          duration: 3,
-        })
+      if (refreshToken) {
+        try {
+          // 尝试刷新token
+          const refreshResponse = await axios.post(
+            `${import.meta.env.VITE_API_BASE_URL || '/api'}/v1/users/refresh-token`,
+            { refresh_token: refreshToken }
+          )
 
-        // 重定向到登录页
-        window.location.href = '/login'
-        return Promise.reject(refreshError)
+          if (refreshResponse.data && refreshResponse.data.data) {
+            const { token, refresh_token } = refreshResponse.data.data
+            localStorage.setItem('token', token)
+            localStorage.setItem('refreshToken', refresh_token)
+
+            // 更新请求头并重试
+            originalRequest.headers.Authorization = `Bearer ${token}`
+            return axiosInstance(originalRequest)
+          }
+        } catch (refreshError) {
+          console.log('刷新token失败:', refreshError)
+        }
       }
+
+      // 刷新token失败或无refreshToken，清除认证状态
+      localStorage.removeItem('token')
+      localStorage.removeItem('refreshToken')
+
+      notification.error({
+        message: '会话过期',
+        description: '请重新登录',
+        duration: 3,
+      })
+
+      // 重定向到登录页
+      window.location.href = '/login'
+      return Promise.reject(error)
     }
 
     // 处理其他错误

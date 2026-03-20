@@ -24,7 +24,7 @@ async def generate_script(
     """
     生成剧本
 
-    使用AI模型生成新的短剧剧本
+    使用AI模型生成新的漫剧剧本
     """
     try:
         # 异步生成剧本

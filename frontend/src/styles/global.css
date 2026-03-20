@@ -5,14 +5,14 @@
 /* 自定义全局样式 */
 @layer base {
   :root {
-    --primary-color: #3b82f6;
-    --secondary-color: #64748b;
-    --success-color: #10b981;
-    --warning-color: #f59e0b;
-    --error-color: #ef4444;
-    --background-color: #f8fafc;
+    --primary-color: #0080ff;
+    --secondary-color: #667fff;
+    --success-color: #00e6b8;
+    --warning-color: #ffaa00;
+    --error-color: #ff3366;
+    --background-color: #E5E7EB;
     --text-primary: #1e293b;
-    --text-secondary: #64748b;
+    --text-secondary: #475569;
   }
 
   * {
@@ -42,22 +42,23 @@
 
   /* 滚动条样式 */
   ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
   }
 
   ::-webkit-scrollbar-track {
-    background: #f1f5f9;
-    border-radius: 4px;
+    background: #d1d5db;
+    border-radius: 6px;
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
-    border-radius: 4px;
+    background: linear-gradient(45deg, #0080ff, #667fff);
+    border-radius: 6px;
+    border: 2px solid #d1d5db;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: #94a3b8;
+    background: linear-gradient(45deg, #00c6ff, #9d4edd);
   }
 }
 
@@ -71,49 +72,67 @@
   }
 
   .glass-effect {
-    @apply bg-white/80 backdrop-blur-sm border border-white/20;
+    @apply bg-dark-900/70 backdrop-blur-lg border border-cyber-500/30 shadow-2xl;
   }
 
   .gradient-primary {
-    @apply bg-gradient-to-r from-blue-500 to-indigo-600;
+    @apply bg-gradient-to-r from-cyber-500 to-neon-600;
   }
 
   .gradient-success {
-    @apply bg-gradient-to-r from-emerald-500 to-teal-600;
+    @apply bg-gradient-to-r from-tech-500 to-tech-700;
   }
 
   .gradient-warning {
-    @apply bg-gradient-to-r from-amber-500 to-orange-600;
+    @apply bg-gradient-to-r from-amber-500 to-orange-500;
+  }
+
+  .gradient-error {
+    @apply bg-gradient-to-r from-red-500 to-pink-600;
+  }
+
+  .gradient-tech {
+    @apply bg-gradient-to-r from-cyber-400 via-neon-500 to-tech-600;
   }
 
   .text-gradient {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600;
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-cyber-500 to-neon-600;
+  }
+
+  .text-gradient-tech {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-cyber-400 via-neon-500 to-tech-600;
   }
 
   .btn-primary {
-    @apply px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700
-           focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
-           transition-colors duration-200 font-medium;
+    @apply px-4 py-2 bg-gradient-to-r from-cyber-500 to-neon-600 text-white rounded-lg hover:from-cyber-600 hover:to-neon-700
+           focus:outline-none focus:ring-2 focus:ring-cyber-500 focus:ring-offset-2 focus:ring-offset-dark-900
+           transition-all duration-300 font-medium shadow-lg hover:shadow-xl;
   }
 
   .btn-secondary {
-    @apply px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300
-           focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2
-           transition-colors duration-200 font-medium;
+    @apply px-4 py-2 bg-dark-700 text-gray-200 rounded-lg hover:bg-dark-600
+           focus:outline-none focus:ring-2 focus:ring-dark-400 focus:ring-offset-2 focus:ring-offset-dark-900
+           transition-colors duration-200 font-medium border border-dark-600;
+  }
+
+  .btn-tech {
+    @apply px-4 py-2 bg-gradient-to-r from-tech-500 to-tech-700 text-white rounded-lg hover:from-tech-600 hover:to-tech-800
+           focus:outline-none focus:ring-2 focus:ring-tech-500 focus:ring-offset-2 focus:ring-offset-dark-900
+           transition-all duration-300 font-medium shadow-lg hover:shadow-xl;
   }
 
   .input-base {
-    @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none
-           focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors
-           duration-200 bg-white;
+    @apply w-full px-3 py-2 border border-dark-600 rounded-lg focus:outline-none
+           focus:ring-2 focus:ring-cyber-500 focus:border-cyber-500 transition-colors
+           duration-200 bg-dark-800 text-gray-200 placeholder-gray-500;
   }
 
   .table-header {
-    @apply bg-gray-50 text-gray-700 font-semibold px-4 py-3 text-left;
+    @apply bg-dark-700 text-gray-300 font-semibold px-4 py-3 text-left border-b border-dark-600;
   }
 
   .table-cell {
-    @apply px-4 py-3 border-t border-gray-200;
+    @apply px-4 py-3 border-t border-dark-600 bg-dark-800 text-gray-400;
   }
 }
 
@@ -150,11 +169,13 @@
   }
 }
 
-/* 暗色模式支持 */
+/* 暗色模式支持 - 保持统一颜色 */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background-color: #0f172a;
-    --text-primary: #f1f5f9;
-    --text-secondary: #94a3b8;
+    --background-color: #e5e7eb;
+    --text-primary: #1e293b;
+    --text-secondary: #475569;
+    --primary-color: #0080ff;
+    --secondary-color: #667fff;
   }
 }

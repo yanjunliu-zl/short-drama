@@ -1,10 +1,10 @@
-# 短剧生成平台 Makefile
+# 拓扑漫剧 Makefile
 
 .PHONY: help dev-up dev-down logs build test clean
 
 # 默认目标
 help:
-	@echo "短剧生成平台开发命令"
+	@echo "拓扑漫剧开发命令"
 	@echo ""
 	@echo "用法:"
 	@echo "  make <target>"
