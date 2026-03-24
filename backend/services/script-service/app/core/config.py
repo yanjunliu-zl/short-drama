@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD", None)
     REDIS_DB: int = int(os.getenv("REDIS_DB", 0))
 
+    # 缓存配置
+    CACHE_ENABLED: bool = os.getenv("CACHE_ENABLED", "True").lower() == "true"
+    CACHE_DEFAULT_TTL: int = int(os.getenv("CACHE_DEFAULT_TTL", 3600))  # 默认1小时
+    CACHE_SCRIPT_TTL: int = int(os.getenv("CACHE_SCRIPT_TTL", 7200))  # 剧本缓存2小时
+    CACHE_ANALYSIS_TTL: int = int(os.getenv("CACHE_ANALYSIS_TTL", 3600))  # 分析缓存1小时
+    CACHE_OPTIMIZATION_TTL: int = int(os.getenv("CACHE_OPTIMIZATION_TTL", 5400))  # 优化缓存1.5小时
+    CACHE_WORKFLOW_TTL: int = int(os.getenv("CACHE_WORKFLOW_TTL", 10800))  # 工作流缓存3小时
+
     # RabbitMQ配置
     RABBITMQ_HOST: str = os.getenv("RABBITMQ_HOST", "rabbitmq")
     RABBITMQ_PORT: int = int(os.getenv("RABBITMQ_PORT", 5672))
@@ -57,8 +65,20 @@ class Settings(BaseSettings):
 
     # AI模型配置
     MODEL_PATH: str = os.getenv("MODEL_PATH", "/app/models")
-    MODEL_NAME: str = os.getenv("MODEL_NAME", "gpt-3.5-turbo")
+    MODEL_NAME: str = os.getenv("MODEL_NAME", "deepseek-chat")
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY", None)
+    OPENAI_API_BASE: Optional[str] = os.getenv("OPENAI_API_BASE", None)
+    OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", 2000))
+    OPENAI_TEMPERATURE: float = float(os.getenv("OPENAI_TEMPERATURE", 0.7))
+    OPENAI_TIMEOUT: int = int(os.getenv("OPENAI_TIMEOUT", 30))
+    # DeepSeek配置
+    DEEPSEEK_API_KEY: Optional[str] = os.getenv("DEEPSEEK_API_KEY", None)
+    DEEPSEEK_API_BASE: str = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
+    DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    LANGCHAIN_TRACING: bool = os.getenv("LANGCHAIN_TRACING", "False").lower() == "true"
+    LANGCHAIN_ENDPOINT: Optional[str] = os.getenv("LANGCHAIN_ENDPOINT", None)
+    LANGCHAIN_API_KEY: Optional[str] = os.getenv("LANGCHAIN_API_KEY", None)
+    LANGCHAIN_PROJECT: Optional[str] = os.getenv("LANGCHAIN_PROJECT", None)
 
     # Celery配置
     CELERY_BROKER_URL: str = os.getenv(

@@ -1,0 +1,386 @@
+import logging
+from typing import Dict, Any, Optional, TypedDict, List
+from enum import Enum
+from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.aiosqlite import AsyncSqliteSaver
+
+from app.services.ai_service import AIService
+from app.services.cache_service import get_cache_service
+
+logger = logging.getLogger(__name__)
+
+
+class WorkflowState(TypedDict):
+    """工作流状态定义"""
+    request: Dict[str, Any]
+    current_step: str
+    result: Optional[str]
+    error: Optional[str]
+    metadata: Dict[str, Any]
+    script_draft: Optional[str]
+    script_analyzed: Optional[Dict[str, Any]]
+    script_optimized: Optional[str]
+    script_final: Optional[str]
+
+
+class WorkflowStep(Enum):
+    """工作流步骤枚举"""
+    INITIALIZE = "initialize"
+    GENERATE_DRAFT = "generate_draft"
+    ANALYZE_STRUCTURE = "analyze_structure"
+    OPTIMIZE_SCRIPT = "optimize_script"
+    FINALIZE = "finalize"
+    HANDLE_ERROR = "handle_error"
+
+
+class ScriptWorkflow:
+    """剧本生成工作流，使用LangGraph，支持缓存"""
+
+    def __init__(self, ai_service: AIService):
+        self.ai_service = ai_service
+        self.cache_service = None
+        self.graph = None
+        self.checkpointer = None
+        self._initialized = False
+
+    async def initialize(self):
+        """初始化工作流图"""
+        if self._initialized:
+            return
+
+        try:
+            logger.info("初始化剧本生成工作流...")
+
+            # 初始化缓存服务
+            try:
+                self.cache_service = await get_cache_service()
+                logger.info("缓存服务初始化成功")
+            except Exception as e:
+                logger.warning(f"缓存服务初始化失败，将禁用缓存: {e}")
+                self.cache_service = None
+
+            # 创建检查点保存器（使用SQLite）
+            self.checkpointer = AsyncSqliteSaver.from_conn_string(":memory:")
+
+            # 创建状态图
+            workflow = StateGraph(WorkflowState)
+
+            # 添加节点
+            workflow.add_node(WorkflowStep.INITIALIZE.value, self._initialize_step)
+            workflow.add_node(WorkflowStep.GENERATE_DRAFT.value, self._generate_draft_step)
+            workflow.add_node(WorkflowStep.ANALYZE_STRUCTURE.value, self._analyze_structure_step)
+            workflow.add_node(WorkflowStep.OPTIMIZE_SCRIPT.value, self._optimize_script_step)
+            workflow.add_node(WorkflowStep.FINALIZE.value, self._finalize_step)
+            workflow.add_node(WorkflowStep.HANDLE_ERROR.value, self._handle_error_step)
+
+            # 设置入口点
+            workflow.set_entry_point(WorkflowStep.INITIALIZE.value)
+
+            # 定义边（正常流程）
+            workflow.add_edge(WorkflowStep.INITIALIZE.value, WorkflowStep.GENERATE_DRAFT.value)
+            workflow.add_edge(WorkflowStep.GENERATE_DRAFT.value, WorkflowStep.ANALYZE_STRUCTURE.value)
+            workflow.add_edge(WorkflowStep.ANALYZE_STRUCTURE.value, WorkflowStep.OPTIMIZE_SCRIPT.value)
+            workflow.add_edge(WorkflowStep.OPTIMIZE_SCRIPT.value, WorkflowStep.FINALIZE.value)
+            workflow.add_edge(WorkflowStep.FINALIZE.value, END)
+
+            # 错误处理边
+            workflow.add_edge(WorkflowStep.HANDLE_ERROR.value, END)
+
+            # 创建条件边（根据分析结果决定是否优化）
+            def should_optimize(state: WorkflowState) -> str:
+                """决定是否需要进行优化"""
+                analysis = state.get("script_analyzed")
+                if not analysis or "error" in analysis:
+                    return WorkflowStep.FINALIZE.value
+
+                # 简单的优化判断逻辑
+                scenes_count = analysis.get("scenes_count", 0)
+                pace = analysis.get("pace", "")
+
+                if scenes_count < 3 or "快" in pace or "慢" in pace:
+                    return WorkflowStep.OPTIMIZE_SCRIPT.value
+                else:
+                    return WorkflowStep.FINALIZE.value
+
+            workflow.add_conditional_edges(
+                WorkflowStep.ANALYZE_STRUCTURE.value,
+                should_optimize,
+                {
+                    WorkflowStep.OPTIMIZE_SCRIPT.value: WorkflowStep.OPTIMIZE_SCRIPT.value,
+                    WorkflowStep.FINALIZE.value: WorkflowStep.FINALIZE.value,
+                }
+            )
+
+            # 编译图
+            self.graph = workflow.compile(checkpointer=self.checkpointer)
+            self._initialized = True
+
+            logger.info("剧本生成工作流初始化完成")
+
+        except Exception as e:
+            logger.error(f"工作流初始化失败: {e}")
+            raise
+
+    async def _initialize_step(self, state: WorkflowState) -> WorkflowState:
+        """初始化步骤"""
+        logger.info("工作流: 初始化步骤")
+        try:
+            # 验证请求参数
+            request = state["request"]
+            if not request.get("title"):
+                raise ValueError("剧本标题不能为空")
+
+            # 初始化AI服务
+            await self.ai_service.initialize()
+
+            return {
+                **state,
+                "current_step": WorkflowStep.INITIALIZE.value,
+                "metadata": {
+                    **state.get("metadata", {}),
+                    "validated": True,
+                    "timestamp": "开始生成时间"
+                }
+            }
+        except Exception as e:
+            logger.error(f"初始化步骤失败: {e}")
+            return {
+                **state,
+                "current_step": WorkflowStep.HANDLE_ERROR.value,
+                "error": str(e)
+            }
+
+    async def _generate_draft_step(self, state: WorkflowState) -> WorkflowState:
+        """生成草稿步骤"""
+        logger.info("工作流: 生成草稿步骤")
+        try:
+            request = state["request"]
+            script_draft = await self.ai_service.generate_script(request)
+
+            return {
+                **state,
+                "current_step": WorkflowStep.GENERATE_DRAFT.value,
+                "script_draft": script_draft,
+                "metadata": {
+                    **state.get("metadata", {}),
+                    "draft_generated": True,
+                    "draft_length": len(script_draft)
+                }
+            }
+        except Exception as e:
+            logger.error(f"生成草稿步骤失败: {e}")
+            return {
+                **state,
+                "current_step": WorkflowStep.HANDLE_ERROR.value,
+                "error": str(e)
+            }
+
+    async def _analyze_structure_step(self, state: WorkflowState) -> WorkflowState:
+        """分析结构步骤"""
+        logger.info("工作流: 分析结构步骤")
+        try:
+            script_draft = state.get("script_draft")
+            if not script_draft:
+                raise ValueError("没有可分析的剧本草稿")
+
+            analysis_result = await self.ai_service.analyze_script_structure(script_draft)
+
+            return {
+                **state,
+                "current_step": WorkflowStep.ANALYZE_STRUCTURE.value,
+                "script_analyzed": analysis_result,
+                "metadata": {
+                    **state.get("metadata", {}),
+                    "analyzed": True,
+                    "analysis_result": analysis_result.get("analysis", "")[:100]
+                }
+            }
+        except Exception as e:
+            logger.error(f"分析结构步骤失败: {e}")
+            return {
+                **state,
+                "current_step": WorkflowStep.HANDLE_ERROR.value,
+                "error": str(e)
+            }
+
+    async def _optimize_script_step(self, state: WorkflowState) -> WorkflowState:
+        """优化剧本步骤"""
+        logger.info("工作流: 优化剧本步骤")
+        try:
+            script_draft = state.get("script_draft")
+            analysis_result = state.get("script_analyzed", {})
+
+            if not script_draft:
+                raise ValueError("���有可优化的剧本草稿")
+
+            # 根据分析结果生成优化反馈
+            feedback = self._generate_optimization_feedback(analysis_result)
+            optimized_script = await self.ai_service.optimize_script(script_draft, feedback)
+
+            return {
+                **state,
+                "current_step": WorkflowStep.OPTIMIZE_SCRIPT.value,
+                "script_optimized": optimized_script,
+                "metadata": {
+                    **state.get("metadata", {}),
+                    "optimized": True,
+                    "optimization_feedback": feedback[:100] if feedback else ""
+                }
+            }
+        except Exception as e:
+            logger.error(f"优化剧本步骤失败: {e}")
+            return {
+                **state,
+                "current_step": WorkflowStep.HANDLE_ERROR.value,
+                "error": str(e)
+            }
+
+    async def _finalize_step(self, state: WorkflowState) -> WorkflowState:
+        """最终化步骤"""
+        logger.info("工作流: 最终化步骤")
+        try:
+            # 选择最终剧本版本（优先使用优化版本）
+            final_script = state.get("script_optimized") or state.get("script_draft")
+
+            if not final_script:
+                raise ValueError("没有可用的剧本内容")
+
+            return {
+                **state,
+                "current_step": WorkflowStep.FINALIZE.value,
+                "script_final": final_script,
+                "result": final_script,
+                "metadata": {
+                    **state.get("metadata", {}),
+                    "finalized": True,
+                    "final_length": len(final_script)
+                }
+            }
+        except Exception as e:
+            logger.error(f"最终化步骤失败: {e}")
+            return {
+                **state,
+                "current_step": WorkflowStep.HANDLE_ERROR.value,
+                "error": str(e)
+            }
+
+    async def _handle_error_step(self, state: WorkflowState) -> WorkflowState:
+        """错误处理步骤"""
+        logger.error(f"工作流: 错误处理步骤 - {state.get('error', '未知错误')}")
+        return {
+            **state,
+            "current_step": WorkflowStep.HANDLE_ERROR.value,
+            "result": None,
+            "metadata": {
+                **state.get("metadata", {}),
+                "error_handled": True,
+                "error_message": state.get("error", "未知错误")
+            }
+        }
+
+    def _generate_optimization_feedback(self, analysis_result: Dict[str, Any]) -> str:
+        """根据分析结果生成优化反馈"""
+        if not analysis_result or "error" in analysis_result:
+            return "请改进剧本结构和对话流畅度。"
+
+        scenes_count = analysis_result.get("scenes_count", 0)
+        pace = analysis_result.get("pace", "")
+        analysis_text = analysis_result.get("analysis", "")
+
+        feedback_parts = []
+
+        if scenes_count < 3:
+            feedback_parts.append(f"场景数量较少（{scenes_count}个），建议增加1-2个关键场景来丰富故事。")
+
+        if "快" in pace:
+            feedback_parts.append("故事节奏偏快，建议增加一些细节描写和角色互动来放缓节奏。")
+        elif "慢" in pace:
+            feedback_parts.append("故事节奏偏慢，建议精简部分场景或增加冲突来提升节奏。")
+
+        if analysis_text:
+            # 提取分析中的关键建议
+            if "改进" in analysis_text or "建议" in analysis_text:
+                feedback_parts.append(analysis_text[:200])
+
+        if not feedback_parts:
+            return "剧本结构良好，但可以进一步优化角色对话和情感表达。"
+
+        return " ".join(feedback_parts)
+
+    async def execute(self, request: Dict[str, Any], thread_id: Optional[str] = None) -> Dict[str, Any]:
+        """执行工作流"""
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            logger.info(f"执行剧本生成工作流，请求: {request.get('title', '未命名剧本')}")
+
+            # 检查缓存
+            if self.cache_service:
+                cached_result = await self.cache_service.get_cached_workflow_result(request)
+                if cached_result:
+                    logger.info("缓存命中: 完整工作流结果")
+                    # 添加缓存标识到元数据
+                    if isinstance(cached_result, dict):
+                        cached_result["metadata"] = {
+                            **cached_result.get("metadata", {}),
+                            "cached": True,
+                            "cache_hit": True
+                        }
+                    return cached_result
+
+            logger.info("缓存未命中，执行完整工作流...")
+
+            # 初始状态
+            initial_state: WorkflowState = {
+                "request": request,
+                "current_step": WorkflowStep.INITIALIZE.value,
+                "result": None,
+                "error": None,
+                "metadata": {},
+                "script_draft": None,
+                "script_analyzed": None,
+                "script_optimized": None,
+                "script_final": None
+            }
+
+            # 执行工作流
+            config = {"configurable": {"thread_id": thread_id or f"script_{request.get('title', 'default')}"}}
+            final_state = await self.graph.ainvoke(initial_state, config)
+
+            # 提取结果
+            result = {
+                "success": final_state.get("result") is not None and final_state.get("error") is None,
+                "script": final_state.get("result"),
+                "error": final_state.get("error"),
+                "metadata": final_state.get("metadata", {}),
+                "workflow_steps": final_state.get("current_step", ""),
+                "draft": final_state.get("script_draft"),
+                "analysis": final_state.get("script_analyzed"),
+                "optimized_version": final_state.get("script_optimized"),
+            }
+
+            if result["success"]:
+                logger.info(f"工作流执行成功，生成剧本长度: {len(result['script'])} 字符")
+
+                # 缓存成功的结果
+                if self.cache_service:
+                    cache_success = await self.cache_service.cache_workflow_result(request, result)
+                    if cache_success:
+                        logger.info("工作流结果已缓存")
+                    else:
+                        logger.warning("工作流结果缓存失败")
+            else:
+                logger.error(f"工作流执行失败: {result['error']}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"工作流执行异常: {e}")
+            return {
+                "success": False,
+                "script": None,
+                "error": str(e),
+                "metadata": {},
+                "workflow_steps": "error",
+            }

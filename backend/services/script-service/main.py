@@ -8,6 +8,8 @@ import time
 from app.core.config import settings
 from app.api.v1.api import api_router
 from app.core.logging import setup_logging
+from app.core.deps import initialize_script_service
+from app.services.cache_service import initialize_cache_service
 
 # 设置日志
 setup_logging()
@@ -59,7 +61,10 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 async def startup_event():
     logger.info("Starting up script generation service...")
     # 初始化数据库连接
+    # 初始化缓存服务
+    await initialize_cache_service()
     # 初始化AI模型
+    await initialize_script_service()
     # 初始化消息队列
     logger.info("Service started successfully")
 
