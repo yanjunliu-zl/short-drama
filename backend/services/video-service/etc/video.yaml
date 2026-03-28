@@ -1,0 +1,87 @@
+Name: video-service
+Host: 0.0.0.0
+Port: 8082
+
+# 日志配置
+Log:
+  Level: info
+  Mode: console
+  Encoding: json
+  StackTrace: false
+  DisableCaller: false
+
+# 性能监控
+Prometheus:
+  Host: 0.0.0.0
+  Port: 9082
+  Path: /metrics
+
+# 链路追踪
+Telemetry:
+  Name: video-service
+  Endpoint: http://jaeger:14268/api/traces
+  Sampler: 1.0
+  Batcher: jaeger
+
+# 数据库配置
+Database:
+  Host: mysql
+  Port: 3306
+  User: admin
+  Password: admin123
+  DBName: shortdrama
+  MaxOpenConns: 100
+  MaxIdleConns: 20
+  ConnMaxLifetime: 3600
+
+# Redis配置
+Redis:
+  Host: redis
+  Port: 6379
+  Password: ""
+  DB: 0
+  PoolSize: 100
+  MinIdleConns: 10
+
+# RabbitMQ配置 (用于视频处理队列)
+RabbitMQ:
+  Host: rabbitmq
+  Port: 5672
+  User: admin
+  Password: admin123
+  VHost: /
+
+# 服务发现
+Consul:
+  Host: consul
+  Port: 8500
+  Token: ""
+
+# JWT配置
+JWT:
+  Secret: your-jwt-secret-key-here-change-in-production
+  Expire: 86400 # 24小时
+
+# 限流配置
+RateLimit:
+  Rate: 50  # 视频处理较耗资源，限流更低
+  Burst: 20
+
+# 熔断器配置
+CircuitBreaker:
+  Window: 10s
+  Bucket: 100
+  ErrorRate: 0.5
+
+# 健康检查
+HealthCheck:
+  Interval: 30s
+  Timeout: 5s
+
+# 视频处理配置
+VideoProcessing:
+  MaxConcurrentJobs: 5
+  TempDir: "/tmp/video-processing"
+  OutputDir: "/data/videos"
+  AllowedFormats: ["mp4", "avi", "mov", "mkv"]
+  MaxFileSize: 1073741824 # 1GB
