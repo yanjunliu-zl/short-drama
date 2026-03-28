@@ -5,10 +5,15 @@ import time
 
 from app.schemas.script import (
     ScriptUpdateRequest,
-    ScriptGenerationRequest
+    ScriptGenerationRequest,
+    ScriptFromNovelRequest,
+    ScriptFromOutlineRequest
 )
 from app.services.ai_service import AIService
 from app.services.workflow import ScriptWorkflow
+from app.client.service_clients import VideoServiceClient, LLMServiceClient
+
+logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +29,13 @@ class ScriptService:
         self.ai_service = AIService()
         self.workflow = ScriptWorkflow(self.ai_service)
 
+        # 初始化微服务客户端
+        self.video_client: Optional[VideoServiceClient] = None
+        self.llm_client: Optional[LLMServiceClient] = None
+
         # 初始化标志
         self._initialized = False
+        self._clients_initialized = False
 
     async def initialize(self):
         """初始化服务"""
@@ -257,4 +267,164 @@ class ScriptService:
                 "success": False,
                 "error": workflow_result.get("error"),
                 "workflow_result": workflow_result
+            }
+
+    async def generate_script_from_novel_async(self, task_id: str, request: ScriptFromNovelRequest):
+        """异步从小说生成剧本 - 使用LangGraph工作流"""
+        try:
+            # 确保服务已初始化
+            if not self._initialized:
+                await self.initialize()
+
+            logger.info(f"开始从小说生成剧本，任务ID: {task_id}, 标题: {request.title}")
+
+            # 更新任务状态为进行中
+            self._generation_tasks[task_id] = {
+                "status": "processing",
+                "progress": 10,
+                "result": None,
+                "start_time": time.time(),
+                "request": request.dict() if hasattr(request, 'dict') else vars(request)
+            }
+
+            # 将请求转换为字典
+            request_dict = request.dict() if hasattr(request, 'dict') else vars(request)
+
+            # 执行LangGraph工作流
+            workflow_result = await self.workflow.execute(request_dict, thread_id=task_id)
+
+            if workflow_result["success"]:
+                # 创建剧本记录
+                script_id = str(uuid4())
+                script_record = {
+                    "id": script_id,
+                    "task_id": task_id,
+                    "title": request.title,
+                    "content": workflow_result["script"],
+                    "theme": getattr(request, 'theme', ''),
+                    "length": getattr(request, 'length', '短篇'),
+                    "style": getattr(request, 'style', ''),
+                    "setting": getattr(request, 'setting', ''),
+                    "characters": getattr(request, 'characters', []),
+                    "source_type": "novel",
+                    "source_content": getattr(request, 'novel_content', '')[:500],  # 保存部分原文
+                    "status": "completed",
+                    "user_id": getattr(request, 'user_id', ''),
+                    "workflow_metadata": workflow_result.get("metadata", {}),
+                    "analysis_result": workflow_result.get("analysis"),
+                    "has_optimized_version": workflow_result.get("optimized_version") is not None,
+                    "created_at": time.time(),
+                    "updated_at": time.time()
+                }
+
+                self._scripts_storage[script_id] = script_record
+                self._generation_tasks[task_id] = {
+                    "status": "completed",
+                    "progress": 100,
+                    "result": script_record,
+                    "end_time": time.time(),
+                    "workflow_result": workflow_result,
+                    "script_id": script_id
+                }
+
+                logger.info(f"剧本生成完成，任务ID: {task_id}, 剧本ID: {script_id}, 长度: {len(workflow_result['script'])} 字符")
+            else:
+                # 工作流失败
+                error_msg = workflow_result.get("error", "未知错误")
+                self._generation_tasks[task_id] = {
+                    "status": "failed",
+                    "progress": 0,
+                    "error": error_msg,
+                    "end_time": time.time(),
+                    "workflow_result": workflow_result
+                }
+                logger.error(f"剧本生成失败，任务ID: {task_id}, 错误: {error_msg}")
+
+        except Exception as e:
+            logger.error(f"剧本生成异常: {e}")
+            self._generation_tasks[task_id] = {
+                "status": "failed",
+                "progress": 0,
+                "error": str(e),
+                "end_time": time.time()
+            }
+
+    async def generate_script_from_outline_async(self, task_id: str, request: ScriptFromOutlineRequest):
+        """异步从大纲生成剧本 - 使用LangGraph工作流"""
+        try:
+            # 确保服务已初始化
+            if not self._initialized:
+                await self.initialize()
+
+            logger.info(f"开始从大纲生成剧本，任务ID: {task_id}, 标题: {request.title}")
+
+            # 更新任务状态为进行中
+            self._generation_tasks[task_id] = {
+                "status": "processing",
+                "progress": 10,
+                "result": None,
+                "start_time": time.time(),
+                "request": request.dict() if hasattr(request, 'dict') else vars(request)
+            }
+
+            # 将请求转换为字典
+            request_dict = request.dict() if hasattr(request, 'dict') else vars(request)
+
+            # 执行LangGraph工作流
+            workflow_result = await self.workflow.execute(request_dict, thread_id=task_id)
+
+            if workflow_result["success"]:
+                # 创建剧本记录
+                script_id = str(uuid4())
+                script_record = {
+                    "id": script_id,
+                    "task_id": task_id,
+                    "title": request.title,
+                    "content": workflow_result["script"],
+                    "theme": getattr(request, 'theme', ''),
+                    "length": getattr(request, 'length', '短篇'),
+                    "style": getattr(request, 'style', ''),
+                    "setting": getattr(request, 'setting', ''),
+                    "characters": getattr(request, 'characters', []),
+                    "source_type": "outline",
+                    "source_content": getattr(request, 'outline', '')[:500],  # 保存部分原文
+                    "status": "completed",
+                    "user_id": getattr(request, 'user_id', ''),
+                    "workflow_metadata": workflow_result.get("metadata", {}),
+                    "analysis_result": workflow_result.get("analysis"),
+                    "has_optimized_version": workflow_result.get("optimized_version") is not None,
+                    "created_at": time.time(),
+                    "updated_at": time.time()
+                }
+
+                self._scripts_storage[script_id] = script_record
+                self._generation_tasks[task_id] = {
+                    "status": "completed",
+                    "progress": 100,
+                    "result": script_record,
+                    "end_time": time.time(),
+                    "workflow_result": workflow_result,
+                    "script_id": script_id
+                }
+
+                logger.info(f"剧本生成完成，任务ID: {task_id}, 剧本ID: {script_id}, 长度: {len(workflow_result['script'])} 字符")
+            else:
+                # 工作流失败
+                error_msg = workflow_result.get("error", "未知错误")
+                self._generation_tasks[task_id] = {
+                    "status": "failed",
+                    "progress": 0,
+                    "error": error_msg,
+                    "end_time": time.time(),
+                    "workflow_result": workflow_result
+                }
+                logger.error(f"剧本生成失败，任务ID: {task_id}, 错误: {error_msg}")
+
+        except Exception as e:
+            logger.error(f"剧本生成异常: {e}")
+            self._generation_tasks[task_id] = {
+                "status": "failed",
+                "progress": 0,
+                "error": str(e),
+                "end_time": time.time()
             }

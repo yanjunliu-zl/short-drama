@@ -1,0 +1,38 @@
+# FastAPI框架
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# 数据库
+sqlalchemy==2.0.29
+alembic==1.13.1
+
+# 环境变量
+python-dotenv==1.0.0
+
+# 验证
+pydantic==2.8.0
+pydantic-settings==2.3
+
+# AI/ML库
+langchain==1.2.3
+langchain-openai
+langgraph==1.0.9
+openai==2.26.0
+
+# 缓存
+redis==5.0.1
+aiosqlite==0.19.0
+
+# 工具类
+httpx==0.28.1
+aiofiles==23.2.1
+
+# 开发工具
+black==23.11.0
+flake8==6.1.0
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+
+# 其他
+python-multipart==0.0.6

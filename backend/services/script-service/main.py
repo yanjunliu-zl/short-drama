@@ -10,6 +10,7 @@ from app.api.v1.api import api_router
 from app.core.logging import setup_logging
 from app.core.deps import initialize_script_service
 from app.services.cache_service import initialize_cache_service
+from app.middleware.prometheus import MetricsEndpointMiddleware, set_health_status
 
 # 设置日志
 setup_logging()
@@ -48,10 +49,31 @@ app.add_middleware(
     allowed_hosts=settings.ALLOWED_HOSTS,
 )
 
+# 添加 Prometheus 指标端点
+MetricsEndpointMiddleware(app, settings.PROJECT_NAME)
+
 # 健康检查端点
 @app.get("/health")
 async def health_check():
+    set_health_status(settings.PROJECT_NAME, True)
     return {"status": "healthy", "timestamp": time.time()}
+
+# 就绪检查端点（用于 Kubernetes）
+@app.get("/ready")
+async def readiness_check():
+    try:
+        # 检查依赖服务
+        from app.core.deps import get_cache_service
+        cache = await get_cache_service()
+        if not await cache.is_available():
+            set_health_status(settings.PROJECT_NAME, False)
+            return JSONResponse(status_code=503, content={"status": "unready", "reason": "cache unavailable"})
+
+        set_health_status(settings.PROJECT_NAME, True)
+        return {"status": "ready", "timestamp": time.time()}
+    except Exception as e:
+        set_health_status(settings.PROJECT_NAME, False)
+        return JSONResponse(status_code=503, content={"status": "unready", "reason": str(e)})
 
 # 注册API路由
 app.include_router(api_router, prefix=settings.API_V1_STR)
@@ -73,6 +95,7 @@ async def shutdown_event():
     logger.info("Shutting down script generation service...")
     # 清理资源
     logger.info("Service shutdown completed")
+    set_health_status(settings.PROJECT_NAME, False)
 
 # 全局异常处理
 @app.exception_handler(Exception)
@@ -88,7 +111,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=settings.PORT,
         reload=settings.DEBUG,
         log_level=settings.LOG_LEVEL.lower(),
     )

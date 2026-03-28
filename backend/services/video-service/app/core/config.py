@@ -78,6 +78,40 @@ class Settings(BaseSettings):
     RATE_LIMIT_REQUESTS: int = int(os.getenv("RATE_LIMIT_REQUESTS", 100))
     RATE_LIMIT_PERIOD: int = int(os.getenv("RATE_LIMIT_PERIOD", 60))  # 秒
 
+    # JWT配置
+    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", SECRET_KEY)
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+
+    # 重试配置
+    RETRY_MAX_ATTEMPTS: int = int(os.getenv("RETRY_MAX_ATTEMPTS", 3))
+    RETRY_INITIAL_DELAY: float = float(os.getenv("RETRY_INITIAL_DELAY", 0.5))
+    RETRY_MAX_DELAY: float = float(os.getenv("RETRY_MAX_DELAY", 5.0))
+    RETRY_BACKOFF_FACTOR: float = float(os.getenv("RETRY_BACKOFF_FACTOR", 2.0))
+
+    # 超时配置
+    REQUEST_TIMEOUT: float = float(os.getenv("REQUEST_TIMEOUT", 30.0))
+    RESPONSE_TIMEOUT: float = float(os.getenv("RESPONSE_TIMEOUT", 60.0))
+
+    # 熔断器配置
+    CIRCUIT_BREAKER_ENABLED: bool = os.getenv("CIRCUIT_BREAKER_ENABLED", "True").lower() == "true"
+    CIRCUIT_BREAKER_ERROR_THRESHOLD: int = int(os.getenv("CIRCUIT_BREAKER_ERROR_THRESHOLD", 5))
+    CIRCUIT_BREAKER_RESET_TIMEOUT: int = int(os.getenv("CIRCUIT_BREAKER_RESET_TIMEOUT", 30))
+
+    # AI服务配置
+    LLMHUA_SERVICE_ENDPOINT: str = os.getenv("LLMHUA_SERVICE_ENDPOINT", "http://llmhua-service:8000")
+    SCRIPT_SERVICE_ENDPOINT: str = os.getenv("SCRIPT_SERVICE_ENDPOINT", "http://script-service:8000")
+    VIDEO_SERVICE_ENDPOINT: str = os.getenv("VIDEO_SERVICE_ENDPOINT", "http://video-service:8081")
+
+    # 对象存储配置
+    STORAGE_TYPE: str = os.getenv("STORAGE_TYPE", "s3")
+    STORAGE_ENDPOINT: str = os.getenv("STORAGE_ENDPOINT", "http://minio:9000")
+    STORAGE_ACCESS_KEY: str = os.getenv("STORAGE_ACCESS_KEY", "admin")
+    STORAGE_SECRET_KEY: str = os.getenv("STORAGE_SECRET_KEY", "admin123")
+    STORAGE_BUCKET: str = os.getenv("STORAGE_BUCKET", "short-drama")
+    STORAGE_REGION: str = os.getenv("STORAGE_REGION", "us-east-1")
+    STORAGE_USE_SSL: bool = os.getenv("STORAGE_USE_SSL", "false").lower() == "true"
+
     class Config:
         case_sensitive = True
         env_file = ".env"

@@ -282,3 +282,202 @@ class AIService:
         except Exception as e:
             logger.error(f"剧本优化失败: {e}")
             raise
+
+    async def novel_to_script(self, request: Dict[str, Any]) -> str:
+        """将小说转换为剧本，支持缓存"""
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            logger.info(f"开始将小说转换为剧本: {request.get('title', '未命名剧本')}")
+
+            # 尝试从缓存获取
+            if self.cache_service:
+                cached_script = await self.cache_service.get_cached_novel_to_script(request)
+                if cached_script:
+                    logger.info("缓存命中: 小说转剧本结果")
+                    return cached_script
+
+            logger.info("缓存未命中，调用AI转换...")
+
+            # 构建系统提示
+            system_prompt = self._build_novel_to_script_system_prompt(request)
+            human_prompt = self._build_novel_to_script_human_prompt(request)
+
+            # 创建消息链
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=human_prompt)
+            ]
+
+            # 调用LLM
+            logger.info("调用LLM转换小说...")
+            response = await self.llm.ainvoke(messages)
+
+            script_content = response.content
+
+            # 缓存结果
+            if self.cache_service:
+                await self.cache_service.cache_novel_to_script_generation(request, script_content)
+                logger.info("小说转剧本结果已缓存")
+
+            logger.info(f"小说转换完成，长度: {len(script_content)} 字符")
+            return script_content
+
+        except Exception as e:
+            logger.error(f"小说转换失败: {e}")
+            raise
+
+    def _build_novel_to_script_system_prompt(self, request: Dict[str, Any]) -> str:
+        """构建小说转剧本的系统提示"""
+        theme = request.get('theme', '爱情')
+        length = request.get('length', '短篇')
+        style = request.get('style', '浪漫喜剧')
+        setting = request.get('setting', '现代都市')
+
+        return f"""你是一个专业的剧本改编专家，擅长将小说改编成适合短视频平台的剧本。
+
+创作要求:
+1. 剧本类型: {length}剧本
+2. 故事背景: {setting}
+3. 剧本风格: {style}
+4. 目标观众: 短视频平台用户
+
+剧本结构要求:
+1. 保持小说的核心情节和情感线索
+2. 适合短视频平台的快节奏叙事
+3. 增加视觉化描述，便于拍摄
+4. 对话要简洁有力，符合人物性格
+5. 场景转换要自然流畅
+
+输出格式:
+请按照标准的剧本格式输出，包括场景描述、角色对话和动作指示。
+"""
+
+    def _build_novel_to_script_human_prompt(self, request: Dict[str, Any]) -> str:
+        """构建小说转剧本的用户提示"""
+        title = request.get('title', '未命名剧本')
+        novel_content = request.get('novel_content', '')
+        characters = request.get('characters', [])
+        excerpt_ratio = request.get('excerpt_ratio', 0.3)
+
+        # 如果小说太长，截取一部分
+        max_length = 5000  # 最大输入长度
+        if len(novel_content) > max_length:
+            excerpt_length = int(max_length * excerpt_ratio)
+            # 截取开头和结尾
+            excerpt_length_per_part = excerpt_length // 2
+            novel_content = novel_content[:excerpt_length_per_part] + "\n...\n(中间内容省略)\n...\n" + novel_content[-excerpt_length_per_part:]
+
+        character_str = "\n".join([f"- {char}" for char in characters]) if characters else "请根据小说自行设计2-3个主要角色"
+
+        return f"""请将以下小说内容改编成名为《{title}》的剧本。
+
+小说内容:
+{novel_content[:3000]}...
+
+角色设定:
+{character_str}
+
+改编要求:
+1. 保持原小说的核心情节和情感主线
+2. 将叙述性文字转化为适合拍摄的剧本格式
+3. 增加场景描述和视觉元素
+4. 对话要符合人物性格
+5. 适合短视频平台的节奏
+
+请输出完整的剧本内容。"""
+
+    async def generate_script_from_outline(self, request: Dict[str, Any]) -> str:
+        """根据剧本大纲生成完整剧本，支持缓存"""
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            logger.info(f"开始根据大纲生成剧本: {request.get('title', '未命名剧本')}")
+
+            # 尝试从缓存获取
+            if self.cache_service:
+                cached_script = await self.cache_service.get_cached_outline_to_script(request)
+                if cached_script:
+                    logger.info("缓存命中: 大纲生成剧本结果")
+                    return cached_script
+
+            logger.info("缓存未命中，调用AI生成...")
+
+            # 构建系统提示
+            system_prompt = self._build_outline_to_script_system_prompt(request)
+            human_prompt = self._build_outline_to_script_human_prompt(request)
+
+            # 创建消息链
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=human_prompt)
+            ]
+
+            # 调用LLM
+            logger.info("调用LLM生成剧本...")
+            response = await self.llm.ainvoke(messages)
+
+            script_content = response.content
+
+            # 缓存结果
+            if self.cache_service:
+                await self.cache_service.cache_outline_to_script_generation(request, script_content)
+                logger.info("大纲生成剧本结果已缓存")
+
+            logger.info(f"剧本生成完成，长度: {len(script_content)} 字符")
+            return script_content
+
+        except Exception as e:
+            logger.error(f"剧本生成失败: {e}")
+            raise
+
+    def _build_outline_to_script_system_prompt(self, request: Dict[str, Any]) -> str:
+        """构建大纲生成剧本的系统提示"""
+        theme = request.get('theme', '爱情')
+        length = request.get('length', '短篇')
+        style = request.get('style', '浪漫喜剧')
+        setting = request.get('setting', '现代都市')
+
+        return f"""你是一个专业的剧本作家，擅长根据大纲扩展成完整的剧本。
+
+创作要求:
+1. 剧本类型: {length}剧本
+2. 故事背景: {setting}
+3. 剧本风格: {style}
+4. 目标观众: 短视频平台用户
+
+剧本结构要求:
+1. 严格遵循提供的大纲结构
+2. 丰富每个场景的细节和对话
+3. 保持情节连贯性和情感张力
+4. 结局要符合{theme}主题
+
+输出格式:
+请按照标准的剧本格式输出，包括场景描述、角色对话和动作指示。
+"""
+
+    def _build_outline_to_script_human_prompt(self, request: Dict[str, Any]) -> str:
+        """构建大纲生成剧本的用户提示"""
+        title = request.get('title', '未命名剧本')
+        outline = request.get('outline', '')
+        characters = request.get('characters', [])
+
+        character_str = "\n".join([f"- {char}" for char in characters]) if characters else "请自行设计2-3个主要角色"
+
+        return f"""请根据以下大纲扩展成名为《{title}》的完整剧本。
+
+大纲内容:
+{outline}
+
+角色设定:
+{character_str}
+
+扩展要求:
+1. 严格遵循大纲的结构和情节走向
+2. 丰富每个场景的细节、对话和动作描述
+3. 保持角色性格一致性
+4. 增加情感层次和戏剧冲突
+
+请输出完整的剧本内容。"""

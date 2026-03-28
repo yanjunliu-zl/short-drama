@@ -255,13 +255,37 @@ class CacheService:
     async def clear_all_ai_cache(self) -> int:
         """清除所有AI相关缓存"""
         total = 0
-        namespaces = ["ai:script", "ai:analysis", "ai:optimization", "workflow:complete"]
+        namespaces = ["ai:script", "ai:analysis", "ai:optimization", "workflow:complete", "ai:novel", "ai:outline"]
 
         for namespace in namespaces:
             total += await self.clear_namespace(namespace)
 
         logger.info(f"清除所有AI缓存，共删除 {total} 个键")
         return total
+
+    # 特定于小说转剧本的缓存方法
+
+    async def cache_novel_to_script_generation(self, request: Dict[str, Any], script: str) -> bool:
+        """缓存小说转剧本生成结果"""
+        key = self._generate_cache_key("ai:novel", **request)
+        return await self.set(key, script, ttl=settings.CACHE_SCRIPT_TTL)
+
+    async def get_cached_novel_to_script(self, request: Dict[str, Any]) -> Optional[str]:
+        """获取缓存的小说转剧本生成结果"""
+        key = self._generate_cache_key("ai:novel", **request)
+        return await self.get(key)
+
+    # 特定于大纲生成剧本的缓存方法
+
+    async def cache_outline_to_script_generation(self, request: Dict[str, Any], script: str) -> bool:
+        """缓存大纲生成剧本生成结果"""
+        key = self._generate_cache_key("ai:outline", **request)
+        return await self.set(key, script, ttl=settings.CACHE_SCRIPT_TTL)
+
+    async def get_cached_outline_to_script(self, request: Dict[str, Any]) -> Optional[str]:
+        """获取缓存的大纲生成剧本生成结果"""
+        key = self._generate_cache_key("ai:outline", **request)
+        return await self.get(key)
 
 
 # 全局缓存服务实例

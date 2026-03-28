@@ -7,7 +7,10 @@ from app.schemas.script import (
     ScriptResponse,
     ScriptListResponse,
     ScriptUpdateRequest,
-    ScriptGenerationRequest
+    ScriptGenerationRequest,
+    ScriptFromNovelRequest,
+    ScriptFromOutlineRequest,
+    GenerateResponse
 )
 from app.services.script_service import ScriptService
 from app.core.deps import get_script_service
@@ -163,5 +166,69 @@ async def get_script_status(
         return status
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/generate/from-novel", response_model=ScriptResponse)
+async def generate_script_from_novel(
+    request: ScriptFromNovelRequest,
+    background_tasks: BackgroundTasks,
+    script_service: ScriptService = Depends(get_script_service)
+):
+    """
+    从小说生成剧本
+
+    使用AI模型将小说内容转换为剧本
+    """
+    try:
+        # 异步生成剧本
+        task_id = str(uuid.uuid4())
+
+        # 将生成任务添加到后台
+        background_tasks.add_task(
+            script_service.generate_script_from_novel_async,
+            task_id=task_id,
+            request=request
+        )
+
+        return ScriptResponse(
+            task_id=task_id,
+            status="processing",
+            message="Script generation from novel started",
+            script=None
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/generate/from-outline", response_model=ScriptResponse)
+async def generate_script_from_outline(
+    request: ScriptFromOutlineRequest,
+    background_tasks: BackgroundTasks,
+    script_service: ScriptService = Depends(get_script_service)
+):
+    """
+    从大纲生成剧本
+
+    使用AI模型根据剧本大纲扩展成完整剧本
+    """
+    try:
+        # 异步生成剧本
+        task_id = str(uuid.uuid4())
+
+        # 将生成任务添加到后台
+        background_tasks.add_task(
+            script_service.generate_script_from_outline_async,
+            task_id=task_id,
+            request=request
+        )
+
+        return ScriptResponse(
+            task_id=task_id,
+            status="processing",
+            message="Script generation from outline started",
+            script=None
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,0 +1,19 @@
+Name: overview-service
+Host: 0.0.0.0
+Port: 8086
+
+Database:
+  Host: localhost
+  Port: 3306
+  User: root
+  Password:
+  DBName: short_drama
+  MaxOpenConns: 20
+  MaxIdleConns: 5
+
+Redis:
+  Host: localhost
+  Port: 6379
+  Password:
+  DB: 0
+  PoolSize: 10

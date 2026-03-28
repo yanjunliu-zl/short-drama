@@ -11,6 +11,8 @@ http:
         - cors
         - rate-limit
         - security-headers
+        - retry
+        - timeout
       service: user-service
       tls:
         certResolver: letsencrypt
@@ -24,6 +26,8 @@ http:
         - cors
         - rate-limit
         - security-headers
+        - retry
+        - timeout
       service: script-service
       tls:
         certResolver: letsencrypt
@@ -37,7 +41,24 @@ http:
         - cors
         - rate-limit
         - security-headers
+        - retry
+        - timeout
       service: video-service
+      tls:
+        certResolver: letsencrypt
+
+    # 最终剪辑服务路由
+    final-cut-service:
+      rule: "PathPrefix(`/api/v1/final-cut`)"
+      entryPoints:
+        - web
+      middlewares:
+        - cors
+        - rate-limit
+        - security-headers
+        - retry
+        - timeout
+      service: final-cut-service
       tls:
         certResolver: letsencrypt
 
@@ -78,6 +99,16 @@ http:
       loadBalancer:
         servers:
           - url: "http://video-service:8000"
+        healthCheck:
+          path: /health
+          interval: 30s
+          timeout: 5s
+
+    # 最终剪辑服务
+    final-cut-service:
+      loadBalancer:
+        servers:
+          - url: "http://final-cut-service:8085"
         healthCheck:
           path: /health
           interval: 30s

@@ -7,9 +7,11 @@ import time
 import os
 
 from app.core.config import settings
+from app.core.logging import setup_structured_logging
+from app.middleware.prometheus import MetricsEndpointMiddleware, set_health_status
 
-# 设置日志
-logging.basicConfig(level=logging.INFO)
+# 设置结构化日志
+setup_structured_logging(settings.PROJECT_NAME, settings.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 # 创建FastAPI应用
@@ -45,10 +47,31 @@ app.add_middleware(
     allowed_hosts=settings.ALLOWED_HOSTS,
 )
 
+# 添加 Prometheus 指标端点
+MetricsEndpointMiddleware(app, settings.PROJECT_NAME)
+
 # 健康检查端点
 @app.get("/health")
 async def health_check():
+    set_health_status(settings.PROJECT_NAME, True)
     return {"status": "healthy", "service": "video-service", "timestamp": time.time()}
+
+# 就绪检查端点（用于 Kubernetes）
+@app.get("/ready")
+async def readiness_check():
+    try:
+        # 检查依赖服务
+        from app.core.deps import get_cache_service
+        cache = await get_cache_service()
+        if not await cache.is_available():
+            set_health_status(settings.PROJECT_NAME, False)
+            return JSONResponse(status_code=503, content={"status": "unready", "reason": "cache unavailable"})
+
+        set_health_status(settings.PROJECT_NAME, True)
+        return {"status": "ready", "timestamp": time.time()}
+    except Exception as e:
+        set_health_status(settings.PROJECT_NAME, False)
+        return JSONResponse(status_code=503, content={"status": "unready", "reason": str(e)})
 
 # 视频处理端点 - placeholder
 @app.get("/api/v1/videos")
@@ -76,6 +99,7 @@ async def shutdown_event():
     logger.info("Shutting down video processing service...")
     # 清理资源
     logger.info("Video service shutdown completed")
+    set_health_status(settings.PROJECT_NAME, False)
 
 # 全局异常处理
 @app.exception_handler(Exception)

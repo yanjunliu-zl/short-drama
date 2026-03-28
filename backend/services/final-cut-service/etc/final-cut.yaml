@@ -1,0 +1,133 @@
+Name: final-cut-service
+Host: 0.0.0.0
+Port: 8085
+
+# 日志配置
+Log:
+  Level: info
+  Mode: console
+  Encoding: json
+  StackTrace: false
+  DisableCaller: false
+
+# 性能监控
+Prometheus:
+  Host: 0.0.0.0
+  Port: 9085
+  Path: /metrics
+
+# 链路追踪
+Telemetry:
+  Name: final-cut-service
+  Endpoint: http://jaeger:14268/api/traces
+  Sampler: 1.0
+  Batcher: jaeger
+  TraceID: final-cut-service
+
+# 数据库配置 - 支持集群部署的连接池优化
+Database:
+  Host: mysql
+  Port: 3306
+  User: admin
+  Password: admin123
+  DBName: shortdrama
+  MaxOpenConns: 200
+  MaxIdleConns: 50
+  ConnMaxLifetime: 3600
+  MaxLifetime: 7200
+
+# Redis配置 - 支持单机和集群模式
+Redis:
+  Host: redis
+  Port: 6379
+  Password: ""
+  DB: 0
+  PoolSize: 200
+  MinIdleConns: 20
+  ClusterEnabled: false
+  ClusterNodes:
+    - redis-node1:6379
+    - redis-node2:6379
+    - redis-node3:6379
+
+# Redis集群配置（当ClusterEnabled为true时使用）
+RedisCluster:
+  Enabled: false
+  Nodes:
+    - redis-node1:6379
+    - redis-node2:6379
+    - redis-node3:6379
+  Password: ""
+  PoolSize: 200
+  MinIdleConns: 20
+
+# RabbitMQ配置 - 支持集群部署
+RabbitMQ:
+  Host: rabbitmq
+  Port: 5672
+  User: admin
+  Password: admin123
+  VHost: /
+  Heartbeat: 30s
+  ChannelMax: 65535
+
+# 服务发现 - Consul用于集群服务注册与发现
+Consul:
+  Host: consul
+  Port: 8500
+  Token: ""
+  Enabled: true
+  Datacenter: dc1
+
+# 限流配置
+RateLimit:
+  Rate: 100
+  Burst: 50
+
+# 熔断器配置
+CircuitBreaker:
+  Window: 10s
+  Bucket: 100
+  ErrorRate: 0.5
+
+# 重试配置
+Retry:
+  MaxRetries: 3
+  InitialDelay: 500ms
+  MaxDelay: 5s
+  BackoffFactor: 2.0
+
+# 超时配置
+Timeout:
+  RequestTimeout: 30s
+  ResponseTimeout: 60s
+  IdleTimeout: 120s
+
+# 健康检查
+HealthCheck:
+  Interval: 30s
+  Timeout: 5s
+
+# AI服务配置
+AIService:
+  Endpoint: http://llmhua-service:8000
+  Timeout: 60s
+
+# 剧本服务配置
+ScriptService:
+  Endpoint: http://script-service:8000
+  Timeout: 30s
+
+# 视频服务配置
+VideoService:
+  Endpoint: http://video-service:8081
+  Timeout: 30s
+
+# 存储配置
+Storage:
+  Type: s3
+  Endpoint: http://minio:9000
+  AccessKey: admin
+  SecretKey: admin123
+  Bucket: short-drama
+  Region: us-east-1

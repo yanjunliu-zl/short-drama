@@ -6,7 +6,6 @@ import {
   TeamOutlined,
   CameraOutlined,
   PlayCircleOutlined,
-  SoundOutlined,
   EyeOutlined,
   SettingOutlined
 } from '@ant-design/icons';
@@ -24,30 +23,28 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   // 路由到菜单key的映射
   const routeMap: Record<string, string> = {
-    '/settings': 'global_settings',
+    '/overview': 'overview',
     '/script': 'story_script',
     '/scene': 'scene_character_props',
     '/storyboard': 'storyboard_script',
     '/video': 'storyboard_video',
-    '/dubbing': 'dubbing_lip_sync',
-    '/preview': 'video_preview',
+    '/final-cut': 'final_video',
     // 首页 '/' 没有对应的菜单项
   };
 
   // 菜单key到路由的映射
   const menuKeyToRoute: Record<string, string> = {
-    'global_settings': '/settings',
+    'overview': '/overview',
     'story_script': '/script',
     'scene_character_props': '/scene',
     'storyboard_script': '/storyboard',
     'storyboard_video': '/video',
-    'dubbing_lip_sync': '/dubbing',
-    'video_preview': '/preview',
+    'final_video': '/final-cut',
   };
 
   // 获取当前选中的菜单key
   const getSelectedKey = () => {
-    return routeMap[location.pathname] || 'global_settings';
+    return routeMap[location.pathname] || 'overview';
   };
 
   // 菜单项点击处理
@@ -59,9 +56,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   // 导航菜单项
   const menuItems = [
     {
-      key: 'global_settings',
+      key: 'overview',
       icon: <SettingOutlined />,
-      label: '全局设定',
+      label: '概览',
     },
     {
       key: 'story_script',
@@ -84,14 +81,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       label: '分镜视频',
     },
     {
-      key: 'dubbing_lip_sync',
-      icon: <SoundOutlined />,
-      label: '配音对口型',
-    },
-    {
-      key: 'video_preview',
+      key: 'final_video',
       icon: <EyeOutlined />,
-      label: '视频预览',
+      label: '成片',
     },
   ];
 

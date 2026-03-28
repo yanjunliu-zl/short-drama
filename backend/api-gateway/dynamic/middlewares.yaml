@@ -18,6 +18,15 @@ http:
         users:
           - "admin:$apr1$6lJ9lL5q$0.8G8XJc8Q9p0.5k.5.5k."
 
+    # JWT 认证中间件 - 使用 ForwardAuth
+    jwt-auth:
+      forwardAuth:
+        address: "http://user-service:8080/api/v1/auth/verify"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-User-ID
+          - X-User-Role
+
     # 跨域中间件
     cors:
       headers:
@@ -54,11 +63,18 @@ http:
       retry:
         attempts: 3
         initialInterval: 500ms
+        maxInterval: 5s
 
     # 断路器中间件
     circuit-breaker:
       circuitBreaker:
         expression: "NetworkErrorRatio() > 0.5"
+
+    # 超时中间件
+    timeout:
+      headers:
+        requestTimeout: 30s
+        responseTimeout: 60s
 
     # 请求日志中间件
     request-log:

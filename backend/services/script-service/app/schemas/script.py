@@ -14,6 +14,33 @@ class ScriptGenerationRequest(BaseModel):
     user_id: Optional[str] = Field(default=None, description="用户ID")
 
 
+# 剧本生成请求 - 从剧本大纲
+class ScriptFromOutlineRequest(BaseModel):
+    """从剧本大纲生成剧本"""
+    title: str = Field(..., description="剧本标题")
+    outline: str = Field(..., description="剧本大纲")
+    theme: str = Field(..., description="剧本主题")
+    length: str = Field(..., description="剧本长度: 短篇, 中篇, 长篇")
+    characters: Optional[List[str]] = Field(default=[], description="角色列表")
+    setting: Optional[str] = Field(default="现代都市", description="故事背景")
+    style: Optional[str] = Field(default="浪漫喜剧", description="剧本风格")
+    user_id: Optional[str] = Field(default=None, description="用户ID")
+
+
+# 剧本生成请求 - 从小说
+class ScriptFromNovelRequest(BaseModel):
+    """从小说生成剧本"""
+    title: str = Field(..., description="剧本标题")
+    novel_content: str = Field(..., description="小说内容")
+    theme: str = Field(..., description="剧本主题")
+    length: str = Field(..., description="剧本长度: 短篇, 中篇, 长篇")
+    characters: Optional[List[str]] = Field(default=[], description="角色列表")
+    setting: Optional[str] = Field(default="现代都市", description="故事背景")
+    style: Optional[str] = Field(default="浪漫喜剧", description="剧本风格")
+    user_id: Optional[str] = Field(default=None, description="用户ID")
+    excerpt_ratio: Optional[float] = Field(default=0.3, description="抽取比例(0-1)，用于长小说")
+
+
 # 剧本创建请求
 class ScriptCreateRequest(BaseModel):
     """剧本创建请求"""
@@ -48,3 +75,12 @@ class ScriptListResponse(BaseModel):
     total: int = Field(..., description="总数")
     page: int = Field(..., description="当前页码")
     page_size: int = Field(..., description="每页数量")
+
+
+# 生成响应
+class GenerateResponse(BaseModel):
+    """生成响应"""
+    task_id: str = Field(..., description="任务ID")
+    status: str = Field(..., description="状态: processing, completed, failed")
+    message: str = Field(..., description="消息")
+    script_id: Optional[str] = Field(default=None, description="剧本ID")

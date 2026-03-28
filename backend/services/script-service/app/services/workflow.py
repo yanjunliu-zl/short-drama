@@ -6,6 +6,7 @@ from langgraph.checkpoint.aiosqlite import AsyncSqliteSaver
 
 from app.services.ai_service import AIService
 from app.services.cache_service import get_cache_service
+from app.services.graphrag_service import get_graphrag_service
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class WorkflowState(TypedDict):
 class WorkflowStep(Enum):
     """工作流步骤枚举"""
     INITIALIZE = "initialize"
+    PREPARE_INPUT = "prepare_input"
     GENERATE_DRAFT = "generate_draft"
     ANALYZE_STRUCTURE = "analyze_structure"
     OPTIMIZE_SCRIPT = "optimize_script"
@@ -34,11 +36,17 @@ class WorkflowStep(Enum):
 
 
 class ScriptWorkflow:
-    """剧本生成工作流，使用LangGraph，支持缓存"""
+    """剧本生成工作流，使用LangGraph，支持缓存和GraphRag上下文管理"""
+
+    # 工作流类型
+    FROM_NOVEL = "from_novel"      # 从小说生成
+    FROM_OUTLINE = "from_outline"  # 从大纲生成
+    FROM_SCRATCH = "from_scratch"  # 从零生成
 
     def __init__(self, ai_service: AIService):
         self.ai_service = ai_service
         self.cache_service = None
+        self.graphrag_service = None
         self.graph = None
         self.checkpointer = None
         self._initialized = False
@@ -59,6 +67,14 @@ class ScriptWorkflow:
                 logger.warning(f"缓存服务初始化失败，将禁用缓存: {e}")
                 self.cache_service = None
 
+            # 初始化 GraphRag 服务
+            try:
+                self.graphrag_service = await get_graphrag_service()
+                logger.info("GraphRag 服务初始化成功")
+            except Exception as e:
+                logger.warning(f"GraphRag 服务初始化失败，将禁用图谱上下文管理: {e}")
+                self.graphrag_service = None
+
             # 创建检查点保存器（使用SQLite）
             self.checkpointer = AsyncSqliteSaver.from_conn_string(":memory:")
 
@@ -67,6 +83,7 @@ class ScriptWorkflow:
 
             # 添加节点
             workflow.add_node(WorkflowStep.INITIALIZE.value, self._initialize_step)
+            workflow.add_node(WorkflowStep.PREPARE_INPUT.value, self._prepare_input_step)
             workflow.add_node(WorkflowStep.GENERATE_DRAFT.value, self._generate_draft_step)
             workflow.add_node(WorkflowStep.ANALYZE_STRUCTURE.value, self._analyze_structure_step)
             workflow.add_node(WorkflowStep.OPTIMIZE_SCRIPT.value, self._optimize_script_step)
@@ -77,7 +94,8 @@ class ScriptWorkflow:
             workflow.set_entry_point(WorkflowStep.INITIALIZE.value)
 
             # 定义边（正常流程）
-            workflow.add_edge(WorkflowStep.INITIALIZE.value, WorkflowStep.GENERATE_DRAFT.value)
+            workflow.add_edge(WorkflowStep.INITIALIZE.value, WorkflowStep.PREPARE_INPUT.value)
+            workflow.add_edge(WorkflowStep.PREPARE_INPUT.value, WorkflowStep.GENERATE_DRAFT.value)
             workflow.add_edge(WorkflowStep.GENERATE_DRAFT.value, WorkflowStep.ANALYZE_STRUCTURE.value)
             workflow.add_edge(WorkflowStep.ANALYZE_STRUCTURE.value, WorkflowStep.OPTIMIZE_SCRIPT.value)
             workflow.add_edge(WorkflowStep.OPTIMIZE_SCRIPT.value, WorkflowStep.FINALIZE.value)
@@ -133,12 +151,16 @@ class ScriptWorkflow:
             # 初始化AI服务
             await self.ai_service.initialize()
 
+            # 确定工作流类型
+            workflow_type = self._determine_workflow_type(request)
+
             return {
                 **state,
                 "current_step": WorkflowStep.INITIALIZE.value,
                 "metadata": {
                     **state.get("metadata", {}),
                     "validated": True,
+                    "workflow_type": workflow_type,
                     "timestamp": "开始生成时间"
                 }
             }
@@ -150,19 +172,74 @@ class ScriptWorkflow:
                 "error": str(e)
             }
 
+    def _determine_workflow_type(self, request: Dict[str, Any]) -> str:
+        """确定工作流类型"""
+        # 从小说生成
+        if request.get("novel_content"):
+            return ScriptWorkflow.FROM_NOVEL
+        # 从大纲生成
+        elif request.get("outline"):
+            return ScriptWorkflow.FROM_OUTLINE
+        # 从零生成
+        else:
+            return ScriptWorkflow.FROM_SCRATCH
+
+    async def _prepare_input_step(self, state: WorkflowState) -> WorkflowState:
+        """准备输入步骤 - 根据工作流类型准备输入"""
+        logger.info("工作流: 准备输入步骤")
+        try:
+            request = state["request"]
+            metadata = state.get("metadata", {})
+            workflow_type = metadata.get("workflow_type", ScriptWorkflow.FROM_SCRATCH)
+
+            # 根据不同工作流类型准备输入
+            if workflow_type == ScriptWorkflow.FROM_NOVEL:
+                # 从小说生成，将novel_content转换为script格式
+                request = self._prepare_novel_request(request)
+            elif workflow_type == ScriptWorkflow.FROM_OUTLINE:
+                # 从大纲生成，将outline转换为script格式
+                request = self._prepare_outline_request(request)
+
+            return {
+                **state,
+                "request": request,
+                "current_step": WorkflowStep.PREPARE_INPUT.value,
+                "metadata": {
+                    **metadata,
+                    "input_prepared": True,
+                    "workflow_type": workflow_type
+                }
+            }
+        except Exception as e:
+            logger.error(f"准备输入步骤失败: {e}")
+            return {
+                **state,
+                "current_step": WorkflowStep.HANDLE_ERROR.value,
+                "error": str(e)
+            }
+
     async def _generate_draft_step(self, state: WorkflowState) -> WorkflowState:
         """生成草稿步骤"""
         logger.info("工作流: 生成草稿步骤")
         try:
             request = state["request"]
-            script_draft = await self.ai_service.generate_script(request)
+            metadata = state.get("metadata", {})
+            workflow_type = metadata.get("workflow_type", ScriptWorkflow.FROM_SCRATCH)
+
+            # 根据工作流类型选择不同的生成方法
+            if workflow_type == ScriptWorkflow.FROM_NOVEL:
+                script_draft = await self.ai_service.novel_to_script(request)
+            elif workflow_type == ScriptWorkflow.FROM_OUTLINE:
+                script_draft = await self.ai_service.generate_script_from_outline(request)
+            else:
+                script_draft = await self.ai_service.generate_script(request)
 
             return {
                 **state,
                 "current_step": WorkflowStep.GENERATE_DRAFT.value,
                 "script_draft": script_draft,
                 "metadata": {
-                    **state.get("metadata", {}),
+                    **metadata,
                     "draft_generated": True,
                     "draft_length": len(script_draft)
                 }
@@ -245,6 +322,23 @@ class ScriptWorkflow:
             if not final_script:
                 raise ValueError("没有可用的剧本内容")
 
+            # 使用 GraphRag 分析最终剧本，确保上下文一致性
+            if self.graphrag_service and final_script:
+                try:
+                    script_id = state.get("metadata", {}).get("script_id", "default")
+                    analysis_result = await self.graphrag_service.analyze_script(
+                        script_id=script_id,
+                        script_content=final_script
+                    )
+                    logger.info(f"GraphRag 分析完成: {analysis_result}")
+
+                    # 添加图谱分析信息到元数据
+                    if "metadata" not in state:
+                        state["metadata"] = {}
+                    state["metadata"]["graphrag_analysis"] = analysis_result
+                except Exception as e:
+                    logger.warning(f"GraphRag 分析失败: {e}")
+
             return {
                 **state,
                 "current_step": WorkflowStep.FINALIZE.value,
@@ -276,6 +370,34 @@ class ScriptWorkflow:
                 "error_handled": True,
                 "error_message": state.get("error", "未知错误")
             }
+        }
+
+    def _prepare_novel_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """准备从小说生成的请求"""
+        # 从小说请求转换为通用脚本生成请求
+        return {
+            **request,
+            "title": request.get("title", "改编剧本"),
+            "theme": request.get("theme", "爱情"),
+            "length": request.get("length", "短篇"),
+            "setting": request.get("setting", "现代都市"),
+            "style": request.get("style", "浪漫喜剧"),
+            "characters": request.get("characters", []),
+            "additional_notes": "请根据以下小说内容改编成剧本:\n\n" + request.get("novel_content", "")[:2000]
+        }
+
+    def _prepare_outline_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """准备从大纲生成的请求"""
+        # 从大纲请求转换为通用脚本生成请求
+        return {
+            **request,
+            "title": request.get("title", "剧本"),
+            "theme": request.get("theme", "爱情"),
+            "length": request.get("length", "短篇"),
+            "setting": request.get("setting", "现代都市"),
+            "style": request.get("style", "浪漫喜剧"),
+            "characters": request.get("characters", []),
+            "additional_notes": "请根据以下大纲扩展成完整剧本:\n\n" + request.get("outline", "")
         }
 
     def _generate_optimization_feedback(self, analysis_result: Dict[str, Any]) -> str:
@@ -362,6 +484,22 @@ class ScriptWorkflow:
 
             if result["success"]:
                 logger.info(f"工作流执行成功，生成剧本长度: {len(result['script'])} 字符")
+
+                # 使用 GraphRag 确保上下文一致性
+                if self.graphrag_service and final_state.get("script_final"):
+                    try:
+                        script_id = thread_id or str(request.get("title", "default"))
+                        consistency_check = await self.graphrag_service.check_consistency(
+                            script_id=script_id,
+                            new_content=result["script"],
+                            characters=request.get("characters", [])
+                        )
+                        if consistency_check:
+                            result["consistency_check"] = consistency_check
+                            if not consistency_check.get("is_consistent", True):
+                                logger.warning(f"剧本一致性检查发现不一致: {consistency_check.get('inconsistencies')}")
+                    except Exception as e:
+                        logger.warning(f"GraphRag 一致性检查失败: {e}")
 
                 # 缓存成功的结果
                 if self.cache_service:
