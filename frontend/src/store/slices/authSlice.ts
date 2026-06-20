@@ -2,6 +2,18 @@ import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit'
 import { LoginRequest, LoginResponse, User, RegisterRequest } from '@/types'
 import { authService } from '@/services/authService'
 
+/** Clear all pipeline_ prefixed localStorage keys on logout */
+function clearPipelineStorage() {
+  const keysToRemove: string[] = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (key && key.startsWith('pipeline_')) {
+      keysToRemove.push(key)
+    }
+  }
+  keysToRemove.forEach(key => localStorage.removeItem(key))
+}
+
 interface AuthState {
   user: User | null
   token: string | null
@@ -101,6 +113,7 @@ const authSlice = createSlice({
       state.error = null
       localStorage.removeItem('token')
       localStorage.removeItem('refreshToken')
+      clearPipelineStorage()
     },
     setError: (state, action: PayloadAction<string | null>) => {
       state.error = action.payload
@@ -177,6 +190,7 @@ const authSlice = createSlice({
 
         localStorage.removeItem('token')
         localStorage.removeItem('refreshToken')
+        clearPipelineStorage()
       })
 
       // Refresh token

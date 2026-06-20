@@ -49,9 +49,11 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD", None)
     REDIS_DB: int = int(os.getenv("REDIS_DB", 0))
 
-    # Seedance服务配置
-    SEEDANCE_API_URL: str = os.getenv("SEEDANCE_API_URL", "https://api.seedance.ai")
+    # Seedance/Seedream服务配置 (火山引擎 Ark API)
+    SEEDANCE_API_URL: str = os.getenv("SEEDANCE_API_URL", "https://ark.cn-beijing.volces.com/api/v3")
     SEEDANCE_API_KEY: Optional[str] = os.getenv("SEEDANCE_API_KEY", None)
+    SEEDANCE_MODEL: str = os.getenv("SEEDANCE_MODEL", "doubao-seedream-4-5-251128")
+    SEEDANCE_VIDEO_MODEL: str = os.getenv("SEEDANCE_VIDEO_MODEL", "doubao-seedance-2-0-260128")
     SEEDANCE_TIMEOUT: int = int(os.getenv("SEEDANCE_TIMEOUT", 300))
 
     # 图像生成参数
@@ -72,6 +74,16 @@ class Settings(BaseSettings):
     CACHE_DEFAULT_TTL: int = int(os.getenv("CACHE_DEFAULT_TTL", 3600))
     CACHE_IMAGE_TTL: int = int(os.getenv("CACHE_IMAGE_TTL", 7200))
     CACHE_VIDEO_TTL: int = int(os.getenv("CACHE_VIDEO_TTL", 86400))
+
+    # Ceph/RGW 对象存储配置
+    STORAGE_TYPE: str = os.getenv("STORAGE_TYPE", "ceph")  # ceph, s3, minio, local
+    STORAGE_ENDPOINT: str = os.getenv("STORAGE_ENDPOINT", "http://ceph-rgw:7480")
+    STORAGE_ACCESS_KEY: str = os.getenv("STORAGE_ACCESS_KEY", "admin")
+    STORAGE_SECRET_KEY: str = os.getenv("STORAGE_SECRET_KEY", "admin123")
+    STORAGE_BUCKET: str = os.getenv("STORAGE_BUCKET", "short-drama")
+    STORAGE_REGION: str = os.getenv("STORAGE_REGION", "us-east-1")
+    STORAGE_LOCAL_BASE_PATH: str = os.getenv("STORAGE_LOCAL_BASE_PATH", "/app/storage")
+    STORAGE_PUBLIC_ENDPOINT: str = os.getenv("STORAGE_PUBLIC_ENDPOINT", "http://localhost:9000")
 
     # 日志配置
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

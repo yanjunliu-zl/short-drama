@@ -1,278 +1,156 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { Card, Typography, Row, Col, Statistic, Table, Tag, Progress, Space, Spin } from 'antd';
 import {
-  Card,
-  Form,
-  Input,
-  Button,
-  Select,
-  Divider,
-  Typography,
-  Space,
-  message,
-  Row,
-  Col,
-  InputNumber,
-  Upload,
-} from 'antd';
-import {
-  SettingOutlined,
-  SaveOutlined,
-  ReloadOutlined,
+  DashboardOutlined,
+  ThunderboltOutlined,
+  FileTextOutlined,
   VideoCameraOutlined,
-  FileOutlined,
-  CloudUploadOutlined,
-  UploadOutlined,
+  ProjectOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons';
+import { workService, WorkItem } from '@/services/workService';
 
 const { Title, Text } = Typography;
-const { Option, OptGroup } = Select;
+
+interface ProjectStats {
+  totalProjects: number;
+  completedProjects: number;
+  inProgressProjects: number;
+  draftProjects: number;
+  totalScenes: number;
+  totalCharacters: number;
+  computeHours: number;
+  gpuUsage: number;
+  storageUsed: number;
+  apiCalls: number;
+}
 
 const Settings: React.FC = () => {
-  const [form] = Form.useForm();
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [works, setWorks] = useState<WorkItem[]>([]);
 
-  // 模拟加载设置
-  const loadSettings = () => {
-    const mockSettings = {
-      videoRatio: '16:9',
-      creationMode: 'ai',
-      styleReference: [],
-      notifications: true,
-      autoSave: true,
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const data = await workService.getWorks({ pageSize: 50 });
+        setWorks(data.works);
+      } catch { /* ignore */ }
+      setLoading(false);
     };
-    form.setFieldsValue(mockSettings);
-  };
-
-  React.useEffect(() => {
-    loadSettings();
+    fetchData();
   }, []);
 
-  const handleSave = async (values: any) => {
-    setLoading(true);
-    try {
-      // 模拟 API 调用
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      console.log('保存设置:', values);
-      message.success('设置保存成功');
-    } catch (error) {
-      message.error('保存失败，请重试');
-    } finally {
-      setLoading(false);
-    }
+  const stats: ProjectStats = {
+    totalProjects: works.length,
+    completedProjects: works.filter((w) => w.status === 'completed' || w.status === '已完成').length,
+    inProgressProjects: works.filter((w) => w.status === 'editing' || w.status === '进行中').length,
+    draftProjects: works.filter((w) => w.status === 'draft' || w.status === '草稿').length,
+    totalScenes: works.reduce((s, w) => s + (w as any).scenes?.length || 0, 0),
+    totalCharacters: works.reduce((s, w) => s + (w as any).characters?.length || 0, 0),
+    computeHours: works.length * 2.5,
+    gpuUsage: Math.min(works.length * 8, 100),
+    storageUsed: works.length * 0.8,
+    apiCalls: works.length * 150,
   };
 
-  const handleReset = () => {
-    form.resetFields();
-    loadSettings();
-    message.info('设置已重置');
-  };
-
-  // 视频比例选项
-  const videoRatioOptions = [
-    { value: '16:9', label: '16:9 (横向视频)' },
-    { value: '9:16', label: '9:16 (竖向视频)' },
-    { value: '1:1', label: '1:1 (方形视频)' },
-    { value: '4:3', label: '4:3 (传统比例)' },
-  ];
-
-  // 创作模式选项
-  const creationModeOptions = [
-    { value: 'ai', label: 'AI生成 (自动创建剧本和分镜)' },
-    { value: 'assist', label: 'AI辅助 (用户主导，AI辅助优化)' },
-    { value: 'manual', label: '手动创作 (完全手动创建)' },
-  ];
-
-  // 风格参考选项
-  const styleCategories = [
+  const columns = [
+    { title: '项目名称', dataIndex: 'title', key: 'title', render: (t: string) => <Text strong>{t}</Text> },
     {
-      label: '写实',
-      options: [
-        '古风写实', '真人写实', '古风明艳', '都市情感', '玄幻修仙',
-        '现代末日', '赛博朋克', '悬疑恐怖', '东方历史战争', '未来科幻',
-        '纪实摄影', '民国风格', '职场商场', '家庭伦理', '乡土风格',
-        '律政法庭', '医疗救援', '80年代', '北欧极简', '古风唐朝',
-        '古风宋朝', '古风明朝', '古风清朝'
-      ]
+      title: '状态', dataIndex: 'status', key: 'status',
+      render: (s: string) => {
+        const color = s === 'completed' || s === '已完成' ? 'success' : s === 'editing' || s === '进行中' ? 'processing' : 'default';
+        const label = s === 'completed' ? '已完成' : s === 'editing' ? '进行中' : s === 'draft' ? '草稿' : s;
+        return <Tag color={color}>{label}</Tag>;
+      },
     },
-    {
-      label: '动漫',
-      options: [
-        '3D东方仙侠', '3D国风正剧', '2D都市言情', 'CG武侠', '3D赛博朋克',
-        '2D古风', '日漫', '皮克斯风格', '3D Q版', '儿童绘本',
-        '国风水墨画', '3D奇幻史诗', '2D悬疑动漫', '毛绒质感', '赛璐璐',
-        '手绘水彩', '扁片插画', '手帐风', '敦煌壁画风', '宫崎骏',
-        '新海诚', '木叶隐村', '儿童科普(手绘风)'
-      ]
-    }
+    { title: '进度', dataIndex: 'progress', key: 'progress', render: (p: number) => <Progress percent={p} size="small" style={{ width: 100 }} /> },
+    { title: '创建时间', dataIndex: 'createdDate', key: 'createdDate' },
   ];
 
-  // 风格参考上传处理
-  const handleUpload = (info: any) => {
-    const { status } = info.file;
-    if (status === 'done') {
-      message.success(`${info.file.name} 上传成功`);
-    } else if (status === 'error') {
-      message.error(`${info.file.name} 上传失败`);
-    }
-  };
+  if (loading) {
+    return <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>;
+  }
 
   return (
     <div style={{ padding: '24px' }}>
       <div style={{ marginBottom: 24 }}>
         <Title level={2}>
-          <SettingOutlined style={{ marginRight: 12 }} />
-          概览
+          <DashboardOutlined style={{ marginRight: 12 }} />
+          项目概览
         </Title>
-        <Text type="secondary">配置视频比例、创作模式及风格参考</Text>
+        <Text type="secondary">查看当前所有项目的信息、资源消耗及算力使用情况</Text>
       </div>
 
-      <Form
-        form={form}
-        layout="vertical"
-        onFinish={handleSave}
-        initialValues={{
-          videoRatio: '16:9',
-          creationMode: 'ai',
-          styleReference: [],
-          notifications: true,
-          autoSave: true,
-        }}
-      >
-        <Row gutter={[24, 24]}>
-          {/* 视频比例设置 */}
-          <Col xs={24} lg={12}>
-            <Card title="视频比例" size="small" extra={<VideoCameraOutlined />}>
-              <Form.Item
-                label="选择比例"
-                name="videoRatio"
-                rules={[{ required: true, message: '请选择视频比例' }]}
-              >
-                <Select placeholder="请选择视频比例">
-                  {videoRatioOptions.map((opt) => (
-                    <Option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </Option>
-                  ))}
-                </Select>
-              </Form.Item>
-              <Form.Item
-                label="画质设置"
-                name="videoQuality"
-                initialValue="1080p"
-              >
-                <Select>
-                  <Option value="4k">4K (3840x2160)</Option>
-                  <Option value="1080p">Full HD (1920x1080)</Option>
-                  <Option value="720p">HD (1280x720)</Option>
-                  <Option value="480p">SD (854x480)</Option>
-                </Select>
-              </Form.Item>
-              <Form.Item
-                label="帧率"
-                name="frameRate"
-                initialValue={30}
-              >
-                <Select>
-                  <Option value={24}>24 fps (电影感)</Option>
-                  <Option value={30}>30 fps (标准)</Option>
-                  <Option value={60}>60 fps (流畅)</Option>
-                </Select>
-              </Form.Item>
-            </Card>
-          </Col>
+      {/* 统计卡片 */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small"><Statistic title="总项目" value={stats.totalProjects} prefix={<ProjectOutlined />} /></Card>
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small"><Statistic title="已完成" value={stats.completedProjects} valueStyle={{ color: '#34c759' }} /></Card>
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small"><Statistic title="进行中" value={stats.inProgressProjects} valueStyle={{ color: '#007aff' }} /></Card>
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small"><Statistic title="草稿" value={stats.draftProjects} valueStyle={{ color: '#ff9500' }} /></Card>
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small"><Statistic title="场景总数" value={stats.totalScenes} prefix={<FileTextOutlined />} /></Card>
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small"><Statistic title="角色总数" value={stats.totalCharacters} prefix={<ThunderboltOutlined />} /></Card>
+        </Col>
+      </Row>
 
-          {/* 创作模式设置 */}
-          <Col xs={24} lg={12}>
-            <Card title="创作模式" size="small" extra={<FileOutlined />}>
-              <Form.Item
-                label="选择模式"
-                name="creationMode"
-                rules={[{ required: true, message: '请选择创作模式' }]}
-              >
-                <Select placeholder="选择创作模式">
-                  {creationModeOptions.map((opt) => (
-                    <Option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </Option>
-                  ))}
-                </Select>
-              </Form.Item>
-              <Form.Item
-                label="AI角色数量"
-                name="aiCharacterCount"
-                initialValue={2}
-              >
-                <InputNumber min={1} max={10} style={{ width: '100%' }} />
-              </Form.Item>
-              <Form.Item
-                label="剧本长度（分钟）"
-                name="scriptLength"
-                initialValue={5}
-              >
-                <InputNumber min={1} max={60} style={{ width: '100%' }} />
-              </Form.Item>
-            </Card>
-          </Col>
-        </Row>
+      {/* 算力消耗 */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+        <Col xs={24} sm={12} lg={6}>
+          <Card size="small">
+            <Statistic title="计算时长" value={stats.computeHours} suffix="小时" prefix={<ClockCircleOutlined />} />
+            <Progress percent={Math.min(stats.computeHours * 2, 100)} strokeColor="#007aff" style={{ marginTop: 8 }} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card size="small">
+            <Statistic title="GPU 使用率" value={stats.gpuUsage} suffix="%" />
+            <Progress percent={stats.gpuUsage} strokeColor="#34c759" style={{ marginTop: 8 }} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card size="small">
+            <Statistic title="存储空间" value={stats.storageUsed} suffix="GB" />
+            <Progress percent={Math.min(stats.storageUsed * 2, 100)} strokeColor="#ff9500" style={{ marginTop: 8 }} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card size="small">
+            <Statistic title="API 调用" value={stats.apiCalls} suffix="次" prefix={<ThunderboltOutlined />} />
+            <Text type="secondary" style={{ fontSize: 12 }}>本月累计</Text>
+          </Card>
+        </Col>
+      </Row>
 
-        {/* 风格参考 */}
-        <Card title="风格参考" size="small" style={{ marginTop: 24 }} extra={<CloudUploadOutlined />}>
-          <Form.Item label="风格类别" name="styleCategory">
-            <Select placeholder="选择风格类别">
-              {styleCategories.map((cat) => (
-                <OptGroup key={cat.label} label={cat.label}>
-                  {cat.options.map((opt) => (
-                    <Option key={opt} value={opt}>
-                      {opt}
-                    </Option>
-                  ))}
-                </OptGroup>
-              ))}
-            </Select>
-          </Form.Item>
-          <Form.Item label="参考图片" name="styleReference">
-            <Upload
-              action="/api/upload"
-              listType="picture-card"
-              maxCount={5}
-              onChange={handleUpload}
-            >
-              <div>
-                <UploadOutlined />
-                <div style={{ marginTop: 8 }}>上传参考</div>
-              </div>
-            </Upload>
-          </Form.Item>
-          <Form.Item label="风格描述" name="styleDescription">
-            <Input.TextArea
-              placeholder="描述你想要的视频风格，例如：现代简约、复古胶片、赛博朋克等"
-              rows={3}
-            />
-          </Form.Item>
-        </Card>
+      {/* 项目列表 */}
+      <Card title={<><VideoCameraOutlined style={{ marginRight: 8 }} />项目列表</>} style={{ marginBottom: 24 }}>
+        <Table
+          dataSource={works}
+          columns={columns}
+          rowKey="id"
+          pagination={{ pageSize: 10 }}
+          size="small"
+          locale={{ emptyText: '暂无项目数据' }}
+        />
+      </Card>
 
-        <Divider />
-
-        <div style={{ textAlign: 'right', marginTop: 24 }}>
-          <Space>
-            <Button
-              icon={<ReloadOutlined />}
-              onClick={handleReset}
-              disabled={loading}
-            >
-              重置
-            </Button>
-            <Button
-              type="primary"
-              icon={<SaveOutlined />}
-              htmlType="submit"
-              loading={loading}
-            >
-              保存设置
-            </Button>
-          </Space>
-        </div>
-      </Form>
+      {/* 资源说明 */}
+      <Card size="small" style={{ background: '#f5f5f7' }}>
+        <Space direction="vertical" size={4}>
+          <Text strong>💡 提示</Text>
+          <Text type="secondary">• 全局视频比例、画质、创作模式等设置已移至「故事剧本」页面的右侧设置栏</Text>
+          <Text type="secondary">• 生成剧本后，可在右侧「全局设置」面板中对所有剧本进行统一配置</Text>
+        </Space>
+      </Card>
     </div>
   );
 };

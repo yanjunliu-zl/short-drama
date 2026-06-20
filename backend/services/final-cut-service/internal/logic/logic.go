@@ -31,19 +31,15 @@ func (l *FinalCutLogic) CreateFinalCut(ctx context.Context, req *types.FinalCutR
 	// 生成任务ID
 	taskID := uuid.New().String()
 
+	// 序列化 VideoURLs 为 JSON 字符串
+	videoURLsJSON, _ := json.Marshal(req.VideoURLs)
+
 	// 创建任务记录
 	task := &model.FinalCutTask{
-		TaskID:      taskID,
-		ProjectID:   req.ProjectID,
-		Status:      "pending",
-		VideoIDs:    req.VideoIDs,
-		AudioID:     req.AudioID,
-		Transcript:  req.Transcript,
-		CutPoints:   req.CutPoints,
-		Effects:     req.Effects,
-		FontSize:    req.FontSize,
-		FontColor:   req.FontColor,
-		BackgroundColor: req.BackgroundColor,
+		TaskID:    taskID,
+		ProjectID: req.ProjectID,
+		Status:    "pending",
+		VideoURLs: string(videoURLsJSON),
 	}
 
 	// 保存任务到数据库
@@ -52,47 +48,16 @@ func (l *FinalCutLogic) CreateFinalCut(ctx context.Context, req *types.FinalCutR
 		return nil, errors.New("failed to create task")
 	}
 
-	// 调用剧本服务获取剧本信息（如果提供了剧本ID）
-	if req.ScriptID != "" {
-		script, err := l.svcCtx.ScriptService.GetScript(ctx, req.ScriptID)
-		if err != nil {
-			logx.Warnf("failed to get script from script service: %v", err)
-		} else if script != nil {
-			logx.Infof("fetched script from script service: %s", script.Title)
-			// 可以将剧本信息添加到任务中
-		}
-	}
-
-	// 调用视频服务获取视频信息（如果提供了视频ID）
-	if len(req.VideoIDs) > 0 {
-		for _, videoID := range req.VideoIDs {
-			status, err := l.svcCtx.VideoService.GetVideoTaskStatus(ctx, videoID)
-			if err != nil {
-				logx.Warnf("failed to get video status from video service: %v", err)
-			} else if status != nil {
-				logx.Infof("fetched video status from video service: %s", status.Status)
-			}
-		}
-	}
-
 	// 将任务推送到RabbitMQ队列
 	mqData := map[string]interface{}{
-		"task_id":       taskID,
-		"project_id":    req.ProjectID,
-		"video_ids":     req.VideoIDs,
-		"audio_id":      req.AudioID,
-		"transcript":    req.Transcript,
-		"cut_points":    req.CutPoints,
-		"effects":       req.Effects,
-		"font_size":     req.FontSize,
-		"font_color":    req.FontColor,
-		"background_color": req.BackgroundColor,
+		"task_id":    taskID,
+		"project_id": req.ProjectID,
+		"video_urls": req.VideoURLs,
 	}
 
 	mqBytes, _ := json.Marshal(mqData)
 	if err := l.svcCtx.RabbitMQ.Publish("final_cut.queue", mqBytes); err != nil {
 		logx.Error("failed to publish task to queue", err)
-		// 不返回错误，任务已在数据库中创建，稍后可以通过重试处理
 	}
 
 	// 缓存任务状态
@@ -103,7 +68,7 @@ func (l *FinalCutLogic) CreateFinalCut(ctx context.Context, req *types.FinalCutR
 		"created_at": time.Now().Unix(),
 	}
 	cacheBytes, _ := json.Marshal(cacheData)
-	l.redis.Setex(cacheKey, cacheBytes, 24*time.Hour)
+	l.redis.Setex(cacheKey, string(cacheBytes), int(24*time.Hour/time.Second))
 
 	return &types.FinalCutResponse{
 		TaskID:    taskID,
@@ -186,7 +151,7 @@ func (l *FinalCutLogic) CancelTask(ctx context.Context, req *types.CancelFinalCu
 		"updated_at": time.Now().Unix(),
 	}
 	cacheBytes, _ := json.Marshal(cacheData)
-	l.redis.Setex(cacheKey, cacheBytes, 24*time.Hour)
+	l.redis.Setex(cacheKey, string(cacheBytes), int(24*time.Hour/time.Second))
 
 	return &types.CancelFinalCutResponse{Success: true}, nil
 }

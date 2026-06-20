@@ -10,7 +10,9 @@ logger = logging.getLogger(__name__)
 from app.schemas.storyboard import (
     StoryboardGenerationRequest,
     StoryboardResponse,
-    StoryboardListResponse
+    StoryboardListResponse,
+    ShotGenerationRequest,
+    ShotGenerationResponse,
 )
 from app.services.storyboard_service import StoryboardAIService
 from app.core.deps import get_storyboard_service
@@ -174,6 +176,136 @@ async def get_storyboard_status(
             status_info["duration"] = (task_info.get("end_time", time.time()) - task_info["start_time"])
 
         return status_info
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ========== 镜头级分镜 (Shot-level) 端点 ==========
+
+@router.post("/shots/generate", response_model=ShotGenerationResponse)
+async def generate_shots(
+    request: ShotGenerationRequest,
+    background_tasks: BackgroundTasks,
+    storyboard_service: StoryboardAIService = Depends(get_storyboard_service)
+):
+    """
+    智能分镜：使用AI模型将剧本拆分为镜头级分镜
+
+    根据剧本内容自动分析并划分每个镜头，包括镜头类型、时长、摄像机角度等
+    """
+    try:
+        task_id = str(uuid.uuid4())
+
+        background_tasks.add_task(
+            _generate_shots_task,
+            task_id=task_id,
+            request=request,
+            storyboard_service=storyboard_service
+        )
+
+        return ShotGenerationResponse(
+            task_id=task_id,
+            status="processing",
+            message="Shot division generation started",
+            episodes=None
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _generate_shots_task(
+    task_id: str,
+    request: ShotGenerationRequest,
+    storyboard_service: StoryboardAIService
+):
+    """后台镜头级分镜生成任务"""
+    try:
+        _storyboard_tasks[task_id] = {
+            "status": "processing",
+            "progress": 10,
+            "result": None,
+            "start_time": time.time(),
+            "request": request.dict(),
+            "task_type": "shots",
+        }
+
+        # 生成镜头级分镜
+        shot_data = await storyboard_service.generate_shots(request.dict())
+
+        _storyboard_tasks[task_id] = {
+            "status": "completed",
+            "progress": 100,
+            "result": shot_data,
+            "end_time": time.time(),
+            "task_id": task_id,
+            "task_type": "shots",
+        }
+
+    except Exception as e:
+        logger.error(f"镜头分镜生成失败，任务ID: {task_id}, 错误: {e}")
+        _storyboard_tasks[task_id] = {
+            "status": "failed",
+            "progress": 0,
+            "error": str(e),
+            "end_time": time.time(),
+            "task_type": "shots",
+        }
+
+
+@router.get("/shots/{task_id}/status")
+async def get_shot_generation_status(task_id: str):
+    """
+    获取镜头分镜生成状态
+    """
+    try:
+        task_info = _storyboard_tasks.get(task_id)
+        if not task_info:
+            raise HTTPException(status_code=404, detail="Shot generation task not found")
+
+        status_info = {
+            "task_id": task_id,
+            "status": task_info.get("status", "unknown"),
+            "progress": task_info.get("progress", 0),
+            "error": task_info.get("error"),
+        }
+
+        if "start_time" in task_info:
+            status_info["start_time"] = task_info["start_time"]
+            status_info["duration"] = (task_info.get("end_time", time.time()) - task_info["start_time"])
+
+        return status_info
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/shots/{task_id}", response_model=ShotGenerationResponse)
+async def get_shot_generation_result(
+    task_id: str,
+    storyboard_service: StoryboardAIService = Depends(get_storyboard_service)
+):
+    """
+    获取镜头分镜生成结果
+    """
+    try:
+        task_info = _storyboard_tasks.get(task_id)
+        if not task_info:
+            raise HTTPException(status_code=404, detail="Shot generation task not found")
+
+        if task_info["status"] != "completed":
+            raise HTTPException(status_code=404, detail="Shot generation not ready")
+
+        result = task_info.get("result", {})
+
+        return ShotGenerationResponse(
+            task_id=task_id,
+            status="completed",
+            message="Shot division retrieved successfully",
+            episodes=result.get("episodes"),
+        )
     except HTTPException:
         raise
     except Exception as e:

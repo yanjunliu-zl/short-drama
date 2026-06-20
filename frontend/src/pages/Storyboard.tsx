@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Card,
   Typography,
@@ -15,6 +15,7 @@ import {
   Row,
   Col,
   Drawer,
+  Progress,
 } from 'antd';
 import {
   PlusOutlined,
@@ -27,105 +28,65 @@ import {
   ClockCircleOutlined,
   FolderOpenOutlined,
   StarOutlined,
+  ThunderboltOutlined,
+  LoadingOutlined,
 } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
+import type { Shot, ShotEpisode } from '@/types';
+import { scriptService } from '@/services/scriptService';
+import { usePipelinePersistence } from '@/hooks/usePipelinePersistence';
+type Episode = ShotEpisode;
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 const { Option } = Select;
 
-// 分镜头类型定义
-interface Shot {
-  id: number;
-  number: number; // 镜头编号
-  shotType: string; // 镜头类型：远景、中景、近景、特写
-  duration: number; // 时长（秒）
-  cameraAngle: string; // 摄像机角度
-  sceneRef: string; // 关联的场景
-  characters: string[]; // 出场的角色
-  description: string; // 画面描述
-  dialogue: string; // 对白/旁白
-  soundEffects: string[]; // 音效
-  music: string; // 背景音乐
-  notes: string; // 备注
-}
-
-// 集数类型定义
-interface Episode {
-  id: string;
-  title: string;
-  number: number;
-  shots: Shot[];
-  description?: string;
-}
-
 const Storyboard: React.FC = () => {
+  const navigate = useNavigate();
+  const { saveState, getWorkId, loadState, restoreFromBackend } = usePipelinePersistence();
   // 多集数据状态
-  const [episodes, setEpisodes] = useState<Episode[]>([
-    {
-      id: 'ep-1',
-      title: '第一集',
-      number: 1,
-      shots: [
-        {
-          id: 1,
-          number: 1,
-          shotType: '远景',
-          duration: 5,
-          cameraAngle: '正面平视',
-          sceneRef: '现代咖啡馆',
-          characters: ['李明', '张薇'],
-          description: '咖啡馆全景，顾客稀疏，阳光透过窗户洒进来',
-          dialogue: '',
-          soundEffects: ['环境音', '咖啡机声'],
-          music: '轻柔的钢琴曲',
-          notes: '突出咖啡馆的温馨氛围',
-        },
-        {
-          id: 2,
-          number: 2,
-          shotType: '中景',
-          duration: 8,
-          cameraAngle: '正面平视',
-          sceneRef: '现代咖啡馆',
-          characters: ['李明'],
-          description: '李明走进咖啡馆，四处张望，表情有些紧张',
-          dialogue: '李明：（自言自语）希望她没有走错地方',
-          soundEffects: ['脚步声', '门铃声'],
-          music: '轻柔的钢琴曲',
-          notes: '突出李明紧张的情绪',
-        },
-        {
-          id: 3,
-          number: 3,
-          shotType: '近景',
-          duration: 6,
-          cameraAngle: '正面平视',
-          sceneRef: '现代咖啡馆',
-          characters: ['张薇'],
-          description: '张薇坐在角落看书，阳光洒在她身上，专注而安静',
-          dialogue: '',
-          soundEffects: ['翻书声'],
-          music: '轻柔的钢琴曲',
-          notes: '突出张薇的优雅气质',
-        },
-        {
-          id: 4,
-          number: 4,
-          shotType: '特写',
-          duration: 4,
-          cameraAngle: '俯视',
-          sceneRef: '现代咖啡馆',
-          characters: ['李明', '张薇'],
-          description: '两人对视的特写镜头，李明略显紧张，张薇微笑回应',
-          dialogue: '张薇：你好，我能坐这里吗？',
-          soundEffects: [],
-          music: '音乐渐强',
-          notes: '突出眼神交流',
-        },
-      ],
-      description: '故事的开端，主角相遇',
-    },
-  ]);
+  const [episodes, setEpisodes] = useState<Episode[]>([]);
+
+  // 加载分镜数据：优先 localStorage，空则从后端恢复
+  useEffect(() => {
+    const loadData = async () => {
+      // 1. 先读 localStorage（快速缓存）
+      let data = loadState('storyboard');
+      // 兼容旧的非命名空间 key
+      if (!data) {
+        const oldData = localStorage.getItem('shot_generation_result');
+        if (oldData) {
+          try { data = JSON.parse(oldData); } catch {}
+        }
+      }
+
+      // 2. localStorage 为空，从后端恢复
+      if (!data) {
+        const workId = getWorkId();
+        if (workId) {
+          await restoreFromBackend(workId);
+          data = loadState('storyboard');
+        }
+      }
+
+      // 3. 展示数据
+      if (data && data.episodes && data.episodes.length > 0) {
+        const loadedEpisodes: Episode[] = data.episodes.map((ep: any) => ({
+          id: ep.id || `ep-${ep.number}`,
+          title: ep.title || `第${ep.number}集`,
+          number: ep.number,
+          shots: ep.shots || [],
+          description: ep.description || '',
+        }));
+        setEpisodes(loadedEpisodes);
+        setActiveEpisodeId(loadedEpisodes[0].id);
+        if (data.generatedAt) {
+          message.success(`已加载 ${loadedEpisodes.length} 集分镜数据`);
+        }
+      }
+    };
+    loadData();
+  }, []);
 
   // 当前激活的集数
   const [activeEpisodeId, setActiveEpisodeId] = useState<string>('ep-1');
@@ -137,6 +98,202 @@ const Storyboard: React.FC = () => {
   // 编辑状态
   const [editingShot, setEditingShot] = useState<Shot | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  // 视频生成状态
+  const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
+  const [videoGenerationProgress, setVideoGenerationProgress] = useState(0);
+  const [previewingShotId, setPreviewingShotId] = useState<number | null>(null);
+  const videoPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // 轮询视频生成状态
+  const pollVideoGeneration = useCallback((taskId: string) => {
+    videoPollingRef.current = setInterval(async () => {
+      try {
+        const status = await scriptService.getShotsVideoStatus(taskId);
+        if (status) {
+          setVideoGenerationProgress(status.progress || 0);
+
+          if (status.status === 'completed') {
+            if (videoPollingRef.current) {
+              clearInterval(videoPollingRef.current);
+              videoPollingRef.current = null;
+            }
+            setIsGeneratingVideo(false);
+            setVideoGenerationProgress(100);
+            message.success('所有镜头视频生成完成！');
+
+            // 获取完整结果
+            const result = await scriptService.getShotsVideoResult(taskId);
+
+            if (result.results && episodes.length > 0) {
+              // 将视频 URL 关联到每个镜头
+              const updatedEpisodes = episodes.map(ep => {
+                const epResults = result.results.filter((r: any) => r.episode_id === ep.id);
+                const updatedShots = ep.shots.map(shot => {
+                  const shotResult = epResults.find((r: any) => r.shot_id === shot.id);
+                  return shotResult ? { ...shot, videoUrl: shotResult.video_url } : shot;
+                });
+                return { ...ep, shots: updatedShots, videoResults: epResults };
+              });
+
+              // 存入 localStorage 供 Video 页面读取
+              const videoData = {
+                episodes: updatedEpisodes,
+                taskId: taskId,
+                totalShots: result.total_shots,
+                completedShots: result.completed_shots,
+                generatedAt: new Date().toISOString(),
+              };
+              localStorage.setItem('shot_video_results', JSON.stringify(videoData));
+
+              // 持久化到后端
+              saveState('videoResults', videoData, getWorkId() || undefined);
+
+              // 导航到分镜视频页面
+              navigate('/video');
+            }
+          } else if (status.status === 'failed') {
+            if (videoPollingRef.current) {
+              clearInterval(videoPollingRef.current);
+              videoPollingRef.current = null;
+            }
+            setIsGeneratingVideo(false);
+            message.error(status.error || '视频生成失败');
+          }
+        }
+      } catch (err: any) {
+        if (err?.response?.status === 404) {
+          if (videoPollingRef.current) {
+            clearInterval(videoPollingRef.current);
+            videoPollingRef.current = null;
+          }
+          setIsGeneratingVideo(false);
+          message.error('视频生成任务已过期，请重新生成');
+        }
+      }
+    }, 3000);
+  }, [episodes, navigate]);
+
+  // 预览单个镜头 — 生成该镜头的视频，完成后跳转 Video 页面
+  const handlePreviewShot = useCallback(async (shot: Shot, episode: Episode) => {
+    if (previewingShotId) return; // 已有生成中的镜头
+    setPreviewingShotId(shot.id);
+    setVideoGenerationProgress(10);
+
+    try {
+      const singleEpisode = { ...episode, shots: [shot] };
+      const response = await scriptService.generateShotsVideo({
+        episodes: [singleEpisode],
+        style: '写实风格',
+        fps: 24,
+      });
+
+      if (!response?.task_id) throw new Error('未获取到任务ID');
+      message.info(`镜头${shot.number} 视频生成中...`);
+
+      const poll = setInterval(async () => {
+        try {
+          const status = await scriptService.getShotsVideoStatus(response.task_id);
+          setVideoGenerationProgress(status?.progress || 10);
+
+          if (status?.status === 'completed') {
+            clearInterval(poll);
+            setPreviewingShotId(null);
+            message.success(`镜头${shot.number} 视频生成完成`);
+
+            const result = await scriptService.getShotsVideoResult(response.task_id);
+            const firstResult = result.results?.[0];
+            const videoUrl = firstResult?.video_url;
+            const imageUrl = firstResult?.image_url;
+
+            if (!videoUrl && !imageUrl) {
+              message.warning('镜头视频生成失败，请稍后重试');
+              return;
+            }
+
+            // 构建单镜头视频/图像数据
+            const videoData = {
+              episodes: [{
+                id: episode.id,
+                title: episode.title,
+                number: episode.number,
+                description: episode.description,
+                shots: [{ ...shot, videoUrl: videoUrl || imageUrl, imageUrl }],
+                videoResults: result.results || [],
+              }],
+              taskId: response.task_id,
+              totalShots: 1,
+              completedShots: videoUrl ? 1 : 0,
+              generatedAt: new Date().toISOString(),
+            };
+
+            localStorage.setItem('shot_video_results', JSON.stringify(videoData));
+            saveState('videoResults', videoData, getWorkId() || undefined);
+            message.success(videoUrl ? `镜头${shot.number} 视频生成完成` : `镜头${shot.number} 视频生成失败，已保存预览图`);
+            navigate('/video');
+          } else if (status?.status === 'failed') {
+            clearInterval(poll);
+            setPreviewingShotId(null);
+            message.error(status.error || '视频生成失败');
+          }
+        } catch (err: any) {
+          if (err?.response?.status === 404) {
+            clearInterval(poll);
+            setPreviewingShotId(null);
+          }
+        }
+      }, 3000);
+    } catch (err: any) {
+      setPreviewingShotId(null);
+      message.error(err?.response?.data?.detail || err?.message || '视频生成请求失败');
+    }
+  }, [navigate, saveState, getWorkId, previewingShotId]);
+
+  // 生成故事板 — 为每个分镜头生成视频
+  const handleGenerateStoryboard = useCallback(async () => {
+    if (episodes.length === 0) {
+      message.warning('请先添加分镜内容');
+      return;
+    }
+
+    const hasShots = episodes.some(ep => ep.shots && ep.shots.length > 0);
+    if (!hasShots) {
+      message.warning('请先添加分镜头');
+      return;
+    }
+
+    setIsGeneratingVideo(true);
+    setVideoGenerationProgress(0);
+
+    try {
+      const response = await scriptService.generateShotsVideo({
+        episodes: episodes,
+        style: '写实风格',
+        fps: 24,
+      });
+
+      if (response?.task_id) {
+        const totalShots = response.total_shots || 0;
+        setVideoGenerationProgress(10);
+        message.info(`视频生成任务已提交，共 ${totalShots} 个镜头，请耐心等待`);
+        pollVideoGeneration(response.task_id);
+      } else {
+        throw new Error('未获取到任务ID');
+      }
+    } catch (err: any) {
+      setIsGeneratingVideo(false);
+      message.error(err?.response?.data?.detail || err?.message || '视频生成请求失败');
+    }
+  }, [episodes, pollVideoGeneration]);
+
+  // 组件卸载时清理轮询
+  useEffect(() => {
+    return () => {
+      if (videoPollingRef.current) {
+        clearInterval(videoPollingRef.current);
+      }
+    };
+  }, []);
 
   // 获取当前集数的数据
   const currentEpisode = episodes.find(ep => ep.id === activeEpisodeId);
@@ -286,8 +443,10 @@ const Storyboard: React.FC = () => {
               <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => handleEditShot(shot)}>
                 编辑
               </Button>,
-              <Button key="preview" type="link" icon={<EyeOutlined />}>
-                预览
+              <Button key="preview" type="link" icon={<EyeOutlined />}
+                loading={previewingShotId === shot.id}
+                onClick={() => handlePreviewShot(shot, currentEpisode!)}>
+                {previewingShotId === shot.id ? '生成中' : '预览'}
               </Button>,
               <Button key="delete" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDeleteShot(shot.id)}>
                 删除
@@ -322,13 +481,13 @@ const Storyboard: React.FC = () => {
                   <Col span={12}>
                     <div style={{ marginBottom: 12 }}>
                       <Text strong>画面描述：</Text>
-                      <div style={{ marginTop: 4, padding: 8, background: '#f5f5f5', borderRadius: 4 }}>
+                      <div style={{ marginTop: 4, padding: 8, background: '#ffffff', borderRadius: 4 }}>
                         {shot.description}
                       </div>
                     </div>
                     <div style={{ marginBottom: 12 }}>
                       <Text strong>对白/旁白：</Text>
-                      <div style={{ marginTop: 4, padding: 8, background: '#f0f9ff', borderRadius: 4, whiteSpace: 'pre-wrap' }}>
+                      <div style={{ marginTop: 4, padding: 8, background: '#f0f7ff', borderRadius: 4, whiteSpace: 'pre-wrap' }}>
                         {shot.dialogue || '无对白'}
                       </div>
                     </div>
@@ -368,7 +527,7 @@ const Storyboard: React.FC = () => {
         )}
       />
       {currentShots.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+        <div style={{ textAlign: 'center', padding: 40, color: '#aeaeb2' }}>
           <CameraOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }} />
           <p>暂无分镜头，点击"添加分镜头"按钮开始创建</p>
         </div>
@@ -379,7 +538,7 @@ const Storyboard: React.FC = () => {
   const renderTimeline = () => (
     <div style={{ marginTop: 24 }}>
       <Title level={4}>时间线概览</Title>
-      <div style={{ padding: 16, background: '#fafafa', borderRadius: 8 }}>
+      <div style={{ padding: 16, background: '#ffffff', borderRadius: 8 }}>
         <div style={{ display: 'flex', overflowX: 'auto', padding: '8px 0' }}>
           {currentShots.map((shot, index) => (
             <div
@@ -388,7 +547,7 @@ const Storyboard: React.FC = () => {
                 minWidth: 100,
                 marginRight: 8,
                 padding: 12,
-                background: '#1890ff',
+                background: '#0066cc',
                 color: 'white',
                 borderRadius: 4,
                 position: 'relative',
@@ -403,7 +562,7 @@ const Storyboard: React.FC = () => {
                   top: -20,
                   left: 0,
                   fontSize: 12,
-                  color: '#666',
+                  color: '#86868b',
                 }}
               >
                 {index === 0 ? '00:00' : `${Math.floor(currentShots.slice(0, index).reduce((sum, s) => sum + s.duration, 0) / 60)}:${(currentShots.slice(0, index).reduce((sum, s) => sum + s.duration, 0) % 60).toString().padStart(2, '0')}`}
@@ -420,8 +579,8 @@ const Storyboard: React.FC = () => {
 
   // 渲染集数列表
   const renderEpisodeList = () => (
-    <div style={{ borderRight: '1px solid #f0f0f0', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '16px', borderBottom: '1px solid #f0f0f0' }}>
+    <div style={{ borderRight: '1px solid #f5f5f7', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '16px', borderBottom: '1px solid #f5f5f7' }}>
         <Title level={4} style={{ margin: 0 }}>
           <FolderOpenOutlined style={{ marginRight: 8 }} />
           集数列表
@@ -437,8 +596,8 @@ const Storyboard: React.FC = () => {
             style={{
               padding: '12px 16px',
               cursor: 'pointer',
-              backgroundColor: activeEpisodeId === episode.id ? '#e6f7ff' : 'transparent',
-              borderBottom: '1px solid #f0f0f0',
+              backgroundColor: activeEpisodeId === episode.id ? '#e8f2fd' : 'transparent',
+              borderBottom: '1px solid #f5f5f7',
               transition: 'background-color 0.2s',
             }}
           >
@@ -446,11 +605,11 @@ const Storyboard: React.FC = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <StarOutlined
                   style={{
-                    color: activeEpisodeId === episode.id ? '#1890ff' : '#d9d9d9',
+                    color: activeEpisodeId === episode.id ? '#0066cc' : '#e5e5ea',
                     fontSize: 16
                   }}
                 />
-                <Text strong style={{ color: activeEpisodeId === episode.id ? '#1890ff' : undefined }}>
+                <Text strong style={{ color: activeEpisodeId === episode.id ? '#0066cc' : undefined }}>
                   {episode.title}
                 </Text>
               </div>
@@ -485,7 +644,7 @@ const Storyboard: React.FC = () => {
         ))}
       </div>
 
-      <div style={{ padding: '16px', borderTop: '1px solid #f0f0f0' }}>
+      <div style={{ padding: '16px', borderTop: '1px solid #f5f5f7' }}>
         <Button
           type="dashed"
           block
@@ -499,31 +658,61 @@ const Storyboard: React.FC = () => {
   );
 
   return (
-    <div style={{ padding: '24px', height: 'calc(100vh - 120px)', display: 'flex' }}>
-      {/* 左侧集数列表 */}
-      <div style={{ width: 280, marginRight: 24, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
-        {renderEpisodeList()}
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)' }}>
+      {/* 顶部操作栏 */}
+      <div style={{
+        padding: '12px 24px', background: '#fff', borderBottom: '1px solid #e5e5ea',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      }}>
+        <div>
+          <Title level={4} style={{ margin: 0 }}>
+            <CameraOutlined style={{ marginRight: 8 }} />
+            分镜脚本
+          </Title>
+          <Text type="secondary" style={{ fontSize: 12 }}>设计和编辑视频的分镜头脚本</Text>
+        </div>
+        <Button
+          type="primary"
+          size="middle"
+          icon={<ThunderboltOutlined />}
+          onClick={handleGenerateStoryboard}
+          loading={isGeneratingVideo}
+          disabled={isGeneratingVideo}
+        >
+          {isGeneratingVideo ? '正在生成视频...' : '生成故事板'}
+        </Button>
       </div>
 
-      {/* 右侧内容区域 */}
-      <div style={{ flex: 1, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '24px', borderBottom: '1px solid #f0f0f0' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <Title level={2} style={{ margin: 0 }}>
-                <CameraOutlined style={{ marginRight: 12 }} />
-                {currentEpisode?.title}
-              </Title>
-              <Text type="secondary">
-                设计和编辑视频的分镜头脚本，包括画面、对白、音效等元素
-              </Text>
-            </div>
-          </div>
+      {/* 视频生成进度指示 */}
+      {isGeneratingVideo && (
+        <div style={{
+          padding: '8px 24px', background: '#f0f7ff', borderBottom: '1px solid #d6e4ff',
+          textAlign: 'center',
+        }}>
+          <Progress percent={videoGenerationProgress} status="active" size="small" style={{ maxWidth: 400 }} />
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+            <LoadingOutlined style={{ marginRight: 6 }} />
+            正在为每个镜头生成视频，请稍候...
+          </Text>
+        </div>
+      )}
+
+      {/* 内容区 */}
+      <div style={{ flex: 1, display: 'flex', padding: '16px 24px', gap: 16, overflow: 'hidden' }}>
+        {/* 左侧集数列表 */}
+        <div style={{ width: 280, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
+          {renderEpisodeList()}
         </div>
 
-        <div style={{ padding: '24px', flex: 1 }}>
-          {renderShotsList()}
-          {renderTimeline()}
+        {/* 右侧内容区域 */}
+        <div style={{ flex: 1, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '16px 24px', borderBottom: '1px solid #f5f5f7' }}>
+            <Title level={5} style={{ margin: 0 }}>{currentEpisode?.title}</Title>
+          </div>
+          <div style={{ padding: '24px', flex: 1, overflow: 'auto' }}>
+            {renderShotsList()}
+            {renderTimeline()}
+          </div>
         </div>
       </div>
 

@@ -81,6 +81,15 @@ class Settings(BaseSettings):
     LANGCHAIN_API_KEY: Optional[str] = os.getenv("LANGCHAIN_API_KEY", None)
     LANGCHAIN_PROJECT: Optional[str] = os.getenv("LANGCHAIN_PROJECT", "scene-extractor")
 
+    # Ceph/RGW 对象存储配置
+    STORAGE_TYPE: str = os.getenv("STORAGE_TYPE", "ceph")  # ceph, s3, minio, local
+    STORAGE_ENDPOINT: str = os.getenv("STORAGE_ENDPOINT", "http://ceph-rgw:7480")
+    STORAGE_ACCESS_KEY: str = os.getenv("STORAGE_ACCESS_KEY", "admin")
+    STORAGE_SECRET_KEY: str = os.getenv("STORAGE_SECRET_KEY", "admin123")
+    STORAGE_BUCKET: str = os.getenv("STORAGE_BUCKET", "short-drama")
+    STORAGE_REGION: str = os.getenv("STORAGE_REGION", "us-east-1")
+    STORAGE_LOCAL_BASE_PATH: str = os.getenv("STORAGE_LOCAL_BASE_PATH", "/app/storage")
+
     # 日志配置
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

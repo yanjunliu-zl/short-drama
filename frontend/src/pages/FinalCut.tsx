@@ -1,4 +1,6 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { usePipelinePersistence } from '@/hooks/usePipelinePersistence';
 import {
   Card,
   Typography,
@@ -55,6 +57,7 @@ interface PreviewVideo {
   duration: number; // 秒
   resolution: string;
   format: string;
+  url?: string;
   thumbnailUrl?: string;
   fileSize: string;
   createdAt: string;
@@ -97,6 +100,10 @@ interface Episode {
 }
 
 const FinalCut: React.FC = () => {
+  const navigate = useNavigate();
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const { saveState, getWorkId, loadState, restoreFromBackend } = usePipelinePersistence();
+
   const [activeTab, setActiveTab] = useState('player');
   const [currentVideo, setCurrentVideo] = useState<PreviewVideo | null>(null);
   const [playerState, setPlayerState] = useState<PlayerState>({
@@ -240,6 +247,77 @@ const FinalCut: React.FC = () => {
     }
   }, [currentVideos, currentVideo]);
 
+  // 加载成片结果：优先 localStorage，空则从后端恢复
+  useEffect(() => {
+    const loadData = async () => {
+      let data = loadState('finalCut');
+      if (!data) {
+        const oldData = localStorage.getItem('final_cut_result');
+        if (oldData) { try { data = JSON.parse(oldData); } catch {} }
+      }
+      if (!data) {
+        const workId = getWorkId();
+        if (workId) {
+          await restoreFromBackend(workId);
+          data = loadState('finalCut');
+        }
+      }
+      if (data) {
+      try {
+        if (data.videoUrl) {
+          const realVideo: PreviewVideo = {
+            id: Date.now(),
+            title: data.episodeTitle || '剪辑成片',
+            episodeId: 'final-cut',
+            episodeTitle: data.episodeTitle || '成片',
+            description: '所有镜头拼接完成的最终视频',
+            duration: data.duration || 0,
+            resolution: '1920x1080',
+            format: 'mp4',
+            url: data.videoUrl,
+            thumbnailUrl: data.thumbnailUrl,
+            fileSize: data.duration ? `${Math.round(data.duration)}秒` : '-',
+            createdAt: data.completedAt || new Date().toISOString(),
+            views: 0,
+            likes: 0,
+            quality: 'high',
+            hasAudio: true,
+            hasSubtitles: false,
+            status: 'ready' as const,
+          };
+
+          // 添加到或创建"成片"集数
+          const finalCutEpisode: Episode = {
+            id: 'final-cut',
+            title: '成片',
+            number: 1,
+            videos: [realVideo],
+            description: '拼接完成的完整视频',
+          };
+
+          setEpisodes(prev => {
+            const existing = prev.find(ep => ep.id === 'final-cut');
+            if (existing) {
+              return prev.map(ep => ep.id === 'final-cut'
+                ? { ...ep, videos: [realVideo, ...ep.videos] }
+                : ep
+              );
+            }
+            return [finalCutEpisode, ...prev];
+          });
+          setActiveEpisodeId('final-cut');
+          setCurrentVideo(realVideo);
+          message.success('剪辑成片已完成！');
+        }
+        // 数据保留在 localStorage 作为缓存，不再删除
+      } catch (e) {
+        console.error('Failed to load final cut result:', e);
+      }
+    }
+    }
+    loadData();
+  }, []);
+
   // 集数操作
   const handleAddEpisode = () => {
     const newEpisode: Episode = {
@@ -290,33 +368,30 @@ const FinalCut: React.FC = () => {
   // 播放器控制函数
   const handlePlay = () => {
     if (!currentVideo) return;
-
-    setPlayerState(prev => ({ ...prev, isPlaying: true }));
-
-    playTimerRef.current = setInterval(() => {
-      setPlayerState(prev => {
-        if (prev.currentTime >= currentVideo.duration) {
-          if (playTimerRef.current) clearInterval(playTimerRef.current);
-          return { ...prev, isPlaying: false, currentTime: currentVideo.duration };
-        }
-        return { ...prev, currentTime: prev.currentTime + 1 };
-      });
-    }, 1000);
+    if (videoRef.current) {
+      videoRef.current.play();
+      setPlayerState(prev => ({ ...prev, isPlaying: true }));
+    }
   };
 
   const handlePause = () => {
-    setPlayerState(prev => ({ ...prev, isPlaying: false }));
-    if (playTimerRef.current) {
-      clearInterval(playTimerRef.current);
-      playTimerRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.pause();
+      setPlayerState(prev => ({ ...prev, isPlaying: false }));
     }
   };
 
   const handleSeek = (value: number) => {
-    setPlayerState(prev => ({ ...prev, currentTime: value }));
+    if (videoRef.current) {
+      videoRef.current.currentTime = value;
+      setPlayerState(prev => ({ ...prev, currentTime: value }));
+    }
   };
 
   const handleVolumeChange = (value: number) => {
+    if (videoRef.current) {
+      videoRef.current.volume = value / 100;
+    }
     setPlayerState(prev => ({
       ...prev,
       volume: value,
@@ -325,10 +400,16 @@ const FinalCut: React.FC = () => {
   };
 
   const handleToggleMute = () => {
+    if (videoRef.current) {
+      videoRef.current.muted = !videoRef.current.muted;
+    }
     setPlayerState(prev => ({ ...prev, isMuted: !prev.isMuted }));
   };
 
   const handlePlaybackRateChange = (rate: number) => {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = rate;
+    }
     setPlayerState(prev => ({ ...prev, playbackRate: rate }));
   };
 
@@ -434,17 +515,39 @@ const FinalCut: React.FC = () => {
           position: 'relative',
         }}>
           {/* 视频预览区域 */}
-          <div style={{ textAlign: 'center', color: 'white' }}>
-            <PlayCircleOutlined style={{ fontSize: 64, color: 'rgba(255,255,255,0.8)' }} />
-            <div style={{ marginTop: 16, fontSize: 18 }}>
-              {currentVideo?.title || '选择视频开始预览'}
-            </div>
-            {currentVideo && (
-              <div style={{ marginTop: 8, color: 'rgba(255,255,255,0.6)' }}>
-                分辨率: {currentVideo.resolution} | 时长: {formatTime(currentVideo.duration)}
+          {currentVideo?.url ? (
+            <video
+              ref={videoRef}
+              src={currentVideo.url}
+              poster={currentVideo.thumbnailUrl}
+              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+              onTimeUpdate={() => {
+                if (videoRef.current) {
+                  setPlayerState(prev => ({ ...prev, currentTime: videoRef.current!.currentTime }));
+                }
+              }}
+              onLoadedMetadata={() => {
+                if (videoRef.current) {
+                  setPlayerState(prev => ({ ...prev, currentTime: 0 }));
+                }
+              }}
+              onEnded={() => {
+                setPlayerState(prev => ({ ...prev, isPlaying: false }));
+              }}
+            />
+          ) : (
+            <div style={{ textAlign: 'center', color: 'white' }}>
+              <PlayCircleOutlined style={{ fontSize: 64, color: 'rgba(255,255,255,0.8)' }} />
+              <div style={{ marginTop: 16, fontSize: 18 }}>
+                {currentVideo?.title || '选择视频开始预览'}
               </div>
-            )}
-          </div>
+              {currentVideo && (
+                <div style={{ marginTop: 8, color: 'rgba(255,255,255,0.6)' }}>
+                  分辨率: {currentVideo.resolution} | 时长: {formatTime(currentVideo.duration)}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 播放器控制条 */}
           <div style={{
@@ -459,12 +562,12 @@ const FinalCut: React.FC = () => {
             <div style={{ marginBottom: 16 }}>
               <Slider
                 min={0}
-                max={currentVideo?.duration || 100}
+                max={videoRef.current?.duration || currentVideo?.duration || 100}
                 value={playerState.currentTime}
                 onChange={handleSeek}
                 tooltip={{ formatter: (value) => formatTime(value || 0) }}
                 styles={{
-                  track: { background: '#1890ff' },
+                  track: { background: '#0066cc' },
                   rail: { background: 'rgba(255,255,255,0.2)' },
                 }}
               />
@@ -515,7 +618,7 @@ const FinalCut: React.FC = () => {
                     value={playerState.isMuted ? 0 : playerState.volume}
                     onChange={handleVolumeChange}
                     styles={{
-                      track: { background: '#1890ff' },
+                      track: { background: '#0066cc' },
                       rail: { background: 'rgba(255,255,255,0.2)' },
                     }}
                   />
@@ -627,7 +730,7 @@ const FinalCut: React.FC = () => {
               cover={
                 <div style={{
                   height: 160,
-                  backgroundColor: '#1890ff',
+                  backgroundColor: '#0066cc',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -638,7 +741,7 @@ const FinalCut: React.FC = () => {
               }
               onClick={() => handleSelectVideo(video)}
               style={{
-                border: currentVideo?.id === video.id ? '2px solid #1890ff' : undefined,
+                border: currentVideo?.id === video.id ? '2px solid #0066cc' : undefined,
                 cursor: 'pointer',
               }}
             >
@@ -686,7 +789,7 @@ const FinalCut: React.FC = () => {
         ))}
       </Row>
       {currentVideos.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+        <div style={{ textAlign: 'center', padding: 40, color: '#aeaeb2' }}>
           <EyeOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }} />
           <p>暂无视频，点击"添加视频"按钮开始创建</p>
         </div>
@@ -696,8 +799,8 @@ const FinalCut: React.FC = () => {
 
   // 渲染集数列表
   const renderEpisodeList = () => (
-    <div style={{ borderRight: '1px solid #f0f0f0', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '16px', borderBottom: '1px solid #f0f0f0' }}>
+    <div style={{ borderRight: '1px solid #f5f5f7', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '16px', borderBottom: '1px solid #f5f5f7' }}>
         <Title level={4} style={{ margin: 0 }}>
           <FolderOpenOutlined style={{ marginRight: 8 }} />
           集数列表
@@ -713,8 +816,8 @@ const FinalCut: React.FC = () => {
             style={{
               padding: '12px 16px',
               cursor: 'pointer',
-              backgroundColor: activeEpisodeId === episode.id ? '#e6f7ff' : 'transparent',
-              borderBottom: '1px solid #f0f0f0',
+              backgroundColor: activeEpisodeId === episode.id ? '#e8f2fd' : 'transparent',
+              borderBottom: '1px solid #f5f5f7',
               transition: 'background-color 0.2s',
             }}
           >
@@ -722,11 +825,11 @@ const FinalCut: React.FC = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <StarOutlined
                   style={{
-                    color: activeEpisodeId === episode.id ? '#1890ff' : '#d9d9d9',
+                    color: activeEpisodeId === episode.id ? '#0066cc' : '#e5e5ea',
                     fontSize: 16
                   }}
                 />
-                <Text strong style={{ color: activeEpisodeId === episode.id ? '#1890ff' : undefined }}>
+                <Text strong style={{ color: activeEpisodeId === episode.id ? '#0066cc' : undefined }}>
                   {episode.title}
                 </Text>
               </div>
@@ -761,7 +864,7 @@ const FinalCut: React.FC = () => {
         ))}
       </div>
 
-      <div style={{ padding: '16px', borderTop: '1px solid #f0f0f0' }}>
+      <div style={{ padding: '16px', borderTop: '1px solid #f5f5f7' }}>
         <Button
           type="dashed"
           block
@@ -775,24 +878,46 @@ const FinalCut: React.FC = () => {
   );
 
   return (
-    <div style={{ padding: '24px', height: 'calc(100vh - 120px)', display: 'flex' }}>
-      {/* 左侧集数列表 */}
-      <div style={{ width: 280, marginRight: 24, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
-        {renderEpisodeList()}
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)' }}>
+      {/* 顶部操作栏 */}
+      <div style={{
+        padding: '12px 24px', background: '#fff', borderBottom: '1px solid #e5e5ea',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      }}>
+        <div>
+          <Title level={4} style={{ margin: 0 }}>
+            <EyeOutlined style={{ marginRight: 8 }} />
+            成片
+          </Title>
+          <Text type="secondary" style={{ fontSize: 12 }}>最终视频的播放、管理与导出</Text>
+        </div>
+        <Button
+          type="primary"
+          size="middle"
+          icon={<DownloadOutlined />}
+          onClick={() => message.info('导出功能开发中，敬请期待')}
+        >
+          导出
+        </Button>
       </div>
 
-      {/* 右侧内容区域 */}
-      <div style={{ flex: 1, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '24px', borderBottom: '1px solid #f0f0f0' }}>
-          <div style={{ marginBottom: 24 }}>
+      {/* 内容区 */}
+      <div style={{ flex: 1, display: 'flex', padding: '16px 24px', gap: 16, overflow: 'hidden' }}>
+        {/* 左侧集数列表 */}
+        <div style={{ width: 280, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
+          {renderEpisodeList()}
+        </div>
+
+        {/* 右侧内容区域 */}
+        <div style={{ flex: 1, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '16px 24px', borderBottom: '1px solid #f5f5f7' }}>
             <Tabs activeKey={activeTab} onChange={setActiveTab}>
               <TabPane tab="播放器" key="player" />
               <TabPane tab="视频库" key="library" />
               <TabPane tab="播放列表" key="playlist" />
             </Tabs>
           </div>
-
-          <div style={{ marginTop: 24 }}>
+          <div style={{ padding: '24px', flex: 1, overflow: 'auto' }}>
             {activeTab === 'player' && renderPlayer()}
             {activeTab === 'library' && renderVideoList()}
             {activeTab === 'playlist' && (
@@ -844,11 +969,11 @@ const FinalCut: React.FC = () => {
                 padding: '16px',
                 marginBottom: 8,
                 border: `1px solid ${
-                  playerState.quality === quality ? '#1890ff' : '#d9d9d9'
+                  playerState.quality === quality ? '#0066cc' : '#e5e5ea'
                 }`,
                 borderRadius: 6,
                 cursor: 'pointer',
-                backgroundColor: playerState.quality === quality ? '#e6f7ff' : 'white',
+                backgroundColor: playerState.quality === quality ? '#e8f2fd' : 'white',
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -971,7 +1096,7 @@ const FinalCut: React.FC = () => {
                   <div style={{
                     width: 40,
                     height: 40,
-                    backgroundColor: '#f0f0f0',
+                    backgroundColor: '#f5f5f7',
                     borderRadius: 4,
                     display: 'flex',
                     alignItems: 'center',

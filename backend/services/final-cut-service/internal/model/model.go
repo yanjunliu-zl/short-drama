@@ -10,7 +10,7 @@ type FinalCutTask struct {
 	TaskID          string    `db:"task_id"`
 	ProjectID       string    `db:"project_id"`
 	Status          string    `db:"status"` // pending, processing, completed, failed, cancelled
-	VideoIDs        string    `db:"video_ids"` // JSON array
+	VideoURLs       string    `db:"video_ids"` // JSON array of video URLs
 	AudioID         string    `db:"audio_id"`
 	Transcript      string    `db:"transcript"`
 	CutPoints       string    `db:"cut_points"` // JSON array

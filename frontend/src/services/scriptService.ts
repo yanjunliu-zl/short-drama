@@ -7,7 +7,10 @@ import type {
   GenerationStatus,
   ApiResponse,
   PaginatedResponse,
+  ShotGenerationResponse,
+  ShotVideoResultItem,
 } from '@/types'
+import type { ShotEpisode } from '@/types'
 
 export const scriptService = {
   // 生成剧本
@@ -47,9 +50,9 @@ export const scriptService = {
   },
 
   // 获取生成状态
-  getGenerationStatus: async (taskId: string): Promise<ApiResponse<GenerationStatus>> => {
-    const response = await api.get<ApiResponse<GenerationStatus>>(`/v1/scripts/${taskId}/status`)
-    return response.data
+  getGenerationStatus: async (taskId: string): Promise<GenerationStatus> => {
+    const response = await api.get<GenerationStatus>(`/v1/scripts/${taskId}/status`)
+    return response.data as any
   },
 
   // 批量删除剧本
@@ -101,6 +104,159 @@ export const scriptService = {
     const response = await api.get<ApiResponse<Script[]>>('/v1/scripts/recommended', {
       params: { limit: limit || 10 },
     })
+    return response.data
+  },
+
+  // 从小说生成剧本
+  generateScriptFromNovel: async (data: {
+    title: string
+    novel_content: string
+    theme: string
+    length: string
+    characters?: string[]
+    setting?: string
+    style?: string
+    user_id?: string
+    excerpt_ratio?: number
+  }): Promise<ScriptResponse> => {
+    const response = await api.post<ScriptResponse>('/v1/scripts/generate/from-novel', data)
+    return response.data
+  },
+
+  // 从剧本中提取主体（角色、地点、道具）
+  extractEntities: async (content: string): Promise<{
+    characters: { name: string; role: string; description: string }[]
+    locations: { name: string; description: string }[]
+    props: { name: string; description: string }[]
+  }> => {
+    const response = await api.post('/v1/scripts/extract-entities', { content })
+    return response.data
+  },
+
+  // 从大纲/想法生成剧本
+  generateScriptFromOutline: async (data: {
+    title: string
+    outline: string
+    theme: string
+    length: string
+    characters?: string[]
+    setting?: string
+    style?: string
+    user_id?: string
+  }): Promise<ScriptResponse> => {
+    const response = await api.post<ScriptResponse>('/v1/scripts/generate/from-outline', data)
+    return response.data
+  },
+
+  // ========== 智能分镜 (Shot-level) API ==========
+
+  // 智能分镜 — 生成镜头级分镜
+  generateShots: async (data: {
+    title: string
+    script: string
+    episodeCount?: number
+    style?: string
+    sceneRefs?: string[]
+    characterNames?: string[]
+    user_id?: string
+  }): Promise<ShotGenerationResponse> => {
+    const response = await api.post<ShotGenerationResponse>('/v1/storyboard/shots/generate', data)
+    return response.data
+  },
+
+  // 获取分镜生成状态
+  getShotGenerationStatus: async (taskId: string): Promise<{
+    task_id: string
+    status: string
+    progress: number
+    error?: string
+  }> => {
+    const response = await api.get<{
+      task_id: string
+      status: string
+      progress: number
+      error?: string
+    }>(`/v1/storyboard/shots/${taskId}/status`)
+    return response.data
+  },
+
+  // 获取分镜生成结果
+  getShotGenerationResult: async (taskId: string): Promise<ShotGenerationResponse> => {
+    const response = await api.get<ShotGenerationResponse>(`/v1/storyboard/shots/${taskId}`)
+    return response.data
+  },
+
+  // ========== 分镜视频生成 (Shot-to-Video) API ==========
+
+  // 为每个分镜头批量生成视频
+  generateShotsVideo: async (data: {
+    storyboard_id?: string
+    episodes: ShotEpisode[]
+    style?: string
+    width?: number
+    height?: number
+    fps?: number
+    user_id?: string
+  }): Promise<{
+    task_id: string
+    status: string
+    message: string
+    total_shots: number
+    completed_shots: number
+    results: ShotVideoResultItem[]
+  }> => {
+    const response = await api.post('/v1/llmhua/shots-to-video', data)
+    return response.data
+  },
+
+  // 获取分镜视频生成状态（轮询用）
+  getShotsVideoStatus: async (taskId: string): Promise<{
+    task_id: string
+    status: string
+    progress: number
+    result?: any
+    error?: string
+  }> => {
+    const response = await api.get(`/v1/llmhua/shots-to-video/${taskId}/status`)
+    return response.data
+  },
+
+  // 获取分镜视频生成结果
+  getShotsVideoResult: async (taskId: string): Promise<{
+    task_id: string
+    status: string
+    message: string
+    total_shots: number
+    completed_shots: number
+    results: ShotVideoResultItem[]
+  }> => {
+    const response = await api.get(`/v1/llmhua/shots-to-video/${taskId}`)
+    return response.data
+  },
+
+  // ========== 预览图像生成 API ==========
+
+  // 为场景/角色/道具生成预览图像
+  generatePreviewImage: async (data: {
+    description: string
+    category: 'scene' | 'character' | 'prop'
+    style?: string
+    width?: number
+    height?: number
+  }): Promise<{ task_id: string; status: string; image_url?: string; message: string }> => {
+    const response = await api.post('/v1/llmhua/preview-image', data)
+    return response.data
+  },
+
+  // 获取预览图像生成状态
+  getPreviewImageStatus: async (taskId: string): Promise<{
+    task_id: string
+    status: string
+    progress: number
+    image_url?: string
+    error?: string
+  }> => {
+    const response = await api.get(`/v1/llmhua/preview-image/${taskId}/status`)
     return response.data
   },
 }

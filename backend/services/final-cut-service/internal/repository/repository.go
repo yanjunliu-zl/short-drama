@@ -32,7 +32,7 @@ func (r *finalCutRepository) Create(task *model.FinalCutTask) error {
 		cut_points, effects, font_size, font_color, background_color,
 		created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-		task.TaskID, task.ProjectID, task.Status, task.VideoIDs, task.AudioID,
+		task.TaskID, task.ProjectID, task.Status, task.VideoURLs, task.AudioID,
 		task.Transcript, task.CutPoints, task.Effects, task.FontSize,
 		task.FontColor, task.BackgroundColor)
 	return err
@@ -51,7 +51,7 @@ func (r *finalCutRepository) FindByProjectID(projectID string, page, pageSize in
 	offset := (page - 1) * pageSize
 	var tasks []model.FinalCutTask
 
-	err := r.db.QueryPage(&tasks, `SELECT * FROM final_cut_tasks WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+	err := r.db.QueryRows(&tasks, `SELECT * FROM final_cut_tasks WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
 		projectID, pageSize, offset)
 	if err != nil {
 		return nil, 0, err

@@ -9,6 +9,7 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.services.seedance_service import get_seedance_service, close_seedance_service
+from app.services.storage_service import get_storage_service, close_storage_service
 
 # 设置日志
 setup_logging()
@@ -45,7 +46,10 @@ async def add_process_time_header(request: Request, call_next):
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting up llmhua video generation service...")
+    from app.core.database import init_db
+    await init_db()
     await get_seedance_service()
+    await get_storage_service()
     logger.info("Service started successfully")
 
 
@@ -53,6 +57,9 @@ async def startup_event():
 async def shutdown_event():
     logger.info("Shutting down llmhua video generation service...")
     await close_seedance_service()
+    await close_storage_service()
+    from app.core.database import close_db
+    await close_db()
     logger.info("Service shutdown completed")
 
 

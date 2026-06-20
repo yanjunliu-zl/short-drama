@@ -43,6 +43,15 @@ func LoginHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+func LogoutHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		httpx.OkJsonCtx(r.Context(), w, map[string]interface{}{
+			"success": true,
+			"message": "登出成功",
+		})
+	}
+}
+
 func GetUserHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.GetUserRequest

@@ -5,14 +5,21 @@
 /* 自定义全局样式 */
 @layer base {
   :root {
-    --primary-color: #0080ff;
-    --secondary-color: #667fff;
-    --success-color: #00e6b8;
-    --warning-color: #ffaa00;
-    --error-color: #ff3366;
-    --background-color: #E5E7EB;
-    --text-primary: #1e293b;
-    --text-secondary: #475569;
+    --primary-color: #0066cc;
+    --primary-hover: #0052a3;
+    --primary-active: #003d7a;
+    --info-color: #007aff;
+    --success-color: #34c759;
+    --warning-color: #ff9500;
+    --error-color: #ff3b30;
+    --background-color: #ffffff;
+    --surface-color: #f5f5f7;
+    --border-color: #e5e5ea;
+    --border-dark: #d2d2d7;
+    --text-primary: #1d1d1f;
+    --text-secondary: #86868b;
+    --text-tertiary: #aeaeb2;
+    --text-placeholder: #aeaeb2;
   }
 
   * {
@@ -42,23 +49,23 @@
 
   /* 滚动条样式 */
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
   }
 
   ::-webkit-scrollbar-track {
-    background: #d1d5db;
-    border-radius: 6px;
+    background: var(--surface-color);
+    border-radius: 4px;
   }
 
   ::-webkit-scrollbar-thumb {
-    background: linear-gradient(45deg, #0080ff, #667fff);
-    border-radius: 6px;
-    border: 2px solid #d1d5db;
+    background: var(--border-dark);
+    border-radius: 4px;
+    border: 2px solid var(--surface-color);
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(45deg, #00c6ff, #9d4edd);
+    background: var(--text-tertiary);
   }
 }
 
@@ -68,71 +75,71 @@
   }
 
   .card-shadow {
-    @apply shadow-md hover:shadow-lg transition-shadow duration-300;
+    @apply shadow-subtle hover:shadow-card transition-shadow duration-300;
   }
 
   .glass-effect {
-    @apply bg-dark-900/70 backdrop-blur-lg border border-cyber-500/30 shadow-2xl;
+    @apply bg-white/80 backdrop-blur-xl border border-surface-500 shadow-elevated;
   }
 
   .gradient-primary {
-    @apply bg-gradient-to-r from-cyber-500 to-neon-600;
+    @apply bg-primary-500;
   }
 
   .gradient-success {
-    @apply bg-gradient-to-r from-tech-500 to-tech-700;
+    @apply bg-success-500;
   }
 
   .gradient-warning {
-    @apply bg-gradient-to-r from-amber-500 to-orange-500;
+    @apply bg-warning-500;
   }
 
   .gradient-error {
-    @apply bg-gradient-to-r from-red-500 to-pink-600;
+    @apply bg-error-500;
   }
 
   .gradient-tech {
-    @apply bg-gradient-to-r from-cyber-400 via-neon-500 to-tech-600;
+    @apply bg-gradient-to-r from-primary-600 via-info-500 to-primary-500;
   }
 
   .text-gradient {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-cyber-500 to-neon-600;
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary-600 to-info-500;
   }
 
   .text-gradient-tech {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-cyber-400 via-neon-500 to-tech-600;
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary-600 via-info-500 to-primary-400;
   }
 
   .btn-primary {
-    @apply px-4 py-2 bg-gradient-to-r from-cyber-500 to-neon-600 text-white rounded-lg hover:from-cyber-600 hover:to-neon-700
-           focus:outline-none focus:ring-2 focus:ring-cyber-500 focus:ring-offset-2 focus:ring-offset-dark-900
-           transition-all duration-300 font-medium shadow-lg hover:shadow-xl;
+    @apply px-4 py-2 bg-primary-500 text-white rounded-lg hover:bg-primary-600 active:bg-primary-700
+           focus:outline-none focus:ring-2 focus:ring-primary-400 focus:ring-offset-2 focus:ring-offset-white
+           transition-all duration-200 font-medium shadow-subtle hover:shadow-card;
   }
 
   .btn-secondary {
-    @apply px-4 py-2 bg-dark-700 text-gray-200 rounded-lg hover:bg-dark-600
-           focus:outline-none focus:ring-2 focus:ring-dark-400 focus:ring-offset-2 focus:ring-offset-dark-900
-           transition-colors duration-200 font-medium border border-dark-600;
+    @apply px-4 py-2 bg-surface-200 text-surface-900 rounded-lg hover:bg-surface-300
+           focus:outline-none focus:ring-2 focus:ring-surface-400 focus:ring-offset-2 focus:ring-offset-white
+           transition-colors duration-200 font-medium border border-surface-500;
   }
 
   .btn-tech {
-    @apply px-4 py-2 bg-gradient-to-r from-tech-500 to-tech-700 text-white rounded-lg hover:from-tech-600 hover:to-tech-800
-           focus:outline-none focus:ring-2 focus:ring-tech-500 focus:ring-offset-2 focus:ring-offset-dark-900
-           transition-all duration-300 font-medium shadow-lg hover:shadow-xl;
+    @apply px-4 py-2 bg-success-500 text-white rounded-lg hover:bg-success-600 active:bg-success-700
+           focus:outline-none focus:ring-2 focus:ring-success-400 focus:ring-offset-2 focus:ring-offset-white
+           transition-all duration-200 font-medium shadow-subtle hover:shadow-card;
   }
 
   .input-base {
-    @apply w-full px-3 py-2 border border-dark-600 rounded-lg focus:outline-none
-           focus:ring-2 focus:ring-cyber-500 focus:border-cyber-500 transition-colors
-           duration-200 bg-dark-800 text-gray-200 placeholder-gray-500;
+    @apply w-full px-3 py-2 border border-surface-500 rounded-lg focus:outline-none
+           focus:ring-2 focus:ring-primary-400 focus:border-primary-400 transition-colors
+           duration-200 bg-white text-surface-900 placeholder:text-surface-700;
   }
 
   .table-header {
-    @apply bg-dark-700 text-gray-300 font-semibold px-4 py-3 text-left border-b border-dark-600;
+    @apply bg-surface-200 text-surface-900 font-semibold px-4 py-3 text-left border-b border-surface-500;
   }
 
   .table-cell {
-    @apply px-4 py-3 border-t border-dark-600 bg-dark-800 text-gray-400;
+    @apply px-4 py-3 border-t border-surface-500 bg-white text-surface-800;
   }
 }
 
@@ -166,16 +173,5 @@
 @media print {
   .no-print {
     display: none !important;
-  }
-}
-
-/* 暗色模式支持 - 保持统一颜色 */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background-color: #e5e7eb;
-    --text-primary: #1e293b;
-    --text-secondary: #475569;
-    --primary-color: #0080ff;
-    --secondary-color: #667fff;
   }
 }

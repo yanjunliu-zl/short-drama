@@ -18,6 +18,8 @@ volumes:
     driver: local
   grafana_data:
     driver: local
+  minio_data:
+    driver: local
 
 services:
   # 数据库
@@ -31,7 +33,7 @@ services:
       MYSQL_USER: admin
       MYSQL_PASSWORD: admin123
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./backend/config/mysql/conf.d:/etc/mysql/conf.d:ro
@@ -48,7 +50,7 @@ services:
     container_name: shortdrama-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis_data:/data
       - ./backend/config/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
@@ -82,6 +84,28 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+
+  # 对象存储 - MinIO (S3兼容)
+  minio:
+    image: minio/minio:latest
+    container_name: shortdrama-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web 控制台
+    volumes:
+      - minio_data:/data
+    networks:
+      - shortdrama-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # API网关 - Traefik
   traefik:
@@ -122,6 +146,10 @@ services:
     build:
       context: ./backend/services/user-service
       dockerfile: Dockerfile
+      args:
+        - https_proxy=http://172.17.0.1:7897
+        - http_proxy=http://172.17.0.1:7897
+        - all_proxy=socks5://172.17.0.1:7897
     container_name: shortdrama-user-service
     restart: unless-stopped
     environment:
@@ -137,6 +165,9 @@ services:
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=admin
       - RABBITMQ_PASSWORD=admin123
+      - https_proxy=http://172.18.0.1:7897
+      - http_proxy=http://172.18.0.1:7897
+      - all_proxy=socks5://172.18.0.1:7897
     ports:
       - "8080:8080"
     volumes:
@@ -183,6 +214,7 @@ services:
       - RABBITMQ_USER=admin
       - RABBITMQ_PASSWORD=admin123
       - MODEL_PATH=/app/models
+      - DEEPSEEK_API_KEY=sk-14b18aa637204dd3ade45fc264dd5430
     ports:
       - "8000:8000"
     volumes:
@@ -207,7 +239,207 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # 内容服务 (案例广场 + 我的作品 - GoZero)
+  content-service:
+    build:
+      context: ./backend/services/content-service
+      dockerfile: Dockerfile
+      args:
+        - https_proxy=http://172.17.0.1:7897
+        - http_proxy=http://172.17.0.1:7897
+        - all_proxy=socks5://172.17.0.1:7897
+    container_name: shortdrama-content-service
+    restart: unless-stopped
+    environment:
+      - APP_ENV=development
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=admin
+      - DB_PASSWORD=admin123
+      - DB_NAME=shortdrama
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin123
+    ports:
+      - "8082:8081"
+    volumes:
+      - ./backend/services/content-service:/app
+      - /Users/liuming/go/pkg/mod:/go/pkg/mod
+    networks:
+      - shortdrama-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.content-service.rule=PathPrefix(`/api/v1/cases`) || PathPrefix(`/api/v1/works`) || PathPrefix(`/api/v1/scenes`) || PathPrefix(`/api/v1/characters`)"
+      - "traefik.http.routers.content-service.entrypoints=web"
+      - "traefik.http.services.content-service.loadbalancer.server.port=8081"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 分镜生成服务 (FastAPI + DeepSeek LLM)
+  storyboard-service:
+    build:
+      context: ./backend/services/storyboard-service
+      dockerfile: Dockerfile
+    container_name: shortdrama-storyboard-service
+    restart: unless-stopped
+    environment:
+      - APP_ENV=development
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=admin
+      - DB_PASSWORD=admin123
+      - DB_NAME=shortdrama
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DEEPSEEK_API_KEY=sk-14b18aa637204dd3ade45fc264dd5430
+      - DEEPSEEK_API_BASE=https://api.deepseek.com
+      - DEEPSEEK_MODEL=deepseek-chat
+      - PORT=8001
+      - LOG_LEVEL=INFO
+      - DEBUG=false
+    ports:
+      - "8003:8001"
+    volumes:
+      - ./backend/services/storyboard-service:/app
+    networks:
+      - shortdrama-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.storyboard-service.rule=PathPrefix(`/api/v1/storyboard`)"
+      - "traefik.http.routers.storyboard-service.entrypoints=web"
+      - "traefik.http.services.storyboard-service.loadbalancer.server.port=8001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+
+  # llmhua AI图像/视频生成服务 (FastAPI + Seedance)
+  llmhua-service:
+    build:
+      context: ./backend/services/llmhua-service
+      dockerfile: Dockerfile
+    container_name: shortdrama-llmhua-service
+    restart: unless-stopped
+    environment:
+      - APP_ENV=development
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=admin
+      - DB_PASSWORD=admin123
+      - DB_NAME=shortdrama
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SEEDANCE_API_URL=https://ark.cn-beijing.volces.com/api/v3
+      - SEEDANCE_API_KEY=ark-c2b11f9a-4a98-434d-9569-9f83c05d19a2-747d5
+      - SEEDANCE_MODEL=doubao-seedream-4-5-251128
+      - SEEDANCE_VIDEO_MODEL=doubao-seedance-2-0-260128
+      - STORAGE_TYPE=minio
+      - STORAGE_ENDPOINT=minio:9000
+      - STORAGE_ACCESS_KEY=minioadmin
+      - STORAGE_SECRET_KEY=minioadmin
+      - STORAGE_BUCKET=short-drama
+      - STORAGE_REGION=us-east-1
+      - STORAGE_PUBLIC_ENDPOINT=http://localhost:9000
+      - PORT=8002
+      - LOG_LEVEL=INFO
+      - DEBUG=false
+    ports:
+      - "8005:8002"
+    volumes:
+      - ./backend/services/llmhua-service:/app
+    networks:
+      - shortdrama-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.llmhua-service.rule=PathPrefix(`/api/v1/llmhua`)"
+      - "traefik.http.routers.llmhua-service.entrypoints=web"
+      - "traefik.http.services.llmhua-service.loadbalancer.server.port=8002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: uvicorn main:app --host 0.0.0.0 --port 8002 --reload
+
+  # 最终剪辑服务 (GoZero + ffmpeg)
+  final-cut-service:
+    build:
+      context: ./backend/services/final-cut-service
+      dockerfile: Dockerfile
+      args:
+        - https_proxy=http://172.17.0.1:7897
+        - http_proxy=http://172.17.0.1:7897
+        - all_proxy=socks5://172.17.0.1:7897
+    container_name: shortdrama-final-cut-service
+    restart: unless-stopped
+    environment:
+      - APP_ENV=development
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=admin
+      - DB_PASSWORD=admin123
+      - DB_NAME=shortdrama
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASSWORD=admin123
+    ports:
+      - "8085:8085"
+    volumes:
+      - ./backend/services/final-cut-service:/app
+      - /tmp/final-cut-workdir:/tmp/final-cut-workdir
+    networks:
+      - shortdrama-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.final-cut-service.rule=PathPrefix(`/api/v1/final-cut`)"
+      - "traefik.http.routers.final-cut-service.entrypoints=web"
+      - "traefik.http.services.final-cut-service.loadbalancer.server.port=8085"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8085/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # 视频处理服务 (FastAPI + Celery)
   video-service:
@@ -245,6 +477,8 @@ services:
       redis:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
@@ -307,7 +541,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
     ports:
-      - "3000:3000"
+      - "3001:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./backend/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards

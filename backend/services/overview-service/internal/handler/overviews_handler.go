@@ -1,62 +1,43 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
-	"short-drama-platform/overview-service/internal/logic"
+	"short-drama-platform/overview-service/internal/svc"
 	"short-drama-platform/overview-service/internal/types"
 
 	"github.com/zeromicro/go-zero/rest/httpx"
 )
 
-func GetOverviewHandler(ctx *logic.ServiceContext) http.HandlerFunc {
+func GetOverviewHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.OverviewRequest
 		if err := httpx.Parse(r, &req); err != nil {
-			httpx.WriteJson(w, http.StatusBadRequest, types.OverviewResponse{
-				UserID:         0,
-				VideoRatios:    nil,
-				CreationModes:  nil,
-				StyleReferences: nil,
-				TotalVideos:    0,
-				TotalDuration:  0,
-				LastUpdated:    "",
-			})
+			httpx.ErrorCtx(r.Context(), w, err)
 			return
 		}
 
-		l := logic.NewOverviewLogic(r.Context(), ctx)
-		resp, err := l.GetOverview(&req)
+		resp, err := svcCtx.OverviewService.GetOverview(r.Context(), &req)
 		if err != nil {
-			httpx.WriteJson(w, http.StatusInternalServerError, map[string]string{
-				"error": err.Error(),
-			})
-			return
+			httpx.ErrorCtx(r.Context(), w, err)
+		} else {
+			httpx.OkJsonCtx(r.Context(), w, resp)
 		}
-
-		httpx.WriteJson(w, http.StatusOK, resp)
 	}
 }
 
-func SetOverviewConfigHandler(ctx *logic.ServiceContext) http.HandlerFunc {
+func SetOverviewConfigHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.SetOverviewConfigRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			httpx.WriteJson(w, http.StatusBadRequest, map[string]string{
-				"error": "invalid request body",
-			})
+		if err := httpx.Parse(r, &req); err != nil {
+			httpx.ErrorCtx(r.Context(), w, err)
 			return
 		}
 
-		l := logic.NewOverviewLogic(r.Context(), ctx)
-		resp, err := l.SetOverviewConfig(&req)
+		resp, err := svcCtx.OverviewService.SetOverviewConfig(r.Context(), &req)
 		if err != nil {
-			httpx.WriteJson(w, http.StatusInternalServerError, map[string]string{
-				"error": err.Error(),
-			})
-			return
+			httpx.ErrorCtx(r.Context(), w, err)
+		} else {
+			httpx.OkJsonCtx(r.Context(), w, resp)
 		}
-
-		httpx.WriteJson(w, http.StatusOK, resp)
 	}
 }

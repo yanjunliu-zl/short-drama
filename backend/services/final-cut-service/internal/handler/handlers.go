@@ -2,15 +2,17 @@ package handler
 
 import (
 	"net/http"
+
 	"short-drama-platform/final-cut-service/internal/logic"
 	"short-drama-platform/final-cut-service/internal/svc"
 	"short-drama-platform/final-cut-service/internal/types"
 
-	"github.com/zeromicro/go-zero/core/jsonx"
 	"github.com/zeromicro/go-zero/rest"
+	"github.com/zeromicro/go-zero/rest/httpx"
 )
 
 func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
+	// 最终剪辑路由
 	server.AddRoutes(
 		[]rest.Route{
 			{
@@ -37,91 +39,74 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 	)
 }
 
+func getLogic(svcCtx *svc.ServiceContext) *logic.FinalCutLogic {
+	return logic.NewFinalCutLogic(svcCtx)
+}
+
 // CreateFinalCutHandler 创建最终剪辑任务
-func CreateFinalCutHandler(serverCtx *svc.ServiceContext) rest.HandlerFunc {
+func CreateFinalCutHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.FinalCutRequest
-		if err := rest.GetJson(r, &req); err != nil {
-			rest.RenderJson(w, rest.ErrJSONParse(err))
+		if err := httpx.Parse(r, &req); err != nil {
+			httpx.ErrorCtx(r.Context(), w, err)
 			return
 		}
-
-		l := logic.NewFinalCutLogic(serverCtx)
-		resp, err := l.CreateFinalCut(r.Context(), &req)
+		resp, err := getLogic(svcCtx).CreateFinalCut(r.Context(), &req)
 		if err != nil {
-			rest.RenderJson(w, rest.ErrServer(err))
-			return
+			httpx.ErrorCtx(r.Context(), w, err)
+		} else {
+			httpx.OkJsonCtx(r.Context(), w, resp)
 		}
-
-		rest.RenderJson(w, resp)
 	}
 }
 
-// GetStatusHandler 获取剪辑任务状态
-func GetStatusHandler(serverCtx *svc.ServiceContext) rest.HandlerFunc {
+// GetStatusHandler 获取任务状态
+func GetStatusHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		taskID := r.URL.Query().Get("task_id")
-		if taskID == "" {
-			pathVars := rest.PathVariables(r)
-			taskID = pathVars["task_id"]
-		}
-
-		req := &types.GetFinalCutStatusRequest{
-			TaskID: taskID,
-		}
-
-		l := logic.NewFinalCutLogic(serverCtx)
-		resp, err := l.GetStatus(r.Context(), req)
-		if err != nil {
-			rest.RenderJson(w, rest.ErrServer(err))
+		var req types.GetFinalCutStatusRequest
+		if err := httpx.Parse(r, &req); err != nil {
+			httpx.ErrorCtx(r.Context(), w, err)
 			return
 		}
-
-		rest.RenderJson(w, resp)
+		resp, err := getLogic(svcCtx).GetStatus(r.Context(), &req)
+		if err != nil {
+			httpx.ErrorCtx(r.Context(), w, err)
+		} else {
+			httpx.OkJsonCtx(r.Context(), w, resp)
+		}
 	}
 }
 
-// ListTasksHandler 列出剪辑任务
-func ListTasksHandler(serverCtx *svc.ServiceContext) rest.HandlerFunc {
+// ListTasksHandler 列出任务
+func ListTasksHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.FinalCutListRequest
-		if err := rest.GetForm(r, &req); err != nil {
-			rest.RenderJson(w, rest.ErrJSONParse(err))
+		if err := httpx.Parse(r, &req); err != nil {
+			httpx.ErrorCtx(r.Context(), w, err)
 			return
 		}
-
-		l := logic.NewFinalCutLogic(serverCtx)
-		resp, err := l.ListTasks(r.Context(), &req)
+		resp, err := getLogic(svcCtx).ListTasks(r.Context(), &req)
 		if err != nil {
-			rest.RenderJson(w, rest.ErrServer(err))
-			return
+			httpx.ErrorCtx(r.Context(), w, err)
+		} else {
+			httpx.OkJsonCtx(r.Context(), w, resp)
 		}
-
-		rest.RenderJson(w, resp)
 	}
 }
 
-// CancelTaskHandler 取消剪辑任务
-func CancelTaskHandler(serverCtx *svc.ServiceContext) rest.HandlerFunc {
+// CancelTaskHandler 取消任务
+func CancelTaskHandler(svcCtx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete {
-			rest.RenderJson(w, rest.ErrMethodNotAllowed)
-			return
-		}
-
 		var req types.CancelFinalCutRequest
-		if err := jsonx.Unmarshal(r.Body, &req); err != nil {
-			rest.RenderJson(w, rest.ErrJSONParse(err))
+		if err := httpx.Parse(r, &req); err != nil {
+			httpx.ErrorCtx(r.Context(), w, err)
 			return
 		}
-
-		l := logic.NewFinalCutLogic(serverCtx)
-		resp, err := l.CancelTask(r.Context(), &req)
+		resp, err := getLogic(svcCtx).CancelTask(r.Context(), &req)
 		if err != nil {
-			rest.RenderJson(w, rest.ErrServer(err))
-			return
+			httpx.ErrorCtx(r.Context(), w, err)
+		} else {
+			httpx.OkJsonCtx(r.Context(), w, resp)
 		}
-
-		rest.RenderJson(w, resp)
 	}
 }

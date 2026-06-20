@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -162,9 +163,9 @@ type GetScriptOutlineRequest struct {
 type ListCasesRequest struct {
 	Page     int    `form:"page,default=1" validate:"min=1"`
 	PageSize int    `form:"pageSize,default=10" validate:"min=1,max=100"`
-	Tag      string `form:"tag"`
-	SortBy   string `form:"sortBy" validate:"omitempty,oneof=views likes createdAt"`
-	Order    string `form:"order" validate:"omitempty,oneof=asc desc"`
+	Tag      string `form:"tag,optional"`
+	SortBy   string `form:"sortBy,optional" validate:"omitempty,oneof=views likes createdAt"`
+	Order    string `form:"order,optional" validate:"omitempty,oneof=asc desc"`
 }
 
 type GetCaseRequest struct {
@@ -198,10 +199,10 @@ type CaseActionRequest struct {
 
 // 作品请求/响应类型
 type ListWorksRequest struct {
-	UserID string `form:"userId" validate:"required"`
-	Status string `form:"status" validate:"omitempty,oneof=草稿 进行中 已完成"`
-	Page   int    `form:"page,default=1" validate:"min=1"`
-	PageSize int  `form:"pageSize,default=10" validate:"min=1,max=100"`
+	UserID   string `form:"userId,optional"`
+	Status   string `form:"status,optional" validate:"omitempty,oneof=草稿 进行中 已完成"`
+	Page     int    `form:"page,default=1" validate:"min=1"`
+	PageSize int    `form:"pageSize,default=10" validate:"min=1,max=100"`
 }
 
 type GetWorkRequest struct {
@@ -251,6 +252,73 @@ type ListWorksResponse struct {
 	Pages int    `json:"pages"`
 }
 
+// 资产库类型
+type AssetItem struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Count       int    `json:"count"`
+	Type        string `json:"type"`
+	AccessLevel string `json:"accessLevel,omitempty"`
+	LastUpdate  string `json:"lastUpdate"`
+}
+
+type ListPersonalAssetsRequest struct {
+	UserID   string `form:"user_id,optional"`
+	Page     int    `form:"page,default=1"`
+	PageSize int    `form:"pageSize,default=10"`
+}
+
+type ListPersonalAssetsResponse struct {
+	Assets []AssetItem `json:"assets"`
+	Total  int64       `json:"total"`
+	Page   int         `json:"page"`
+	Pages  int         `json:"pages"`
+}
+
+type ListCompanyAssetsRequest struct {
+	Page     int `form:"page,default=1"`
+	PageSize int `form:"pageSize,default=10"`
+}
+
+type ListCompanyAssetsResponse struct {
+	Assets []AssetItem `json:"assets"`
+	Total  int64       `json:"total"`
+	Page   int         `json:"page"`
+	Pages  int         `json:"pages"`
+}
+
+// 支付订单类型
+type PaymentOrderItem struct {
+	ID            string `json:"id"`
+	OrderNo       string `json:"order_no"`
+	TransactionID string `json:"transaction_id"`
+	UserID        string `json:"user_id"`
+	Amount        int64  `json:"amount"`
+	Currency      string `json:"currency"`
+	Method        string `json:"method"`
+	Status        string `json:"status"`
+	Subject       string `json:"subject"`
+	Description   string `json:"description"`
+	QrCode        string `json:"qr_code,omitempty"`
+	PayUrl        string `json:"pay_url,omitempty"`
+	ExpireTime    string `json:"expire_time"`
+	PaidAt        string `json:"paid_at,omitempty"`
+	CreatedAt     string `json:"created_at"`
+}
+
+type ListPaymentsRequest struct {
+	UserID   string `form:"user_id,optional"`
+	Page     int    `form:"page,default=1"`
+	PageSize int    `form:"pageSize,default=10"`
+}
+
+type ListPaymentsResponse struct {
+	Payments []PaymentOrderItem `json:"payments"`
+	Total    int64              `json:"total"`
+	Page     int                `json:"page"`
+	Pages    int                `json:"pages"`
+}
+
 // ContentService 内容服务接口
 type ContentService interface {
 	// 场景管理
@@ -281,6 +349,13 @@ type ContentService interface {
 	RecordCaseLike(ctx context.Context, req *CaseActionRequest) error
 	RecordCaseShare(ctx context.Context, req *CaseActionRequest) error
 
+	// 资产库
+	ListPersonalAssets(ctx context.Context, req *ListPersonalAssetsRequest) (*ListPersonalAssetsResponse, error)
+	ListCompanyAssets(ctx context.Context, req *ListCompanyAssetsRequest) (*ListCompanyAssetsResponse, error)
+
+	// 支付
+	ListPayments(ctx context.Context, req *ListPaymentsRequest) (*ListPaymentsResponse, error)
+
 	// 作品管理
 	ListWorks(ctx context.Context, req *ListWorksRequest) (*ListWorksResponse, error)
 	GetWork(ctx context.Context, req *GetWorkRequest) (*Work, error)
@@ -289,4 +364,36 @@ type ContentService interface {
 	UpdateWorkProgress(ctx context.Context, req *UpdateWorkProgressRequest) (*Work, error)
 	DeleteWork(ctx context.Context, req *DeleteWorkRequest) error
 	ExportWork(ctx context.Context, req *ExportWorkRequest) error
+
+	// 管道状态持久化
+	SavePipelineState(ctx context.Context, req *SavePipelineStateRequest) (*PipelineStateResponse, error)
+	GetPipelineState(ctx context.Context, req *GetPipelineStateRequest) (*PipelineStateResponse, error)
+}
+
+// ========== 管道状态持久化类型 ==========
+
+// PipelineState 管道状态 JSON 快照
+type PipelineState struct {
+	Script       json.RawMessage `json:"script,omitempty"`
+	Scenes       json.RawMessage `json:"scenes,omitempty"`
+	Characters   json.RawMessage `json:"characters,omitempty"`
+	Props        json.RawMessage `json:"props,omitempty"`
+	Storyboard   json.RawMessage `json:"storyboard,omitempty"`
+	VideoResults json.RawMessage `json:"videoResults,omitempty"`
+	FinalCut     json.RawMessage `json:"finalCut,omitempty"`
+	UpdatedAt    string          `json:"updatedAt"`
+}
+
+type SavePipelineStateRequest struct {
+	WorkID string        `path:"id"`
+	Data   PipelineState `json:"data"`
+}
+
+type GetPipelineStateRequest struct {
+	WorkID string `path:"id"`
+}
+
+type PipelineStateResponse struct {
+	WorkID string         `json:"workId"`
+	Data   *PipelineState `json:"data"`
 }

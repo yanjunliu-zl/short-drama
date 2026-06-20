@@ -137,3 +137,47 @@ export interface GenerationStatus {
   created_at: string
   updated_at: string
 }
+
+// ========== 分镜头 (Shot) 类型 ==========
+
+export interface Shot {
+  id: number
+  number: number
+  shotType: string
+  duration: number
+  cameraAngle: string
+  sceneRef: string
+  characters: string[]
+  description: string
+  dialogue: string
+  soundEffects: string[]
+  music: string
+  notes: string
+}
+
+export interface ShotEpisode {
+  id: string
+  title: string
+  number: number
+  shots: Shot[]
+  description?: string
+}
+
+export interface ShotGenerationResponse {
+  task_id: string
+  status: 'processing' | 'completed' | 'failed'
+  message: string
+  episodes?: ShotEpisode[]
+}
+
+export interface ShotVideoResultItem {
+  shot_id: number
+  shot_number: number
+  episode_id: string
+  episode_title: string
+  status: 'completed' | 'failed'
+  video_url?: string
+  image_url?: string
+  file_size?: number
+  error?: string
+}

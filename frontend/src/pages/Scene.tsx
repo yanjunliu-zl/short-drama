@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Card,
   Typography,
@@ -14,6 +14,7 @@ import {
   message,
   Row,
   Col,
+  Progress,
 } from 'antd';
 import {
   PlusOutlined,
@@ -23,7 +24,12 @@ import {
   TeamOutlined,
   EnvironmentOutlined,
   ToolOutlined,
+  CameraOutlined,
+  LoadingOutlined,
 } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
+import { scriptService } from '@/services/scriptService';
+import { usePipelinePersistence } from '@/hooks/usePipelinePersistence';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -69,101 +75,33 @@ interface PropItem {
 
 const Scene: React.FC = () => {
   const [activeTab, setActiveTab] = useState('scenes');
-  const [scenes, setScenes] = useState<SceneItem[]>([
-    {
-      id: 1,
-      name: '现代咖啡馆',
-      description: '温馨的现代风格咖啡馆，适合对话场景',
-      type: '室内',
-      environment: '温馨、明亮、舒适',
-      size: '中等',
-      tags: ['现代', '咖啡', '休闲'],
-    },
-    {
-      id: 2,
-      name: '森林小径',
-      description: '清晨的森林小径，阳光透过树叶洒落',
-      type: '室外',
-      environment: '自然、清新、宁静',
-      size: '大型',
-      tags: ['自然', '森林', '户外'],
-    },
-    {
-      id: 3,
-      name: '科技实验室',
-      description: '充满未来科技感的实验室',
-      type: '室内',
-      environment: '科技、冷色调、专业',
-      size: '中等',
-      tags: ['科幻', '科技', '实验室'],
-    },
-  ]);
+  const [scenes, setScenes] = useState<SceneItem[]>([]);
 
-  const [characters, setCharacters] = useState<CharacterItem[]>([
-    {
-      id: 1,
-      name: '商务男士',
-      description: '成熟稳重的商务人士形象',
-      age: 35,
-      gender: '男',
-      occupation: '企业高管',
-      personality: '稳重、理性、果断',
-      appearance: '西装革履，戴眼镜',
-      tags: ['商务', '成熟', '专业'],
-    },
-    {
-      id: 2,
-      name: '学生少女',
-      description: '活泼开朗的学生形象',
-      age: 18,
-      gender: '女',
-      occupation: '学生',
-      personality: '活泼、开朗、好奇',
-      appearance: '校服，马尾辫',
-      tags: ['学生', '青春', '活泼'],
-    },
-    {
-      id: 3,
-      name: '老爷爷',
-      description: '和蔼可亲的老人形象',
-      age: 70,
-      gender: '男',
-      occupation: '退休教师',
-      personality: '和蔼、智慧、耐心',
-      appearance: '花白头发，戴老花镜',
-      tags: ['老人', '智慧', '和蔼'],
-    },
-  ]);
+  // 从 localStorage 加载持久化数据
+  useEffect(() => {
+    // 加载主体提取结果
+    const saved = localStorage.getItem('extracted_entities');
+    if (saved) {
+      try {
+        const data = JSON.parse(saved);
+        if (data.scenes?.length) setScenes(data.scenes);
+        if (data.characters?.length) setCharacters(data.characters);
+        if (data.props?.length) setProps(data.props);
+      } catch {}
+    }
+    // 加载预览图像缓存
+    const savedImages = localStorage.getItem('scene_preview_images');
+    if (savedImages) {
+      try {
+        setPreviewImages(JSON.parse(savedImages));
+      } catch {}
+    }
+  }, []);
 
-  const [props, setProps] = useState<PropItem[]>([
-    {
-      id: 1,
-      name: '笔记本电脑',
-      description: '现代轻薄笔记本电脑',
-      category: '电子产品',
-      material: '金属、塑料',
-      size: '小型',
-      tags: ['科技', '办公', '现代'],
-    },
-    {
-      id: 2,
-      name: '古典沙发',
-      description: '欧式古典风格沙发',
-      category: '家具',
-      material: '实木、布料',
-      size: '大型',
-      tags: ['古典', '家具', '舒适'],
-    },
-    {
-      id: 3,
-      name: '魔法书',
-      description: '古老的神秘魔法书',
-      category: '装饰品',
-      material: '皮革、纸张',
-      size: '小型',
-      tags: ['魔法', '神秘', '古老'],
-    },
-  ]);
+  // 保留的模拟数据引用（已弃用）
+  const _mock = []; // deprecated mock data, replaced by extracted_entities
+  const [characters, setCharacters] = useState<CharacterItem[]>([]);
+  const [props, setProps] = useState<PropItem[]>([]);
 
   const [editingScene, setEditingScene] = useState<SceneItem | null>(null);
   const [editingCharacter, setEditingCharacter] = useState<CharacterItem | null>(null);
@@ -171,6 +109,138 @@ const Scene: React.FC = () => {
   const [isSceneModalOpen, setIsSceneModalOpen] = useState(false);
   const [isCharacterModalOpen, setIsCharacterModalOpen] = useState(false);
   const [isPropModalOpen, setIsPropModalOpen] = useState(false);
+
+  // 智能分镜状态
+  const { saveState: persistState, loadState, getWorkId } = usePipelinePersistence();
+
+  // 自动持久化：scenes/characters/props 变化时保存到 localStorage
+  useEffect(() => {
+    if (scenes.length || characters.length || props.length) {
+      localStorage.setItem('extracted_entities', JSON.stringify({
+        scenes, characters, props,
+        updatedAt: new Date().toISOString(),
+      }));
+      // 同时持久化到后端
+      persistState('scenes', scenes, getWorkId() || undefined);
+      persistState('characters', characters, getWorkId() || undefined);
+      persistState('props', props, getWorkId() || undefined);
+    }
+  }, [scenes, characters, props]);
+  const navigate = useNavigate();
+  const [shotGenerationStatus, setShotGenerationStatus] = useState<'idle' | 'generating' | 'completed' | 'failed'>('idle');
+  const [shotGenerationProgress, setShotGenerationProgress] = useState(0);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // 智能分镜 — 轮询分镜生成状态
+  const pollShotStatus = useCallback((id: string) => {
+    pollingRef.current = setInterval(async () => {
+      try {
+        const status = await scriptService.getShotGenerationStatus(id);
+        if (status) {
+          setShotGenerationProgress(status.progress || 0);
+
+          if (status.status === 'completed') {
+            if (pollingRef.current) {
+              clearInterval(pollingRef.current);
+              pollingRef.current = null;
+            }
+            setShotGenerationStatus('completed');
+            setShotGenerationProgress(100);
+            message.success('智能分镜生成完成！');
+
+            // 获取完整结果
+            const result = await scriptService.getShotGenerationResult(id);
+            if (result.episodes) {
+              // 存入 localStorage 供 Storyboard 页面读取
+              const storyboardData = {
+                episodes: result.episodes,
+                generatedAt: new Date().toISOString(),
+              };
+              localStorage.setItem('shot_generation_result', JSON.stringify(storyboardData));
+              // 持久化到后端
+              persistState('storyboard', storyboardData, getWorkId() || undefined);
+              // 导航到分镜页面
+              navigate('/storyboard');
+            }
+          } else if (status.status === 'failed') {
+            if (pollingRef.current) {
+              clearInterval(pollingRef.current);
+              pollingRef.current = null;
+            }
+            setShotGenerationStatus('failed');
+            message.error(status.error || '智能分镜生成失败');
+          }
+        }
+      } catch (err: any) {
+        if (err?.response?.status === 404) {
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          setShotGenerationStatus('idle');
+          message.error('分镜任务已过期，请重新生成');
+        }
+      }
+    }, 3000);
+  }, [navigate]);
+
+  // 智能分镜 — 开始生成
+  const handleSmartShotDivision = useCallback(async () => {
+    // 从 localStorage 读取剧本内容（优先命名空间 key，兼容旧 key）
+    let savedState = loadState('script');
+    if (!savedState) {
+      const oldData = localStorage.getItem('script_page_state');
+      if (oldData) { try { savedState = JSON.parse(oldData); } catch {} }
+    }
+    if (!savedState) savedState = {};
+    const episodes = savedState.episodes || [];
+
+    // 拼接所有集的描述作为剧本内容
+    const scriptContent = episodes.map((ep: any) =>
+      ep.description || ep.content || ''
+    ).join('\n\n');
+
+    if (!scriptContent.trim()) {
+      message.warning('请先在剧本页面生成或编写剧本内容');
+      return;
+    }
+
+    const title = savedState.generatedScriptTitle || '未命名剧本';
+
+    setShotGenerationStatus('generating');
+    setShotGenerationProgress(0);
+
+    try {
+      const response = await scriptService.generateShots({
+        title,
+        script: scriptContent,
+        episodeCount: episodes.length || 1,
+        style: '写实风格',
+        sceneRefs: scenes.map(s => s.name),
+        characterNames: characters.map(c => c.name),
+      });
+
+      if (response?.task_id) {
+        setShotGenerationProgress(10);
+        message.info('智能分镜任务已提交，正在分析剧本...');
+        pollShotStatus(response.task_id);
+      } else {
+        throw new Error('未获取到任务ID');
+      }
+    } catch (err: any) {
+      setShotGenerationStatus('failed');
+      message.error(err?.response?.data?.detail || err?.message || '智能分镜生成失败');
+    }
+  }, [scenes, characters, pollShotStatus]);
+
+  // 组件卸载时清理轮询定时器
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+    };
+  }, []);
 
   // 场景操作
   const handleAddScene = () => {
@@ -318,6 +388,62 @@ const Scene: React.FC = () => {
     }
   };
 
+  // 预览图像状态
+  const [generatingPreview, setGeneratingPreview] = useState<Record<string, boolean>>({});
+  const [previewImages, setPreviewImages] = useState<Record<string, string>>({});
+
+  // 自动持久化：previewImages 变化时保存
+  useEffect(() => {
+    if (Object.keys(previewImages).length > 0) {
+      localStorage.setItem('scene_preview_images', JSON.stringify(previewImages));
+    }
+  }, [previewImages]);
+
+  // 预览图像生成
+  const handlePreview = async (id: number, type: 'scene' | 'character' | 'prop', description: string) => {
+    const key = `${type}_${id}`;
+    if (generatingPreview[key]) return;
+
+    setGeneratingPreview(prev => ({ ...prev, [key]: true }));
+    try {
+      const resp = await scriptService.generatePreviewImage({ description, category: type });
+      if (!resp?.task_id) throw new Error('No task_id');
+
+      // 轮询直到完成
+      const poll = setInterval(async () => {
+        try {
+          const status = await scriptService.getPreviewImageStatus(resp.task_id);
+          if (status?.status === 'completed' && status.image_url) {
+            clearInterval(poll);
+            setPreviewImages(prev => ({ ...prev, [key]: status.image_url! }));
+            setGeneratingPreview(prev => ({ ...prev, [key]: false }));
+            message.success('预览图已生成');
+          } else if (status?.status === 'failed') {
+            clearInterval(poll);
+            setGeneratingPreview(prev => ({ ...prev, [key]: false }));
+            message.error(status.error || '预览图生成失败');
+          }
+        } catch (e: any) {
+          if (e?.response?.status === 404) {
+            clearInterval(poll);
+            setGeneratingPreview(prev => ({ ...prev, [key]: false }));
+          }
+        }
+      }, 3000);
+    } catch {
+      setGeneratingPreview(prev => ({ ...prev, [key]: false }));
+      message.error('预览图生成请求失败');
+    }
+  };
+
+  // 构建预览描述
+  const buildSceneDesc = (s: SceneItem) =>
+    `${s.name}，${s.environment || ''}，${s.description || ''}，${s.type}场景`.replace(/，+/g, '，').replace(/^，|，$/g, '');
+  const buildCharacterDesc = (c: CharacterItem) =>
+    `${c.name}，${c.gender || ''}，${c.age ? c.age + '岁' : ''}，${c.occupation || ''}，${c.appearance || ''}，${c.description || ''}`.replace(/，+/g, '，').replace(/^，|，$/g, '');
+  const buildPropDesc = (p: PropItem) =>
+    `${p.name}，${p.category || ''}，${p.material || ''}，${p.description || ''}`.replace(/，+/g, '，').replace(/^，|，$/g, '');
+
   const renderScenes = () => (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -329,51 +455,33 @@ const Scene: React.FC = () => {
 
       <Row gutter={[16, 16]}>
         {scenes.map((scene) => (
-          <Col xs={24} sm={12} lg={8} key={scene.id}>
+          <Col xs={24} sm={12} lg={12} key={scene.id}>
             <Card
+              cover={previewImages[`scene_${scene.id}`] ? (
+                <div style={{ height: 240, overflow: 'hidden', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <img src={previewImages[`scene_${scene.id}`]} alt={scene.name}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                </div>
+              ) : undefined}
               actions={[
-                <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => handleEditScene(scene)}>
-                  编辑
+                <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => handleEditScene(scene)}>编辑</Button>,
+                <Button key="preview" type="link" icon={<EyeOutlined />}
+                  loading={generatingPreview[`scene_${scene.id}`]}
+                  onClick={() => handlePreview(scene.id, 'scene', buildSceneDesc(scene))}>
+                  {generatingPreview[`scene_${scene.id}`] ? '生成中' : '预览'}
                 </Button>,
-                <Button key="preview" type="link" icon={<EyeOutlined />}>
-                  预览
-                </Button>,
-                <Button key="delete" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDeleteScene(scene.id)}>
-                  删除
-                </Button>,
+                <Button key="delete" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDeleteScene(scene.id)}>删除</Button>,
               ]}
             >
               <Card.Meta
-                avatar={
-                  <Avatar
-                    style={{
-                      backgroundColor: '#1890ff',
-                      fontSize: 20,
-                    }}
-                  >
-                    <EnvironmentOutlined />
-                  </Avatar>
-                }
-                title={
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Text strong>{scene.name}</Text>
-                    <Tag color="blue">{scene.type}</Tag>
-                  </div>
-                }
-                description={
-                  <div>
-                    <div style={{ marginBottom: 8 }}>{scene.description}</div>
-                    <div><Text strong>环境：</Text>{scene.environment}</div>
-                    <div><Text strong>大小：</Text>{scene.size}</div>
-                    <div style={{ marginTop: 8 }}>
-                      <Space size={[4, 4]} wrap>
-                        {scene.tags.map((tag, index) => (
-                          <Tag key={index} color="default">{tag}</Tag>
-                        ))}
-                      </Space>
-                    </div>
-                  </div>
-                }
+                avatar={!previewImages[`scene_${scene.id}`] ? (
+                  <Avatar style={{ backgroundColor: '#0066cc', fontSize: 18 }} icon={<EnvironmentOutlined />} />
+                ) : undefined}
+                title={<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Text strong>{scene.name}</Text><Tag color="blue">{scene.type}</Tag>
+                  <Space size={[2, 2]} wrap>{scene.tags.map((t, i) => (<Tag key={i} color="default" style={{ fontSize: 11 }}>{t}</Tag>))}</Space>
+                </div>}
+                description={<Text type="secondary" style={{ fontSize: 12 }}>{scene.description}</Text>}
               />
             </Card>
           </Col>
@@ -395,53 +503,33 @@ const Scene: React.FC = () => {
         {characters.map((character) => (
           <Col xs={24} sm={12} lg={8} key={character.id}>
             <Card
+              cover={previewImages[`character_${character.id}`] ? (
+                <div style={{ height: 280, overflow: 'hidden', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <img src={previewImages[`character_${character.id}`]} alt={character.name}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }} />
+                </div>
+              ) : undefined}
               actions={[
-                <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => handleEditCharacter(character)}>
-                  编辑
+                <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => handleEditCharacter(character)}>编辑</Button>,
+                <Button key="preview" type="link" icon={<EyeOutlined />}
+                  loading={generatingPreview[`character_${character.id}`]}
+                  onClick={() => handlePreview(character.id, 'character', buildCharacterDesc(character))}>
+                  {generatingPreview[`character_${character.id}`] ? '生成中' : '预览'}
                 </Button>,
-                <Button key="preview" type="link" icon={<EyeOutlined />}>
-                  预览
-                </Button>,
-                <Button key="delete" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDeleteCharacter(character.id)}>
-                  删除
-                </Button>,
+                <Button key="delete" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDeleteCharacter(character.id)}>删除</Button>,
               ]}
             >
               <Card.Meta
-                avatar={
-                  <Avatar
-                    style={{
-                      backgroundColor: character.gender === '男' ? '#1890ff' : '#f759ab',
-                      fontSize: 20,
-                    }}
-                  >
-                    <TeamOutlined />
-                  </Avatar>
-                }
-                title={
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Text strong>{character.name}</Text>
-                    <Tag color={character.gender === '男' ? 'blue' : 'pink'}>
-                      {character.gender}
-                    </Tag>
-                  </div>
-                }
-                description={
-                  <div>
-                    <div style={{ marginBottom: 8 }}>{character.description}</div>
-                    <div><Text strong>年龄：</Text>{character.age}岁</div>
-                    <div><Text strong>职业：</Text>{character.occupation}</div>
-                    <div><Text strong>性格：</Text>{character.personality}</div>
-                    <div><Text strong>外貌：</Text>{character.appearance}</div>
-                    <div style={{ marginTop: 8 }}>
-                      <Space size={[4, 4]} wrap>
-                        {character.tags.map((tag, index) => (
-                          <Tag key={index} color="default">{tag}</Tag>
-                        ))}
-                      </Space>
-                    </div>
-                  </div>
-                }
+                avatar={!previewImages[`character_${character.id}`] ? (
+                  <Avatar style={{ backgroundColor: character.gender === '男' ? '#0066cc' : '#ff3b30', fontSize: 18 }} icon={<TeamOutlined />} />
+                ) : undefined}
+                title={<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Text strong>{character.name}</Text>
+                  <Tag color={character.gender === '男' ? 'blue' : 'pink'}>{character.gender}</Tag>
+                  <Tag>{character.age}岁</Tag>
+                  <Space size={[2, 2]} wrap>{character.tags.map((t, i) => (<Tag key={i} color="default" style={{ fontSize: 11 }}>{t}</Tag>))}</Space>
+                </div>}
+                description={<Text type="secondary" style={{ fontSize: 12 }}>{character.description}</Text>}
               />
             </Card>
           </Col>
@@ -463,49 +551,31 @@ const Scene: React.FC = () => {
         {props.map((prop) => (
           <Col xs={24} sm={12} lg={8} key={prop.id}>
             <Card
+              cover={previewImages[`prop_${prop.id}`] ? (
+                <div style={{ height: 240, overflow: 'hidden', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <img src={previewImages[`prop_${prop.id}`]} alt={prop.name}
+                    style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                </div>
+              ) : undefined}
               actions={[
-                <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => handleEditProp(prop)}>
-                  编辑
+                <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => handleEditProp(prop)}>编辑</Button>,
+                <Button key="preview" type="link" icon={<EyeOutlined />}
+                  loading={generatingPreview[`prop_${prop.id}`]}
+                  onClick={() => handlePreview(prop.id, 'prop', buildPropDesc(prop))}>
+                  {generatingPreview[`prop_${prop.id}`] ? '生成中' : '预览'}
                 </Button>,
-                <Button key="preview" type="link" icon={<EyeOutlined />}>
-                  预览
-                </Button>,
-                <Button key="delete" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDeleteProp(prop.id)}>
-                  删除
-                </Button>,
+                <Button key="delete" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDeleteProp(prop.id)}>删除</Button>,
               ]}
             >
               <Card.Meta
-                avatar={
-                  <Avatar
-                    style={{
-                      backgroundColor: '#52c41a',
-                      fontSize: 20,
-                    }}
-                  >
-                    <ToolOutlined />
-                  </Avatar>
-                }
-                title={
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Text strong>{prop.name}</Text>
-                    <Tag color="green">{prop.category}</Tag>
-                  </div>
-                }
-                description={
-                  <div>
-                    <div style={{ marginBottom: 8 }}>{prop.description}</div>
-                    <div><Text strong>材质：</Text>{prop.material}</div>
-                    <div><Text strong>大小：</Text>{prop.size}</div>
-                    <div style={{ marginTop: 8 }}>
-                      <Space size={[4, 4]} wrap>
-                        {prop.tags.map((tag, index) => (
-                          <Tag key={index} color="default">{tag}</Tag>
-                        ))}
-                      </Space>
-                    </div>
-                  </div>
-                }
+                avatar={!previewImages[`prop_${prop.id}`] ? (
+                  <Avatar style={{ backgroundColor: '#34c759', fontSize: 18 }} icon={<ToolOutlined />} />
+                ) : undefined}
+                title={<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Text strong>{prop.name}</Text><Tag color="green">{prop.category}</Tag>
+                  <Space size={[2, 2]} wrap>{prop.tags.map((t, i) => (<Tag key={i} color="default" style={{ fontSize: 11 }}>{t}</Tag>))}</Space>
+                </div>}
+                description={<Text type="secondary" style={{ fontSize: 12 }}>{prop.description}</Text>}
               />
             </Card>
           </Col>
@@ -515,48 +585,90 @@ const Scene: React.FC = () => {
   );
 
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ marginBottom: 24 }}>
-        <Title level={2}>
-          <TeamOutlined style={{ marginRight: 12 }} />
-          场景角色道具
-        </Title>
-        <Text type="secondary">管理您的场景、角色和道具资源库</Text>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)' }}>
+      {/* 顶部操作栏 */}
+      <div style={{
+        padding: '12px 24px', background: '#fff', borderBottom: '1px solid #e5e5ea',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      }}>
+        <div>
+          <Title level={4} style={{ margin: 0 }}>
+            <TeamOutlined style={{ marginRight: 8 }} />
+            场景角色道具
+          </Title>
+          <Text type="secondary" style={{ fontSize: 12 }}>管理场景、角色和道具资源库</Text>
+        </div>
+        <Button
+          type="primary"
+          size="middle"
+          icon={<CameraOutlined />}
+          onClick={handleSmartShotDivision}
+          loading={shotGenerationStatus === 'generating'}
+          disabled={shotGenerationStatus === 'generating'}
+        >
+          智能分镜
+        </Button>
       </div>
 
-      <Card>
-        <div style={{ marginBottom: 24 }}>
-          <Space>
-            <Button
-              type={activeTab === 'scenes' ? 'primary' : 'default'}
-              icon={<EnvironmentOutlined />}
-              onClick={() => setActiveTab('scenes')}
-            >
-              场景库
-            </Button>
-            <Button
-              type={activeTab === 'characters' ? 'primary' : 'default'}
-              icon={<TeamOutlined />}
-              onClick={() => setActiveTab('characters')}
-            >
-              角色库
-            </Button>
-            <Button
-              type={activeTab === 'props' ? 'primary' : 'default'}
-              icon={<ToolOutlined />}
-              onClick={() => setActiveTab('props')}
-            >
-              道具库
-            </Button>
-          </Space>
+      {/* 智能分镜进度指示 */}
+      {shotGenerationStatus === 'generating' && (
+        <div style={{
+          padding: '8px 24px', background: '#f0f7ff', borderBottom: '1px solid #d6e4ff',
+          textAlign: 'center',
+        }}>
+          <Progress percent={shotGenerationProgress} status="active" size="small" style={{ maxWidth: 400 }} />
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+            <LoadingOutlined style={{ marginRight: 6 }} />
+            AI 正在分析剧本并划分镜头...
+          </Text>
         </div>
+      )}
+      {shotGenerationStatus === 'failed' && (
+        <div style={{
+          padding: '8px 24px', background: '#fff2f0', borderBottom: '1px solid #ffccc7',
+          textAlign: 'center',
+        }}>
+          <Text type="danger" style={{ fontSize: 12 }}>智能分镜生成失败</Text>
+          <Button size="small" type="link" onClick={handleSmartShotDivision}>重试</Button>
+        </div>
+      )}
 
-        <div style={{ marginTop: 24 }}>
-          {activeTab === 'scenes' && renderScenes()}
-          {activeTab === 'characters' && renderCharacters()}
-          {activeTab === 'props' && renderProps()}
-        </div>
-      </Card>
+      {/* 内容区 */}
+      <div style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
+        <Card>
+          <div style={{ marginBottom: 24 }}>
+            <Space>
+              <Button
+                type={activeTab === 'scenes' ? 'primary' : 'default'}
+                icon={<EnvironmentOutlined />}
+                onClick={() => setActiveTab('scenes')}
+              >
+                场景库
+              </Button>
+              <Button
+                type={activeTab === 'characters' ? 'primary' : 'default'}
+                icon={<TeamOutlined />}
+                onClick={() => setActiveTab('characters')}
+              >
+                角色库
+              </Button>
+              <Button
+                type={activeTab === 'props' ? 'primary' : 'default'}
+                icon={<ToolOutlined />}
+                onClick={() => setActiveTab('props')}
+              >
+                道具库
+              </Button>
+            </Space>
+          </div>
+
+          <div style={{ marginTop: 24 }}>
+            {activeTab === 'scenes' && renderScenes()}
+            {activeTab === 'characters' && renderCharacters()}
+            {activeTab === 'props' && renderProps()}
+          </div>
+        </Card>
+      </div>
 
       {/* 场景编辑模态框 */}
       <Modal

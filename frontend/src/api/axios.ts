@@ -107,10 +107,11 @@ axiosInstance.interceptors.response.use(
 
     if (response) {
       const { status, data } = response
+      const msg = typeof data === 'string' ? data : data?.message
 
       switch (status) {
         case 400:
-          errorMessage = data?.message || '请求参数错误'
+          errorMessage = msg || '请求参数错误'
           break
         case 403:
           errorMessage = '权限不足，无法访问此资源'
@@ -119,10 +120,10 @@ axiosInstance.interceptors.response.use(
           errorMessage = '请求的资源不存在'
           break
         case 409:
-          errorMessage = data?.message || '资源冲突'
+          errorMessage = msg || '资源冲突'
           break
         case 422:
-          errorMessage = data?.message || '数据验证失败'
+          errorMessage = msg || '数据验证失败'
           break
         case 429:
           errorMessage = '请求过于频繁，请稍后重试'
@@ -136,7 +137,7 @@ axiosInstance.interceptors.response.use(
           errorMessage = '服务暂时不可用，请稍后重试'
           break
         default:
-          errorMessage = data?.message || `请求失败 (${status})`
+          errorMessage = msg || `请求失败 (${status})`
       }
     } else if (error.request) {
       // 请求已发出但没有收到响应

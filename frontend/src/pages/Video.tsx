@@ -1,4 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { finalCutService } from '@/services/finalCutService';
+import { usePipelinePersistence } from '@/hooks/usePipelinePersistence';
 import {
   Card,
   Typography,
@@ -20,7 +23,6 @@ import {
 } from 'antd';
 import {
   PlayCircleOutlined,
-  PauseCircleOutlined,
   VideoCameraOutlined,
   SettingOutlined,
   DownloadOutlined,
@@ -45,11 +47,16 @@ interface VideoTask {
   name: string;
   episodeId: string;
   episodeTitle: string;
+  shotNumber?: number;
+  shotDescription?: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
   progress: number;
-  duration: number; // 秒
+  duration: number;
   resolution: string;
   format: string;
+  videoUrl?: string;
+  thumbnailUrl?: string;
+  fileSize?: number;
   createdAt: string;
   estimatedCompletion?: string;
 }
@@ -78,21 +85,11 @@ interface Episode {
 }
 
 const Video: React.FC = () => {
+  const navigate = useNavigate();
+  const { saveState, getWorkId, loadState, restoreFromBackend } = usePipelinePersistence();
+
   // 多集数据状态
-  const [episodes, setEpisodes] = useState<Episode[]>([
-    {
-      id: 'ep-1',
-      title: '第一集',
-      number: 1,
-      description: '故事的开端，主角相遇',
-    },
-    {
-      id: 'ep-2',
-      title: '第二集',
-      number: 2,
-      description: '误会加深，情节转折',
-    },
-  ]);
+  const [episodes, setEpisodes] = useState<Episode[]>([]);
 
   // 当前激活的集数
   const [activeEpisodeId, setActiveEpisodeId] = useState<string>('ep-1');
@@ -101,9 +98,9 @@ const Video: React.FC = () => {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [editingEpisode, setEditingEpisode] = useState<Episode | null>(null);
 
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generationProgress, setGenerationProgress] = useState(0);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isFinalCutProcessing, setIsFinalCutProcessing] = useState(false);
+  const finalCutPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [activeTab, setActiveTab] = useState('preview');
   const [videoSettings, setVideoSettings] = useState<VideoSettings>({
     resolution: '1920x1080',
@@ -119,45 +116,74 @@ const Video: React.FC = () => {
     outputPath: '/videos/output.mp4',
   });
 
-  const [videoTasks, setVideoTasks] = useState<VideoTask[]>([
-    {
-      id: 1,
-      name: '第一集 - 咖啡馆场景视频',
-      episodeId: 'ep-1',
-      episodeTitle: '第一集',
-      status: 'completed',
-      progress: 100,
-      duration: 45,
-      resolution: '1920x1080',
-      format: 'mp4',
-      createdAt: '2026-03-20 10:30',
-    },
-    {
-      id: 2,
-      name: '第一集 - 森林场景视频',
-      episodeId: 'ep-1',
-      episodeTitle: '第一集',
-      status: 'processing',
-      progress: 65,
-      duration: 60,
-      resolution: '1920x1080',
-      format: 'mp4',
-      createdAt: '2026-03-20 11:15',
-      estimatedCompletion: '2026-03-20 12:00',
-    },
-    {
-      id: 3,
-      name: '第二集 - 实验室场景视频',
-      episodeId: 'ep-2',
-      episodeTitle: '第二集',
-      status: 'pending',
-      progress: 0,
-      duration: 30,
-      resolution: '1280x720',
-      format: 'mp4',
-      createdAt: '2026-03-20 11:45',
-    },
-  ]);
+  const [videoTasks, setVideoTasks] = useState<VideoTask[]>([]);
+
+  // 加载视频结果：优先 localStorage，空则从后端恢复
+  useEffect(() => {
+    const loadData = async () => {
+      let data = loadState('videoResults');
+      if (!data) {
+        const oldData = localStorage.getItem('shot_video_results');
+        if (oldData) { try { data = JSON.parse(oldData); } catch {} }
+      }
+      if (!data) {
+        const workId = getWorkId();
+        if (workId) {
+          await restoreFromBackend(workId);
+          data = loadState('videoResults');
+        }
+      }
+      if (data && data.episodes && data.episodes.length > 0) {
+        try {
+          setEpisodes(data.episodes.map((ep: any) => ({
+            id: ep.id,
+            title: ep.title,
+            number: ep.number,
+            description: ep.description,
+          })));
+          setActiveEpisodeId(data.episodes[0].id);
+
+          // 构建视频任务列表
+          const tasks: VideoTask[] = [];
+          let taskIdCounter = 0;
+          for (const ep of data.episodes) {
+            const videoResults = ep.videoResults || [];
+            for (const shot of (ep.shots || [])) {
+              taskIdCounter++;
+              const videoResult = videoResults.find(
+                (r: any) => r.shot_id === shot.id
+              );
+              tasks.push({
+                id: taskIdCounter,
+                name: `${ep.title} - 镜头${shot.number} [${shot.shotType}]`,
+                episodeId: ep.id,
+                episodeTitle: ep.title,
+                shotNumber: shot.number,
+                shotDescription: shot.description,
+                status: videoResult?.status === 'completed' ? 'completed' :
+                        videoResult?.status === 'failed' ? 'failed' : 'pending',
+                progress: videoResult?.status === 'completed' ? 100 : 0,
+                duration: shot.duration || 5,
+                resolution: '1920x1080',
+                format: 'mp4',
+                videoUrl: videoResult?.video_url,
+                fileSize: videoResult?.file_size,
+                createdAt: data.generatedAt || new Date().toISOString(),
+              });
+            }
+          }
+          setVideoTasks(tasks);
+          const completedCount = tasks.filter(t => t.status === 'completed').length;
+          message.success(`已加载 ${data.episodes.length} 集共 ${tasks.length} 个镜头视频（${completedCount} 个已完成）`);
+          // 持久化到后端
+          saveState('videoResults', data, getWorkId() || undefined);
+        } catch (e) {
+          console.error('Failed to load shot video results:', e);
+        }
+      }
+    };
+    loadData();
+  }, []);
 
   // 集数操作
   const handleAddEpisode = () => {
@@ -205,53 +231,105 @@ const Video: React.FC = () => {
     }
   };
 
-  const handleStartGeneration = () => {
-    setIsGenerating(true);
-    setGenerationProgress(0);
-
-    // 模拟视频生成过程
-    const interval = setInterval(() => {
-      setGenerationProgress((prev) => {
-        const newProgress = prev + 2;
-        if (newProgress >= 100) {
-          clearInterval(interval);
-          setIsGenerating(false);
-          message.success('视频生成完成！');
-
-          // 添加新任务到列表
-          const currentEpisode = episodes.find(ep => ep.id === activeEpisodeId);
-          const newTask: VideoTask = {
-            id: videoTasks.length + 1,
-            name: `${currentEpisode?.title || '集数'} - 生成视频 ${new Date().toLocaleTimeString()}`,
-            episodeId: activeEpisodeId,
-            episodeTitle: currentEpisode?.title || '未知集数',
-            status: 'completed',
-            progress: 100,
-            duration: 120,
-            resolution: videoSettings.resolution,
-            format: videoSettings.format,
-            createdAt: new Date().toLocaleString(),
-          };
-          setVideoTasks([newTask, ...videoTasks]);
-          return 100;
-        }
-        return newProgress;
-      });
-    }, 200);
-  };
-
-  const handlePauseGeneration = () => {
-    setIsGenerating(false);
-    message.info('视频生成已暂停');
-  };
-
   const handleSettingsSave = (values: any) => {
     setVideoSettings({ ...videoSettings, ...values });
     setIsSettingsModalOpen(false);
     message.success('设置已保存');
   };
 
-  const renderVideoPreview = () => (
+  // 剪辑成片 — 拼接当前集所有已完成镜头视频
+  const handleFinalCut = useCallback(async () => {
+    const currentTasks = videoTasks.filter(
+      t => t.episodeId === activeEpisodeId && t.status === 'completed' && t.videoUrl
+    );
+    if (currentTasks.length === 0) {
+      message.warning('当前集没有已完成的视频，请先在分镜脚本页面生成视频');
+      return;
+    }
+    const videoUrls = currentTasks.map(t => t.videoUrl!);
+    const currentEpisode = episodes.find(ep => ep.id === activeEpisodeId);
+
+    setIsFinalCutProcessing(true);
+
+    try {
+      const response = await finalCutService.createFinalCut({
+        project_id: activeEpisodeId,
+        episode_title: currentEpisode?.title,
+        video_urls: videoUrls,
+      });
+
+      if (response?.task_id) {
+        message.info(`剪辑任务已提交，正在拼接 ${videoUrls.length} 个镜头视频...`);
+
+        finalCutPollingRef.current = setInterval(async () => {
+          try {
+            const status = await finalCutService.getFinalCutStatus(response.task_id);
+
+            if (status?.status === 'completed') {
+              if (finalCutPollingRef.current) {
+                clearInterval(finalCutPollingRef.current);
+                finalCutPollingRef.current = null;
+              }
+              setIsFinalCutProcessing(false);
+              message.success('剪辑完成！正在跳转到成片页面...');
+
+              const finalCutData = {
+                taskId: response.task_id,
+                episodeTitle: currentEpisode?.title,
+                videoUrl: status.video_url,
+                thumbnailUrl: status.thumbnail_url,
+                duration: status.duration,
+                completedAt: new Date().toISOString(),
+              };
+              localStorage.setItem('final_cut_result', JSON.stringify(finalCutData));
+
+              // 持久化到后端
+              saveState('finalCut', finalCutData, getWorkId() || undefined);
+              navigate('/final-cut');
+            } else if (status?.status === 'failed') {
+              if (finalCutPollingRef.current) {
+                clearInterval(finalCutPollingRef.current);
+                finalCutPollingRef.current = null;
+              }
+              setIsFinalCutProcessing(false);
+              message.error(status.error_message || '剪辑失败');
+            }
+          } catch (err: any) {
+            if (err?.response?.status === 404) {
+              if (finalCutPollingRef.current) {
+                clearInterval(finalCutPollingRef.current);
+                finalCutPollingRef.current = null;
+              }
+              setIsFinalCutProcessing(false);
+              message.error('剪辑任务已过期');
+            }
+          }
+        }, 3000);
+      } else {
+        throw new Error('未获取到任务ID');
+      }
+    } catch (err: any) {
+      setIsFinalCutProcessing(false);
+      message.error(err?.response?.data?.detail || err?.message || '剪辑请求失败');
+    }
+  }, [videoTasks, activeEpisodeId, episodes, navigate]);
+
+  // 清理轮询
+  useEffect(() => {
+    return () => {
+      if (finalCutPollingRef.current) {
+        clearInterval(finalCutPollingRef.current);
+      }
+    };
+  }, []);
+
+  const renderVideoPreview = () => {
+    const currentTasks = videoTasks.filter(t => t.episodeId === activeEpisodeId);
+    const firstCompleted = currentTasks.find(t => t.status === 'completed' && t.videoUrl);
+    const hasMedia = !!firstCompleted;
+    const isImage = hasMedia && /\.(png|jpg|jpeg|webp)(\?|$)/i.test(firstCompleted.videoUrl!);
+
+    return (
     <div>
       <Title level={4}>视频预览</Title>
       <div style={{
@@ -267,36 +345,34 @@ const Video: React.FC = () => {
         position: 'relative',
         overflow: 'hidden',
       }}>
-        <div style={{ textAlign: 'center' }}>
-          <VideoCameraOutlined style={{ fontSize: 64, marginBottom: 16 }} />
-          <div style={{ fontSize: 18, marginBottom: 8 }}>视频预览区域</div>
-          <Text type="secondary">基于分镜脚本生成的视频将在此显示</Text>
-        </div>
-
-        {/* 模拟进度条 */}
-        {isGenerating && (
-          <div style={{
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            height: 4,
-            background: 'linear-gradient(90deg, #1890ff, #52c41a)',
-            width: `${generationProgress}%`,
-          }} />
+        {hasMedia ? (
+          isImage ? (
+            <img src={firstCompleted.videoUrl} alt="预览图"
+              style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          ) : (
+            <video
+              src={firstCompleted.videoUrl}
+              controls
+              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+              poster={firstCompleted.thumbnailUrl}
+            />
+          )
+        ) : (
+          <div style={{ textAlign: 'center' }}>
+            <VideoCameraOutlined style={{ fontSize: 64, marginBottom: 16 }} />
+            <div style={{ fontSize: 18, marginBottom: 8 }}>视频预览区域</div>
+            <Text type="secondary">
+              {videoTasks.length === 0
+                ? '请先在分镜脚本页面生成视频'
+                : currentTasks.length === 0
+                ? '当前集暂无视频'
+                : '该集暂无已完成的视频'}
+            </Text>
+          </div>
         )}
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'center', gap: 16, marginBottom: 24 }}>
-        <Button
-          type="primary"
-          size="large"
-          icon={isGenerating ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-          onClick={isGenerating ? handlePauseGeneration : handleStartGeneration}
-          loading={isGenerating}
-        >
-          {isGenerating ? '暂停生成' : '开始生成视频'}
-        </Button>
         <Button
           size="large"
           icon={<SettingOutlined />}
@@ -307,26 +383,38 @@ const Video: React.FC = () => {
         <Button
           size="large"
           icon={<DownloadOutlined />}
-          disabled={!videoTasks.some(task => task.status === 'completed')}
+          disabled={!hasMedia}
+          onClick={() => {
+            if (firstCompleted?.videoUrl) {
+              window.open(firstCompleted.videoUrl, '_blank');
+            }
+          }}
         >
           下载视频
         </Button>
       </div>
 
-      {isGenerating && (
-        <div style={{ marginTop: 24 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-            <Text>生成进度</Text>
-            <Text strong>{generationProgress}%</Text>
+      {/* 镜头选择列表 */}
+      {currentTasks.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <Text strong>本集镜头视频：</Text>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+            {currentTasks.map(task => (
+              <Tag
+                key={task.id}
+                color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : 'default'}
+                style={{ cursor: task.videoUrl ? 'pointer' : 'default' }}
+              >
+                镜头{task.shotNumber}
+                {task.status === 'completed' ? ' ✓' : task.status === 'failed' ? ' ✗' : ''}
+              </Tag>
+            ))}
           </div>
-          <Progress percent={generationProgress} status="active" />
-          <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
-            正在渲染视频，请稍候...
-          </Text>
         </div>
       )}
     </div>
-  );
+    );
+  };
 
   const renderTasks = () => (
     <div>
@@ -362,6 +450,10 @@ const Video: React.FC = () => {
 
                 <div style={{ display: 'flex', gap: 24, marginBottom: 8 }}>
                   <div>
+                    <Text type="secondary">镜头: </Text>
+                    <Text>{task.shotNumber ? `#${task.shotNumber}` : '-'}</Text>
+                  </div>
+                  <div>
                     <Text type="secondary">时长: </Text>
                     <Text>{task.duration}秒</Text>
                   </div>
@@ -374,6 +466,20 @@ const Video: React.FC = () => {
                     <Text>{task.format.toUpperCase()}</Text>
                   </div>
                 </div>
+
+                {task.shotDescription && (
+                  <div style={{ marginBottom: 8 }}>
+                    <Text type="secondary">画面描述: </Text>
+                    <Text style={{ fontSize: 12 }}>{task.shotDescription}</Text>
+                  </div>
+                )}
+
+                {task.fileSize && (
+                  <div style={{ marginBottom: 8 }}>
+                    <Text type="secondary">文件大小: </Text>
+                    <Text>{(task.fileSize / 1024 / 1024).toFixed(1)} MB</Text>
+                  </div>
+                )}
 
                 <div>
                   <Text type="secondary">创建时间: </Text>
@@ -403,10 +509,24 @@ const Video: React.FC = () => {
                   </>
                 ) : task.status === 'completed' ? (
                   <>
-                    <CheckCircleOutlined style={{ fontSize: 32, color: '#52c41a' }} />
+                    <CheckCircleOutlined style={{ fontSize: 32, color: '#34c759' }} />
                     <div style={{ marginTop: 8 }}>
-                      <Button type="link" icon={<EyeOutlined />} size="small">预览</Button>
-                      <Button type="link" icon={<DownloadOutlined />} size="small">下载</Button>
+                      {task.videoUrl && (
+                        <>
+                          <Button type="link" icon={<EyeOutlined />} size="small"
+                            onClick={() => window.open(task.videoUrl, '_blank')}>预览</Button>
+                          <Button type="link" icon={<DownloadOutlined />} size="small"
+                            onClick={() => {
+                              if (task.videoUrl) {
+                                const a = document.createElement('a');
+                                a.href = task.videoUrl!;
+                                a.download = `${task.name}.mp4`;
+                                a.click();
+                              }
+                            }}>下载</Button>
+                        </>
+                      )}
+                      {!task.videoUrl && <Text type="secondary" style={{ fontSize: 11 }}>无视频URL</Text>}
                     </div>
                   </>
                 ) : (
@@ -443,11 +563,15 @@ const Video: React.FC = () => {
     </div>
   );
 
-  const renderGenerationLog = () => (
+  const renderGenerationLog = () => {
+    const currentTasks = videoTasks.filter(t => t.episodeId === activeEpisodeId);
+    const currentEpisode = episodes.find(ep => ep.id === activeEpisodeId);
+
+    return (
     <div>
       <Title level={4}>生成日志</Title>
       <div style={{
-        backgroundColor: '#f5f5f5',
+        backgroundColor: '#ffffff',
         borderRadius: 8,
         padding: 16,
         height: 300,
@@ -457,48 +581,44 @@ const Video: React.FC = () => {
       }}>
         <div style={{ marginBottom: 16 }}>
           <Text strong>当前集数：</Text>
-          <Tag color="blue">{episodes.find(ep => ep.id === activeEpisodeId)?.title}</Tag>
+          <Tag color="blue">{currentEpisode?.title || '无'}</Tag>
+          <Text style={{ marginLeft: 16 }}>镜头总数：{currentTasks.length}</Text>
         </div>
         <div style={{ marginBottom: 16 }}>
           <Text strong>生成任务列表：</Text>
         </div>
-        <ul style={{ margin: 0, paddingLeft: 20 }}>
-          <li style={{ marginBottom: 8, color: '#52c41a' }}>
-            <Text strong>[10:30:25]</Text> 开始处理分镜脚本 - {episodes.find(ep => ep.id === activeEpisodeId)?.title}
-          </li>
-          <li style={{ marginBottom: 8, color: '#52c41a' }}>
-            <Text strong>[10:31:10]</Text> 加载场景资源: 现代咖啡馆
-          </li>
-          <li style={{ marginBottom: 8, color: '#52c41a' }}>
-            <Text strong>[10:32:45]</Text> 加载角色模型: 李明、张薇
-          </li>
-          <li style={{ marginBottom: 8, color: '#1890ff' }}>
-            <Text strong>[10:35:20]</Text> 开始渲染镜头 1 (远景)
-          </li>
-          <li style={{ marginBottom: 8, color: '#1890ff' }}>
-            <Text strong>[10:37:50]</Text> 渲染镜头 1 完成
-          </li>
-          <li style={{ marginBottom: 8, color: '#1890ff' }}>
-            <Text strong>[10:38:15]</Text> 开始渲染镜头 2 (中景)
-          </li>
-          <li style={{ marginBottom: 8, color: '#1890ff' }}>
-            <Text strong>[10:40:30]</Text> 渲染镜头 2 完成
-          </li>
-          <li style={{ marginBottom: 8, color: '#1890ff' }}>
-            <Text strong>[10:42:10]</Text> 正在渲染镜头 3 (近景)...
-          </li>
-          <li style={{ color: '#999' }}>
-            <Text strong>[当前]</Text> 合成音频轨道
-          </li>
-        </ul>
+        {currentTasks.length === 0 ? (
+          <Text type="secondary">暂无生成日志。请在分镜脚本页面点击"生成故事板"开始生成视频。</Text>
+        ) : (
+          <ul style={{ margin: 0, paddingLeft: 20 }}>
+            {currentTasks.map(task => (
+              <li key={task.id} style={{
+                marginBottom: 8,
+                color: task.status === 'completed' ? '#34c759' :
+                       task.status === 'failed' ? '#ff3b30' :
+                       task.status === 'processing' ? '#0066cc' : '#aeaeb2'
+              }}>
+                <Text strong>[{new Date(task.createdAt).toLocaleTimeString()}]</Text>{' '}
+                镜头{task.shotNumber} ({task.name.split('[')[1]?.replace(']', '') || '-'}){' '}
+                {task.status === 'completed' ? '✓ 已完成' :
+                 task.status === 'failed' ? '✗ 失败' :
+                 task.status === 'processing' ? '⏳ 处理中...' : '○ 等待中'}
+                {task.fileSize && task.status === 'completed'
+                  ? ` (${(task.fileSize / 1024 / 1024).toFixed(1)}MB)`
+                  : ''}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
-  );
+    );
+  };
 
   // 渲染集数列表
   const renderEpisodeList = () => (
-    <div style={{ borderRight: '1px solid #f0f0f0', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '16px', borderBottom: '1px solid #f0f0f0' }}>
+    <div style={{ borderRight: '1px solid #f5f5f7', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '16px', borderBottom: '1px solid #f5f5f7' }}>
         <Title level={4} style={{ margin: 0 }}>
           <FolderOpenOutlined style={{ marginRight: 8 }} />
           集数列表
@@ -514,8 +634,8 @@ const Video: React.FC = () => {
             style={{
               padding: '12px 16px',
               cursor: 'pointer',
-              backgroundColor: activeEpisodeId === episode.id ? '#e6f7ff' : 'transparent',
-              borderBottom: '1px solid #f0f0f0',
+              backgroundColor: activeEpisodeId === episode.id ? '#e8f2fd' : 'transparent',
+              borderBottom: '1px solid #f5f5f7',
               transition: 'background-color 0.2s',
             }}
           >
@@ -523,11 +643,11 @@ const Video: React.FC = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <StarOutlined
                   style={{
-                    color: activeEpisodeId === episode.id ? '#1890ff' : '#d9d9d9',
+                    color: activeEpisodeId === episode.id ? '#0066cc' : '#e5e5ea',
                     fontSize: 16
                   }}
                 />
-                <Text strong style={{ color: activeEpisodeId === episode.id ? '#1890ff' : undefined }}>
+                <Text strong style={{ color: activeEpisodeId === episode.id ? '#0066cc' : undefined }}>
                   {episode.title}
                 </Text>
               </div>
@@ -562,7 +682,7 @@ const Video: React.FC = () => {
         ))}
       </div>
 
-      <div style={{ padding: '16px', borderTop: '1px solid #f0f0f0' }}>
+      <div style={{ padding: '16px', borderTop: '1px solid #f5f5f7' }}>
         <Button
           type="dashed"
           block
@@ -576,62 +696,59 @@ const Video: React.FC = () => {
   );
 
   return (
-    <div style={{ padding: '24px', height: 'calc(100vh - 120px)', display: 'flex' }}>
-      {/* 左侧集数列表 */}
-      <div style={{ width: 280, marginRight: 24, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
-        {renderEpisodeList()}
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)' }}>
+      {/* 顶部操作栏 */}
+      <div style={{
+        padding: '12px 24px', background: '#fff', borderBottom: '1px solid #e5e5ea',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      }}>
+        <div>
+          <Title level={4} style={{ margin: 0 }}>
+            <VideoCameraOutlined style={{ marginRight: 8 }} />
+            分镜视频
+          </Title>
+          <Text type="secondary" style={{ fontSize: 12 }}>将分镜脚本生成为视频，支持预览和下载</Text>
+        </div>
+        <Button
+          type="primary"
+          size="middle"
+          icon={<VideoCameraOutlined />}
+          onClick={handleFinalCut}
+          loading={isFinalCutProcessing}
+          disabled={isFinalCutProcessing}
+        >
+          {isFinalCutProcessing ? '正在剪辑...' : '剪辑成片'}
+        </Button>
       </div>
 
-      {/* 右侧内容区域 */}
-      <div style={{ flex: 1, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '24px', borderBottom: '1px solid #f0f0f0' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <Title level={2} style={{ margin: 0 }}>
-                <VideoCameraOutlined style={{ marginRight: 12 }} />
-                {episodes.find(ep => ep.id === activeEpisodeId)?.title}
-              </Title>
-              <Text type="secondary">
-                将分镜脚本生成为视频，支持预览、生成和下载
-              </Text>
+      {/* 内容区 */}
+      <div style={{ flex: 1, display: 'flex', padding: '16px 24px', gap: 16, overflow: 'hidden' }}>
+        {/* 左侧集数列表 */}
+        <div style={{ width: 280, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
+          {renderEpisodeList()}
+        </div>
+
+        {/* 右侧内容区域 */}
+        <div style={{ flex: 1, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '16px 24px', borderBottom: '1px solid #f5f5f7' }}>
+            <Title level={5} style={{ margin: 0 }}>{episodes.find(ep => ep.id === activeEpisodeId)?.title}</Title>
+          </div>
+          <div style={{ padding: '24px', flex: 1, overflow: 'auto' }}>
+            <div style={{ marginBottom: 24 }}>
+              <Space>
+                <Button type={activeTab === 'preview' ? 'primary' : 'default'} icon={<PlayCircleOutlined />} onClick={() => setActiveTab('preview')}>视频预览</Button>
+                <Button type={activeTab === 'tasks' ? 'primary' : 'default'} icon={<CloudUploadOutlined />} onClick={() => setActiveTab('tasks')}>生成任务</Button>
+                <Button type={activeTab === 'log' ? 'primary' : 'default'} icon={<EyeOutlined />} onClick={() => setActiveTab('log')}>生成日志</Button>
+              </Space>
+            </div>
+            <div style={{ marginTop: 24 }}>
+              {activeTab === 'preview' && renderVideoPreview()}
+              {activeTab === 'tasks' && renderTasks()}
+              {activeTab === 'log' && renderGenerationLog()}
             </div>
           </div>
         </div>
-
-        <div style={{ padding: '24px', flex: 1 }}>
-          <div style={{ marginBottom: 24 }}>
-            <Space>
-              <Button
-                type={activeTab === 'preview' ? 'primary' : 'default'}
-                icon={<PlayCircleOutlined />}
-                onClick={() => setActiveTab('preview')}
-              >
-                视频预览
-              </Button>
-              <Button
-                type={activeTab === 'tasks' ? 'primary' : 'default'}
-                icon={<CloudUploadOutlined />}
-                onClick={() => setActiveTab('tasks')}
-              >
-                生成任务
-              </Button>
-              <Button
-                type={activeTab === 'log' ? 'primary' : 'default'}
-                icon={<EyeOutlined />}
-                onClick={() => setActiveTab('log')}
-              >
-                生成日志
-              </Button>
-            </Space>
-          </div>
-
-          <div style={{ marginTop: 24 }}>
-            {activeTab === 'preview' && renderVideoPreview()}
-            {activeTab === 'tasks' && renderTasks()}
-            {activeTab === 'log' && renderGenerationLog()}
-          </div>
-        </div>
-      </div>
+      </div>{/* end content area */}
 
       {/* 视频设置模态框 */}
       <Modal

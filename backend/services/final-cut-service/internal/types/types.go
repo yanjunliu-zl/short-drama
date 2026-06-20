@@ -8,14 +8,17 @@ import (
 // FinalCutRequest 最终剪辑请求
 type FinalCutRequest struct {
 	ProjectID    string   `json:"project_id" validate:"required"`
-	VideoIDs     []string `json:"video_ids" validate:"required"`
-	AudioID      string   `json:"audio_id" validate:"required"`
-	Transcript   string   `json:"transcript" validate:"required"`
-	CutPoints    []CutPoint `json:"cut_points" validate:"required"`
-	Effects      []Effect   `json:"effects" validate:"omitempty"`
-	FontSize     int        `json:"font_size" validate:"omitempty"`
-	FontColor    string     `json:"font_color" validate:"omitempty"`
-	BackgroundColor string `json:"background_color" validate:"omitempty"`
+	EpisodeTitle string   `json:"episode_title,optional"`
+	VideoURLs    []string `json:"video_urls"`
+	OutputFormat string   `json:"output_format,optional"`
+	VideoIDs     []string `json:"video_ids,optional"`
+	AudioID      string   `json:"audio_id,optional"`
+	Transcript   string   `json:"transcript,optional"`
+	CutPoints    []CutPoint `json:"cut_points,optional"`
+	Effects      []Effect   `json:"effects,optional"`
+	FontSize     int        `json:"font_size,optional"`
+	FontColor    string     `json:"font_color,optional"`
+	BackgroundColor string `json:"background_color,optional"`
 }
 
 // CutPoint 切点信息

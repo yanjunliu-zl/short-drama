@@ -1,6 +1,8 @@
 import logging
 import time
 import asyncio
+import uuid
+import base64
 from typing import Dict, Any, Optional, Tuple
 import json
 import hashlib
@@ -8,356 +10,262 @@ import hashlib
 import httpx
 from PIL import Image
 import io
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.media_asset import MediaAsset, MediaType
 
 logger = logging.getLogger(__name__)
 
 
 class SeedanceService:
-    """Seedance AI服务集成，用于图像和视频生成"""
+    """Seedance/Seedream AI服务集成（火山引擎 Ark API）"""
 
     def __init__(self):
         self.api_url = settings.SEEDANCE_API_URL
         self.api_key = settings.SEEDANCE_API_KEY
+        self.model = getattr(settings, 'SEEDANCE_MODEL', 'doubao-seedream-4-5-251128')
+        self.video_model = getattr(settings, 'SEEDANCE_VIDEO_MODEL', 'doubao-seedance-2-0-260128')
         self.timeout = settings.SEEDANCE_TIMEOUT
         self._initialized = False
         self._client: Optional[httpx.AsyncClient] = None
 
     async def initialize(self):
-        """初始化Seedance服务"""
         if self._initialized:
             return
-
         try:
             logger.info("初始化Seedance服务...")
-
-            # 验证API密钥
             if not self.api_key:
                 logger.warning("SEEDANCE_API_KEY未配置，服务将无法使用")
-
-            # 创建HTTP客户端
             self._client = httpx.AsyncClient(
                 timeout=self.timeout,
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
-                }
+                },
             )
-
             self._initialized = True
-            logger.info("Seedance服务初始化完成")
-
+            logger.info(f"Seedance初始化: url={self.api_url}, image_model={self.model}, video_model={self.video_model}")
         except Exception as e:
-            logger.error(f"Seedance服务初始化失败: {e}")
+            logger.error(f"Seedance初始化失败: {e}")
             raise
 
     async def close(self):
-        """关闭Seedance服务"""
         if self._client:
             await self._client.aclose()
             self._initialized = False
-            logger.info("Seedance服务已关闭")
+
+    # ================================================================
+    # 存储 (MinIO / Ceph)
+    # ================================================================
+
+    async def _store_to_ceph(self, source_url, media_type, content_type,
+                             related_entity_type, related_entity_id,
+                             user_id=None, db_session=None):
+        from app.services.storage_service import get_storage_service
+        try:
+            storage = await get_storage_service()
+            object_key, presigned_url, file_size = await storage.upload_from_url(
+                url=source_url, media_type=media_type, content_type=content_type,
+                related_entity_type=related_entity_type, related_entity_id=related_entity_id,
+            )
+            if object_key is None:
+                return source_url, None, None
+            ceph_url = presigned_url or storage.get_object_url(object_key)
+            return ceph_url, object_key, file_size
+        except Exception as e:
+            logger.warning(f"存储失败，使用原始URL: {e}")
+            return source_url, None, None
 
     def _generate_seed(self, prompt: str, custom_seed: Optional[int] = None) -> int:
-        """生成种子，支持自定义种子"""
         if custom_seed is not None:
             return custom_seed
-        # 使用提示词的哈希值作为种子，确保相同提示生成相同结果
         seed_hash = hashlib.md5(prompt.encode()).hexdigest()
         return int(seed_hash[:8], 16) % (2**31)
 
-    async def _submit_image_generation_job(
-        self,
-        prompt: str,
-        negative_prompt: str = "",
-        width: int = 1920,
-        height: int = 1080,
-        seed: Optional[int] = None,
-        steps: int = 30,
-        scale: float = 7.5,
-        sampler: str = "DPM++ 2M Karras"
-    ) -> Tuple[Optional[str], Optional[int]]:
-        """
-        提交图像生成任务到Seedance
+    # ================================================================
+    # 图像生成 (Seedream 4.5 via Ark API)
+    # ================================================================
 
-        返回: (job_id, seed)
-        """
+    async def _submit_image_generation_job(self, prompt: str, **kwargs):
         if not self.api_key:
-            logger.error("API密钥未配置")
-            return None, None
-
-        final_seed = self._generate_seed(prompt, seed)
-
-        payload = {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "width": width,
-            "height": height,
-            "seed": final_seed,
-            "steps": steps,
-            "scale": scale,
-            "sampler": sampler,
-            "model": "realistic-vision",  # 可配置
-        }
-
-        try:
-            logger.info(f"提交图像生成任务: prompt={prompt[:50]}...")
-
-            response = await self._client.post(
-                f"{self.api_url}/v1/images/generate",
-                json=payload
-            )
-            response.raise_for_status()
-
-            result = response.json()
-            job_id = result.get("job_id") or result.get("id")
-
-            logger.info(f"图像生成任务已提交: job_id={job_id}")
-            return job_id, final_seed
-
-        except httpx.HTTPStatusError as e:
-            logger.error(f"图像生成任务提交失败: {e.response.text}")
-            return None, None
-        except Exception as e:
-            logger.error(f"图像生成任务提交异常: {e}")
-            return None, None
-
-    async def _submit_video_generation_job(
-        self,
-        image_url: str,
-        prompt: str,
-        duration: float = 5.0,
-        fps: int = 24,
-        seed: Optional[int] = None,
-        strength: float = 0.75
-    ) -> Tuple[Optional[str], Optional[int]]:
-        """
-        提交视频生成任务到Seedance
-
-        返回: (job_id, seed)
-        """
-        if not self.api_key:
-            logger.error("API密钥未配置")
-            return None, None
-
-        final_seed = self._generate_seed(prompt + image_url, seed)
-
-        payload = {
-            "image_url": image_url,
-            "prompt": prompt,
-            "duration": duration,
-            "fps": fps,
-            "seed": final_seed,
-            "strength": strength,
-            "model": "video-gen-1",  # 可配置
-        }
-
-        try:
-            logger.info(f"提交视频生成任务: image_url={image_url[:50]}...")
-
-            response = await self._client.post(
-                f"{self.api_url}/v1/videos/generate",
-                json=payload
-            )
-            response.raise_for_status()
-
-            result = response.json()
-            job_id = result.get("job_id") or result.get("id")
-
-            logger.info(f"视频生成任务已提交: job_id={job_id}")
-            return job_id, final_seed
-
-        except httpx.HTTPStatusError as e:
-            logger.error(f"视频生成任务提交失败: {e.response.text}")
-            return None, None
-        except Exception as e:
-            logger.error(f"视频生成任务提交异常: {e}")
-            return None, None
-
-    async def _poll_job_status(self, job_id: str, job_type: str = "image") -> Optional[Dict[str, Any]]:
-        """
-        轮询任务状态
-
-        返回: 任务结果或None
-        """
-        max_polls = 60  # 最多轮询60次
-        poll_interval = 5  # 每次间隔5秒
-
-        for i in range(max_polls):
+            raise ValueError("SEEDANCE_API_KEY 未配置")
+        width = kwargs.get("width", 1920)
+        height = kwargs.get("height", 1920)
+        payload = {"model": self.model, "prompt": prompt, "size": f"{width}x{height}", "n": 1, "response_format": "url"}
+        last_body = ""
+        for endpoint in [f"{self.api_url}/images/generations", f"{self.api_url}/contents/generations"]:
             try:
-                response = await self._client.get(
-                    f"{self.api_url}/v1/jobs/{job_id}"
-                )
-                response.raise_for_status()
+                logger.info(f"调用 Ark API: {endpoint}, model={self.model}")
+                response = await self._client.post(endpoint, json=payload)
+                if response.status_code >= 500:
+                    last_body = response.text[:500]
+                    continue
+                if response.status_code >= 400:
+                    last_body = response.text[:800]
+                    logger.error(f"Ark API [{response.status_code}]: {last_body}")
+                    break
+                result = response.json()
+                logger.info(f"Ark 响应: {json.dumps(result, ensure_ascii=False)[:500]}")
+                image_url = None
+                if "data" in result and isinstance(result["data"], list) and len(result["data"]) > 0:
+                    image_url = result["data"][0].get("url") or result["data"][0].get("b64_json")
+                if not image_url and "url" in result:
+                    image_url = result["url"]
+                if not image_url and "output" in result:
+                    image_url = result["output"].get("image_url") or result["output"].get("url")
+                if image_url:
+                    logger.info(f"图像生成成功: {image_url[:80]}")
+                    return result.get("id") or str(uuid.uuid4()), image_url
+                last_body = json.dumps(result, ensure_ascii=False)[:500]
+                break
+            except httpx.HTTPStatusError as e:
+                last_body = e.response.text[:800] if e.response else ""
+            except Exception as e:
+                last_body = str(e)
+        raise RuntimeError(f"图像生成失败: {last_body or 'API无响应'}")
 
+    async def generate_image(self, prompt, negative_prompt="", width=1920, height=1920,
+                             seed=None, store_to_ceph=True, related_entity_type="scene",
+                             related_entity_id=None, user_id=None, db_session=None, **kwargs):
+        if not self._initialized:
+            await self.initialize()
+        try:
+            job_id, source_image_url = await self._submit_image_generation_job(
+                prompt=prompt, width=width, height=height, seed=seed, **kwargs)
+        except Exception as e:
+            logger.error(f"图像生成异常: {e}")
+            return None
+        if not source_image_url:
+            return None
+        image_url = source_image_url
+        if store_to_ceph and source_image_url:
+            entity_id = related_entity_id or (job_id or str(uuid.uuid4()))
+            image_url, _, _ = await self._store_to_ceph(
+                source_url=source_image_url, media_type="image", content_type="image/png",
+                related_entity_type=related_entity_type, related_entity_id=entity_id,
+                user_id=user_id, db_session=db_session)
+        return {"status": "completed", "image_url": image_url, "original_url": source_image_url,
+                "job_id": job_id, "message": "Image generated successfully"}
+
+    async def generate_image_from_scene(self, scene_description, style="写实风格", **kwargs):
+        prompt = f"{style}，{scene_description}" if style else scene_description
+        return await self.generate_image(prompt=prompt, negative_prompt="模糊，低质量，变形，水印，文字", **kwargs)
+
+    # ================================================================
+    # 视频生成 (Seedance 2.0 via Ark API)
+    # Ref: https://www.volcengine.com/docs/82379/1520757
+    # ================================================================
+
+    @staticmethod
+    async def _download_image_bytes(url: str) -> Optional[bytes]:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    return resp.content
+        except Exception as e:
+            logger.error(f"下载图片失败: {e}")
+        return None
+
+    async def _submit_video_generation_task(self, image_url: str, prompt: str, duration: int = 5) -> Optional[str]:
+        """创建 Seedance 2.0 视频生成任务，返回 task_id"""
+        if not self.api_key:
+            raise ValueError("SEEDANCE_API_KEY 未配置")
+        image_bytes = await self._download_image_bytes(image_url)
+        if not image_bytes:
+            return None
+        data_uri = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+        payload = {
+            "model": self.video_model,
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": data_uri}, "role": "first_frame"},
+            ],
+            "resolution": "720p", "ratio": "16:9", "duration": duration, "watermark": False,
+        }
+        url = f"{self.api_url}/contents/generations/tasks"
+        logger.info(f"提交视频任务: model={self.video_model}")
+        try:
+            response = await self._client.post(url, json=payload)
+            if response.status_code >= 400:
+                logger.error(f"视频任务创建失败 [{response.status_code}]: {response.text[:800]}")
+                return None
+            result = response.json()
+            task_id = result.get("id")
+            logger.info(f"视频任务已创建: {task_id}")
+            return task_id
+        except Exception as e:
+            logger.error(f"视频任务创建异常: {e}")
+            return None
+
+    async def _poll_video_task(self, task_id: str) -> Optional[str]:
+        """轮询视频任务直到完成，返回 video_url"""
+        url = f"{self.api_url}/contents/generations/tasks/{task_id}"
+        for i in range(120):
+            try:
+                response = await self._client.get(url)
+                if response.status_code >= 400:
+                    await asyncio.sleep(2)
+                    continue
                 result = response.json()
                 status = result.get("status")
-
-                logger.info(f"轮询任务状态 ({job_type} {job_id}): {status} ({i+1}/{max_polls})")
-
-                if status == "completed":
-                    return result
+                if status == "succeeded":
+                    return result["content"]["video_url"]
                 elif status == "failed":
-                    logger.error(f"任务失败: {result}")
+                    logger.error(f"视频任务失败: {json.dumps(result, ensure_ascii=False)[:500]}")
                     return None
-                elif status == "pending" or status == "processing":
-                    await asyncio.sleep(poll_interval)
-                else:
-                    logger.warning(f"未知状态: {status}")
-                    return None
-
+                if i % 10 == 0:
+                    logger.info(f"视频生成中: {status} ({i+1}/120)")
+                await asyncio.sleep(2)
             except Exception as e:
-                logger.error(f"轮询任务状态异常: {e}")
+                logger.error(f"视频轮询异常: {e}")
+                await asyncio.sleep(2)
+        logger.error(f"视频任务超时: {task_id}")
+        return None
+
+    async def generate_video(self, image_url: str, prompt: str, duration: float = 5.0,
+                             seed=None, store_to_ceph=True, related_entity_type="scene",
+                             related_entity_id=None, user_id=None, db_session=None, **kwargs):
+        """生成视频 (Seedance 2.0)。创建任务→轮询→存储。"""
+        if not self._initialized:
+            await self.initialize()
+        try:
+            task_id = await self._submit_video_generation_task(
+                image_url=image_url, prompt=prompt, duration=int(duration))
+            if not task_id:
                 return None
-
-        logger.error(f"任务轮询超时: {job_id}")
-        return None
-
-    async def generate_image(
-        self,
-        prompt: str,
-        negative_prompt: str = "",
-        width: int = 1920,
-        height: int = 1080,
-        seed: Optional[int] = None,
-        steps: int = 30,
-        scale: float = 7.5,
-        sampler: str = "DPM++ 2M Karras"
-    ) -> Optional[Dict[str, Any]]:
-        """
-        生成图像（同步方式）
-
-        返回: 包含image_url, seed等信息的字典
-        """
-        if not self._initialized:
-            await self.initialize()
-
-        # 提交任务
-        job_id, final_seed = await self._submit_image_generation_job(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            width=width,
-            height=height,
-            seed=seed,
-            steps=steps,
-            scale=scale,
-            sampler=sampler
-        )
-
-        if not job_id:
+            source_video_url = await self._poll_video_task(task_id)
+            if not source_video_url:
+                return None
+            video_url = source_video_url
+            if store_to_ceph and source_video_url:
+                entity_id = related_entity_id or task_id
+                video_url, _, _ = await self._store_to_ceph(
+                    source_url=source_video_url, media_type="video", content_type="video/mp4",
+                    related_entity_type=related_entity_type, related_entity_id=entity_id,
+                    user_id=user_id, db_session=db_session)
+            return {"status": "completed", "video_url": video_url, "original_url": source_video_url,
+                    "task_id": task_id, "message": "Video generated successfully"}
+        except Exception as e:
+            logger.error(f"视频生成异常: {e}")
             return None
 
-        # 轮询结果
-        result = await self._poll_job_status(job_id, "image")
-
-        if result:
-            return {
-                "status": "completed",
-                "image_url": result.get("output", {}).get("image_url") or result.get("image_url"),
-                "seed": final_seed,
-                "job_id": job_id,
-                "message": "Image generated successfully"
-            }
-        return None
-
-    async def generate_video(
-        self,
-        image_url: str,
-        prompt: str,
-        duration: float = 5.0,
-        fps: int = 24,
-        seed: Optional[int] = None,
-        strength: float = 0.75
-    ) -> Optional[Dict[str, Any]]:
-        """
-        生成视频（同步方式）
-
-        返回: 包含video_url等信息的字典
-        """
-        if not self._initialized:
-            await self.initialize()
-
-        # 提交任务
-        job_id, final_seed = await self._submit_video_generation_job(
-            image_url=image_url,
-            prompt=prompt,
-            duration=duration,
-            fps=fps,
-            seed=seed,
-            strength=strength
-        )
-
-        if not job_id:
-            return None
-
-        # 轮询结果
-        result = await self._poll_job_status(job_id, "video")
-
-        if result:
-            return {
-                "status": "completed",
-                "video_url": result.get("output", {}).get("video_url") or result.get("video_url"),
-                "seed": final_seed,
-                "job_id": job_id,
-                "message": "Video generated successfully"
-            }
-        return None
-
-    async def generate_image_from_scene(
-        self,
-        scene_description: str,
-        style: str = "写实风格",
-        **kwargs
-    ) -> Optional[Dict[str, Any]]:
-        """
-        从场景描述生成图像
-
-        参数:
-            scene_description: 场景描述
-            style: 风格描述
-        """
-        # 构建提示词
-        prompt = f"{style}，{scene_description}"
-        negative_prompt = "模糊，低质量，变形，水印，文字"
-
-        return await self.generate_image(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            **kwargs
-        )
-
-    async def generate_video_from_image(
-        self,
-        image_url: str,
-        prompt: str,
-        **kwargs
-    ) -> Optional[Dict[str, Any]]:
-        """
-        从图像和提示词生成视频
-        """
-        return await self.generate_video(
-            image_url=image_url,
-            prompt=prompt,
-            **kwargs
-        )
+    async def generate_video_from_image(self, image_url: str, prompt: str, **kwargs):
+        return await self.generate_video(image_url=image_url, prompt=prompt, **kwargs)
 
 
 # 全局服务实例
 _seedance_service: Optional[SeedanceService] = None
 
-
 async def get_seedance_service() -> SeedanceService:
-    """获取全局Seedance服务实例"""
     global _seedance_service
     if _seedance_service is None:
         _seedance_service = SeedanceService()
         await _seedance_service.initialize()
     return _seedance_service
 
-
 async def close_seedance_service():
-    """关闭全局Seedance服务实例"""
     global _seedance_service
     if _seedance_service:
         await _seedance_service.close()

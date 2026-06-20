@@ -1,8 +1,9 @@
 import logging
-from typing import Dict, Any, Optional, TypedDict, List
+from typing import Dict, Any, Optional, TypedDict, List, Annotated
 from enum import Enum
+from operator import add
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.aiosqlite import AsyncSqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 
 from app.services.ai_service import AIService
 from app.services.cache_service import get_cache_service
@@ -11,17 +12,33 @@ from app.services.graphrag_service import get_graphrag_service
 logger = logging.getLogger(__name__)
 
 
+def _last(a, b):
+    """Reducer: always take the last value"""
+    return b
+
+def _merge_dicts(a, b):
+    """Reducer: merge dicts with b taking precedence"""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return {**a, **b}
+
+def _or_none(a, b):
+    """Reducer: take b if not None, else a"""
+    return b if b is not None else a
+
 class WorkflowState(TypedDict):
     """工作流状态定义"""
-    request: Dict[str, Any]
-    current_step: str
-    result: Optional[str]
-    error: Optional[str]
-    metadata: Dict[str, Any]
-    script_draft: Optional[str]
-    script_analyzed: Optional[Dict[str, Any]]
-    script_optimized: Optional[str]
-    script_final: Optional[str]
+    request: Annotated[Dict[str, Any], _merge_dicts]
+    current_step: Annotated[str, _last]
+    result: Annotated[Optional[str], _or_none]
+    error: Annotated[Optional[str], _or_none]
+    metadata: Annotated[Dict[str, Any], _merge_dicts]
+    script_draft: Annotated[Optional[str], _or_none]
+    script_analyzed: Annotated[Optional[Dict[str, Any]], _or_none]
+    script_optimized: Annotated[Optional[str], _or_none]
+    script_final: Annotated[Optional[str], _or_none]
 
 
 class WorkflowStep(Enum):
@@ -75,8 +92,8 @@ class ScriptWorkflow:
                 logger.warning(f"GraphRag 服务初始化失败，将禁用图谱上下文管理: {e}")
                 self.graphrag_service = None
 
-            # 创建检查点保存器（使用SQLite）
-            self.checkpointer = AsyncSqliteSaver.from_conn_string(":memory:")
+            # 创建检查点保存器（使用内存）
+            self.checkpointer = MemorySaver()
 
             # 创建状态图
             workflow = StateGraph(WorkflowState)

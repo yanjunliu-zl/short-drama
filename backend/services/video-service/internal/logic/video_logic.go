@@ -3,23 +3,28 @@ package logic
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"short-drama-platform/video-service/internal/client"
 	"short-drama-platform/video-service/internal/repository"
 	"short-drama-platform/video-service/internal/types"
 	"short-drama-platform/video-service/model"
 	"time"
 
+	"github.com/zeromicro/go-zero/core/logx"
 	"github.com/zeromicro/go-zero/core/stores/redis"
 )
 
 type VideoLogic struct {
 	videoRepo repository.VideoRepository
 	redis     *redis.Redis
+	storage   *client.StorageClient
 }
 
-func NewVideoLogic(videoRepo repository.VideoRepository, redis *redis.Redis) types.VideoService {
+func NewVideoLogic(videoRepo repository.VideoRepository, redis *redis.Redis, storage *client.StorageClient) types.VideoService {
 	return &VideoLogic{
 		videoRepo: videoRepo,
 		redis:     redis,
+		storage:   storage,
 	}
 }
 
@@ -38,13 +43,32 @@ func (l *VideoLogic) CreateVideo(ctx context.Context, req *types.CreateVideoRequ
 		UpdatedAt:   time.Now(),
 	}
 
-	// 保存到仓库
+	// 保存到仓库（先保存以获取 ID）
 	if err := l.videoRepo.Create(ctx, video); err != nil {
 		return nil, fmt.Errorf("failed to create video: %w", err)
 	}
 
-	// 生成模拟的上传URL（实际应使用S3预签名URL等）
-	uploadURL := fmt.Sprintf("/api/v1/videos/%s/upload", video.ID)
+	// 生成 Ceph 对象 Key 和预签名上传 URL
+	fileExt := filepath.Ext(req.FileName)
+	if fileExt == "" {
+		fileExt = req.FileFormat
+	}
+	objectKey := client.GenerateObjectKey("video", "video", video.ID, fileExt)
+
+	// 记录文件在 Ceph 中的路径
+	video.FilePath = objectKey
+	_ = l.videoRepo.Update(ctx, video)
+
+	// 生成预签名 URL (用于上传，有效期1小时)
+	uploadURL, err := l.storage.GetPresignedURL(ctx, objectKey, 1*time.Hour)
+	if err != nil {
+		logx.Errorf("failed to generate presigned upload URL: %v", err)
+		// 降级：返回本地 API 路径
+		uploadURL = fmt.Sprintf("/api/v1/videos/%s/upload", video.ID)
+	}
+
+	// 记录媒体资产到数据库（需要在 repository 中实现）
+	_ = l.recordMediaAsset(ctx, video, objectKey)
 
 	return &types.CreateVideoResponse{
 		ID:        video.ID,
@@ -53,6 +77,24 @@ func (l *VideoLogic) CreateVideo(ctx context.Context, req *types.CreateVideoRequ
 		CreatedAt: video.CreatedAt,
 		UploadURL: uploadURL,
 	}, nil
+}
+
+// recordMediaAsset 记录媒体资产到数据库
+func (l *VideoLogic) recordMediaAsset(ctx context.Context, video *model.Video, objectKey string) error {
+	asset := &model.MediaAsset{
+		ObjectKey:         objectKey,
+		Bucket:            "short-drama",
+		MediaType:         string(model.MediaTypeVideo),
+		ContentType:       "video/" + video.FileFormat,
+		FileSize:          video.FileSize,
+		CephURL:           l.storage.GetFileURL(objectKey),
+		SourceService:     model.SourceVideoService,
+		RelatedEntityType: "video",
+		RelatedEntityID:   video.ID,
+		UserID:            video.UserID,
+		CreatedAt:         time.Now(),
+	}
+	return l.videoRepo.CreateMediaAsset(ctx, asset)
 }
 
 func (l *VideoLogic) ListVideos(ctx context.Context, req *types.ListVideosRequest) (*types.ListVideosResponse, error) {

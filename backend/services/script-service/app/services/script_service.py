@@ -1,7 +1,12 @@
 from typing import List, Optional, Dict, Any
 import logging
+import json
 from uuid import uuid4
 import time
+from datetime import datetime, timezone
+
+from sqlalchemy import select, func, update, delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.script import (
     ScriptUpdateRequest,
@@ -11,20 +16,18 @@ from app.schemas.script import (
 )
 from app.services.ai_service import AIService
 from app.services.workflow import ScriptWorkflow
+from app.services.novel2script_service import Novel2ScriptService
 from app.client.service_clients import VideoServiceClient, LLMServiceClient
-
-logger = logging.getLogger(__name__)
+from app.models import Script, GenerationTask, ScriptStatus, TaskStatus
+from app.core.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 
 
 class ScriptService:
-    """剧本生成服务，集成LangChain和LangGraph"""
+    """剧本生成服务，集成LangChain和LangGraph，使用SQLAlchemy持久化"""
 
     def __init__(self):
-        self._generation_tasks: Dict[str, Any] = {}
-        self._scripts_storage: Dict[str, Any] = {}
-
         # 初始化AI服务和工作流
         self.ai_service = AIService()
         self.workflow = ScriptWorkflow(self.ai_service)
@@ -52,379 +55,401 @@ class ScriptService:
             logger.error(f"ScriptService初始化失败: {e}")
             raise
 
+    def _get_db(self) -> AsyncSession:
+        """获取数据库会话"""
+        return AsyncSessionLocal()
+
     async def generate_script_async(self, task_id: str, request: ScriptGenerationRequest):
-        """异步生成剧本 - 使用LangGraph工作流"""
-        try:
-            # 确保服务已初始化
-            if not self._initialized:
-                await self.initialize()
+        """异步生成剧本 - 使用LangGraph工作流 + SQLAlchemy持久化"""
+        async with self._get_db() as db:
+            try:
+                if not self._initialized:
+                    await self.initialize()
 
-            logger.info(f"开始生成剧本，任务ID: {task_id}, 标题: {request.title}")
+                logger.info(f"开始生成剧本，任务ID: {task_id}, 标题: {request.title}")
 
-            # 更新任务状态为进行中
-            self._generation_tasks[task_id] = {
-                "status": "processing",
-                "progress": 10,
-                "result": None,
-                "start_time": time.time(),
-                "request": request.dict() if hasattr(request, 'dict') else vars(request)
-            }
+                # 创建或更新任务记录
+                task = await db.get(GenerationTask, task_id)
+                if not task:
+                    task = GenerationTask(
+                        task_id=task_id,
+                        status=TaskStatus.PROCESSING.value,
+                        progress=10,
+                        start_time=time.time(),
+                    )
+                    db.add(task)
+                else:
+                    task.status = TaskStatus.PROCESSING.value
+                    task.progress = 10
+                await db.commit()
 
-            # 将请求转换为字典
-            request_dict = request.dict() if hasattr(request, 'dict') else vars(request)
+                # 执行LangGraph工作流
+                request_dict = request.dict() if hasattr(request, 'dict') else vars(request)
+                workflow_result = await self.workflow.execute(request_dict, thread_id=task_id)
 
-            # 执行LangGraph工作流
-            workflow_result = await self.workflow.execute(request_dict, thread_id=task_id)
+                if workflow_result["success"]:
+                    script = Script(
+                        task_id=task_id,
+                        title=request.title,
+                        content=workflow_result["script"],
+                        theme=getattr(request, 'theme', ''),
+                        length=getattr(request, 'length', '短篇'),
+                        style=getattr(request, 'style', ''),
+                        setting=getattr(request, 'setting', ''),
+                        characters=getattr(request, 'characters', []),
+                        status=ScriptStatus.COMPLETED.value,
+                        user_id=str(getattr(request, 'user_id', '')),
+                        workflow_metadata=workflow_result.get("metadata", {}),
+                        analysis_result=workflow_result.get("analysis"),
+                        has_optimized_version=workflow_result.get("optimized_version") is not None,
+                    )
+                    db.add(script)
+                    await db.flush()  # 获取自增ID
 
-            if workflow_result["success"]:
-                # 创建剧本记录
-                script_id = str(uuid4())
-                script_record = {
-                    "id": script_id,
-                    "task_id": task_id,
-                    "title": request.title,
-                    "content": workflow_result["script"],
-                    "theme": getattr(request, 'theme', ''),
-                    "length": getattr(request, 'length', '短篇'),
-                    "style": getattr(request, 'style', ''),
-                    "setting": getattr(request, 'setting', ''),
-                    "characters": getattr(request, 'characters', []),
-                    "status": "completed",
-                    "user_id": getattr(request, 'user_id', ''),
-                    "workflow_metadata": workflow_result.get("metadata", {}),
-                    "analysis_result": workflow_result.get("analysis"),
-                    "has_optimized_version": workflow_result.get("optimized_version") is not None,
-                    "created_at": time.time(),
-                    "updated_at": time.time()
-                }
+                    # 更新任务状态
+                    task.status = TaskStatus.COMPLETED.value
+                    task.progress = 100
+                    task.script_id = script.id
+                    task.end_time = time.time()
+                    task.duration = task.end_time - (task.start_time or time.time())
+                    task.result_data = {"script_id": script.id}
+                    await db.commit()
 
-                self._scripts_storage[script_id] = script_record
-                self._generation_tasks[task_id] = {
-                    "status": "completed",
-                    "progress": 100,
-                    "result": script_record,
-                    "end_time": time.time(),
-                    "workflow_result": workflow_result,
-                    "script_id": script_id
-                }
+                    logger.info(f"剧本生成完成，任务ID: {task_id}, 剧本ID: {script.id}")
+                else:
+                    error_msg = workflow_result.get("error", "未知错误")
+                    task.status = TaskStatus.FAILED.value
+                    task.progress = 0
+                    task.error = error_msg
+                    task.end_time = time.time()
+                    await db.commit()
+                    logger.error(f"剧本生成失败，任务ID: {task_id}, 错误: {error_msg}")
 
-                logger.info(f"剧本生成完成，任务ID: {task_id}, 剧本ID: {script_id}, 长度: {len(workflow_result['script'])} 字符")
-            else:
-                # 工作流失败
-                error_msg = workflow_result.get("error", "未知错误")
-                self._generation_tasks[task_id] = {
-                    "status": "failed",
-                    "progress": 0,
-                    "error": error_msg,
-                    "end_time": time.time(),
-                    "workflow_result": workflow_result
-                }
-                logger.error(f"剧本生成失败，任务ID: {task_id}, 错误: {error_msg}")
+            except Exception as e:
+                logger.error(f"剧本生成异常: {e}")
+                await db.rollback()
+                # 尝试更新任务状态
+                try:
+                    task = await db.get(GenerationTask, task_id)
+                    if task:
+                        task.status = TaskStatus.FAILED.value
+                        task.error = str(e)
+                        task.end_time = time.time()
+                        await db.commit()
+                except Exception:
+                    pass
 
-        except Exception as e:
-            logger.error(f"剧本生成异常: {e}")
-            self._generation_tasks[task_id] = {
-                "status": "failed",
-                "progress": 0,
-                "error": str(e),
-                "end_time": time.time()
-            }
-
-    async def get_script(self, script_id: str) -> Optional[Dict]:
+    async def get_script(self, script_id: int) -> Optional[Dict]:
         """获取剧本详情"""
-        return self._scripts_storage.get(script_id)
+        async with self._get_db() as db:
+            script = await db.get(Script, script_id)
+            return script.to_dict() if script else None
 
     async def list_scripts(self, page: int = 1, page_size: int = 10,
                           user_id: Optional[str] = None,
-                          status: Optional[str] = None) -> tuple[List[Dict], int]:
+                          status: Optional[str] = None) -> tuple:
         """获取剧本列表"""
-        scripts = list(self._scripts_storage.values())
+        async with self._get_db() as db:
+            stmt = select(Script)
 
-        # 过滤
-        if user_id:
-            scripts = [s for s in scripts if s.get('user_id') == user_id]
-        if status:
-            scripts = [s for s in scripts if s.get('status') == status]
+            if user_id:
+                stmt = stmt.where(Script.user_id == user_id)
+            if status:
+                stmt = stmt.where(Script.status == status)
 
-        # 按创建时间倒序排序
-        scripts.sort(key=lambda x: x.get('created_at', 0), reverse=True)
+            # 按创建时间倒序
+            stmt = stmt.order_by(Script.created_at.desc())
 
-        # 分页
-        total = len(scripts)
-        start = (page - 1) * page_size
-        end = start + page_size
-        paginated = scripts[start:end]
+            # 计算总数
+            count_stmt = select(func.count()).select_from(stmt.subquery())
+            total_result = await db.execute(count_stmt)
+            total = total_result.scalar() or 0
 
-        return paginated, total
+            # 分页
+            offset = (page - 1) * page_size
+            stmt = stmt.offset(offset).limit(page_size)
+            result = await db.execute(stmt)
+            scripts = result.scalars().all()
 
-    async def update_script(self, script_id: str, request: ScriptUpdateRequest) -> Optional[Dict]:
+            return [s.to_dict() for s in scripts], total
+
+    async def update_script(self, script_id: int, request: ScriptUpdateRequest) -> Optional[Dict]:
         """更新剧本"""
-        if script_id not in self._scripts_storage:
-            return None
+        async with self._get_db() as db:
+            script = await db.get(Script, script_id)
+            if not script:
+                return None
 
-        script = self._scripts_storage[script_id]
+            request_dict = request.dict(exclude_unset=True) if hasattr(request, 'dict') else vars(request)
+            for field in ['title', 'content', 'status']:
+                if field in request_dict and request_dict[field] is not None:
+                    setattr(script, field, request_dict[field])
 
-        # 更新字段
-        request_dict = request.dict() if hasattr(request, 'dict') else vars(request)
+            script.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+            await db.refresh(script)
+            return script.to_dict()
 
-        for field in ['title', 'content', 'status']:
-            if field in request_dict and request_dict[field] is not None:
-                script[field] = request_dict[field]
-
-        script['updated_at'] = time.time()
-        self._scripts_storage[script_id] = script
-
-        return script
-
-    async def delete_script(self, script_id: str) -> bool:
+    async def delete_script(self, script_id: int) -> bool:
         """删除剧本"""
-        if script_id in self._scripts_storage:
-            del self._scripts_storage[script_id]
+        async with self._get_db() as db:
+            script = await db.get(Script, script_id)
+            if not script:
+                return False
 
-            # 同时清理相关的任务记录
-            for task_id, task_info in list(self._generation_tasks.items()):
-                if task_info.get('script_id') == script_id:
-                    del self._generation_tasks[task_id]
+            # 清理关联任务
+            stmt = delete(GenerationTask).where(GenerationTask.script_id == script_id)
+            await db.execute(stmt)
 
+            await db.delete(script)
+            await db.commit()
             return True
-        return False
 
     async def get_generation_status(self, task_id: str) -> Optional[Dict]:
         """获取剧本生成状态"""
-        task_info = self._generation_tasks.get(task_id)
+        async with self._get_db() as db:
+            stmt = select(GenerationTask).where(GenerationTask.task_id == task_id)
+            result = await db.execute(stmt)
+            task = result.scalar_one_or_none()
 
-        if not task_info:
-            return None
+            if not task:
+                return None
 
-        # 计算进度百分比（如果有进度信息）
-        status_info = {
-            "task_id": task_id,
-            "status": task_info.get("status", "unknown"),
-            "progress": task_info.get("progress", 0),
-            "script_id": task_info.get("script_id"),
-            "error": task_info.get("error"),
-        }
+            status = task.to_dict()
 
-        # 添加时间信息
-        if "start_time" in task_info:
-            status_info["start_time"] = task_info["start_time"]
-            status_info["duration"] = (task_info.get("end_time", time.time()) - task_info["start_time"])
+            # 如果任务完成且有script_id，附加剧本内容
+            if task.status == TaskStatus.COMPLETED.value and task.script_id:
+                script_stmt = select(Script).where(Script.id == task.script_id)
+                script_result = await db.execute(script_stmt)
+                script = script_result.scalar_one_or_none()
+                if script:
+                    status["result"] = {
+                        "title": script.title,
+                        "content": script.content,
+                        "theme": script.theme,
+                        "style": script.style,
+                        "length": script.length,
+                        "setting": script.setting,
+                        "characters": script.characters,
+                    }
 
-        return status_info
+            return status
 
-    async def regenerate_script(self, script_id: str, modifications: Dict[str, Any]) -> Optional[Dict]:
-        """重新生成剧本（基于现有剧本进行修改）"""
-        if script_id not in self._scripts_storage:
-            return None
+    async def regenerate_script(self, script_id: int, modifications: Dict[str, Any]) -> Optional[Dict]:
+        """重新生成剧本"""
+        async with self._get_db() as db:
+            original = await db.get(Script, script_id)
+            if not original:
+                return None
 
-        original_script = self._scripts_storage[script_id]
-
-        # 构建新的生成请求
-        request_dict = {
-            "title": modifications.get("title", original_script.get("title")),
-            "theme": modifications.get("theme", original_script.get("theme")),
-            "length": modifications.get("length", original_script.get("length")),
-            "style": modifications.get("style", original_script.get("style")),
-            "setting": modifications.get("setting", original_script.get("setting")),
-            "characters": modifications.get("characters", original_script.get("characters", [])),
-            "user_id": original_script.get("user_id"),
-            "regenerate_from": script_id,
-            "modifications": modifications
-        }
-
-        # 执行工作流
-        workflow_result = await self.workflow.execute(request_dict, thread_id=f"regenerate_{script_id}")
-
-        if workflow_result["success"]:
-            # 创建新版本的剧本记录
-            new_script_id = str(uuid4())
-            new_script_record = {
-                **original_script,
-                "id": new_script_id,
-                "content": workflow_result["script"],
-                "regenerated_from": script_id,
-                "modifications": modifications,
-                "status": "completed",
-                "created_at": time.time(),
-                "updated_at": time.time()
+            request_dict = {
+                "title": modifications.get("title", original.title),
+                "theme": modifications.get("theme", original.theme),
+                "length": modifications.get("length", original.length),
+                "style": modifications.get("style", original.style),
+                "setting": modifications.get("setting", original.setting),
+                "characters": modifications.get("characters", original.characters or []),
+                "user_id": original.user_id,
+                "regenerate_from": script_id,
+                "modifications": modifications
             }
 
-            # 更新标题等修改的字段
-            for field in ["title", "theme", "length", "style", "setting", "characters"]:
-                if field in modifications:
-                    new_script_record[field] = modifications[field]
+            workflow_result = await self.workflow.execute(request_dict, thread_id=f"regenerate_{script_id}")
 
-            self._scripts_storage[new_script_id] = new_script_record
+            if workflow_result["success"]:
+                new_script = Script(
+                    title=modifications.get("title", original.title),
+                    content=workflow_result["script"],
+                    theme=modifications.get("theme", original.theme),
+                    length=modifications.get("length", original.length),
+                    style=modifications.get("style", original.style),
+                    setting=modifications.get("setting", original.setting),
+                    characters=modifications.get("characters", original.characters),
+                    source_type=original.source_type,
+                    status=ScriptStatus.COMPLETED.value,
+                    user_id=original.user_id,
+                    regenerated_from=script_id,
+                    modifications=modifications,
+                    workflow_metadata=workflow_result.get("metadata", {}),
+                    analysis_result=workflow_result.get("analysis"),
+                    has_optimized_version=workflow_result.get("optimized_version") is not None,
+                )
+                db.add(new_script)
+                await db.commit()
+                await db.refresh(new_script)
 
-            return {
-                "success": True,
-                "new_script_id": new_script_id,
-                "script": new_script_record,
-                "workflow_result": workflow_result
-            }
-        else:
-            return {
-                "success": False,
-                "error": workflow_result.get("error"),
-                "workflow_result": workflow_result
-            }
+                return {
+                    "success": True,
+                    "new_script_id": new_script.id,
+                    "script": new_script.to_dict(),
+                    "workflow_result": workflow_result
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": workflow_result.get("error"),
+                    "workflow_result": workflow_result
+                }
 
     async def generate_script_from_novel_async(self, task_id: str, request: ScriptFromNovelRequest):
-        """异步从小说生成剧本 - 使用LangGraph工作流"""
-        try:
-            # 确保服务已初始化
-            if not self._initialized:
-                await self.initialize()
+        """异步从小说生成剧本 — ViMax 多阶段流水线"""
+        async with self._get_db() as db:
+            try:
+                if not self._initialized:
+                    await self.initialize()
 
-            logger.info(f"开始从小说生成剧本，任务ID: {task_id}, 标题: {request.title}")
+                logger.info(f"开始从小说生成剧本(ViMax流水线)，任务ID: {task_id}")
 
-            # 更新任务状态为进行中
-            self._generation_tasks[task_id] = {
-                "status": "processing",
-                "progress": 10,
-                "result": None,
-                "start_time": time.time(),
-                "request": request.dict() if hasattr(request, 'dict') else vars(request)
-            }
+                task = await db.get(GenerationTask, task_id)
+                if not task:
+                    task = GenerationTask(
+                        task_id=task_id,
+                        status=TaskStatus.PROCESSING.value,
+                        progress=5,
+                        start_time=time.time(),
+                    )
+                    db.add(task)
+                else:
+                    task.status = TaskStatus.PROCESSING.value
+                    task.progress = 5
+                await db.commit()
 
-            # 将请求转换为字典
-            request_dict = request.dict() if hasattr(request, 'dict') else vars(request)
+                novel_content = getattr(request, 'novel_content', '') or ''
+                user_req = f"主题:{getattr(request, 'theme', '')}; 风格:{getattr(request, 'style', '')}; 长度:{getattr(request, 'length', '短篇')}; 背景:{getattr(request, 'setting', '')}"
 
-            # 执行LangGraph工作流
-            workflow_result = await self.workflow.execute(request_dict, thread_id=task_id)
+                # 使用 Novel2ScriptService 多阶段流水线
+                mock_mode = getattr(self.ai_service, '_mock_mode', False)
+                n2s = Novel2ScriptService(self.ai_service.llm, mock_mode)
 
-            if workflow_result["success"]:
-                # 创建剧本记录
-                script_id = str(uuid4())
-                script_record = {
-                    "id": script_id,
-                    "task_id": task_id,
-                    "title": request.title,
-                    "content": workflow_result["script"],
-                    "theme": getattr(request, 'theme', ''),
-                    "length": getattr(request, 'length', '短篇'),
-                    "style": getattr(request, 'style', ''),
-                    "setting": getattr(request, 'setting', ''),
-                    "characters": getattr(request, 'characters', []),
-                    "source_type": "novel",
-                    "source_content": getattr(request, 'novel_content', '')[:500],  # 保存部分原文
-                    "status": "completed",
-                    "user_id": getattr(request, 'user_id', ''),
-                    "workflow_metadata": workflow_result.get("metadata", {}),
-                    "analysis_result": workflow_result.get("analysis"),
-                    "has_optimized_version": workflow_result.get("optimized_version") is not None,
-                    "created_at": time.time(),
-                    "updated_at": time.time()
-                }
+                # 阶段1: 压缩 (5% → 25%)
+                task.progress = 15; await db.commit()
+                compressed = await n2s.compress_novel(novel_content)
 
-                self._scripts_storage[script_id] = script_record
-                self._generation_tasks[task_id] = {
-                    "status": "completed",
-                    "progress": 100,
-                    "result": script_record,
-                    "end_time": time.time(),
-                    "workflow_result": workflow_result,
-                    "script_id": script_id
-                }
+                # 阶段2: 角色提取 (25% → 40%)
+                task.progress = 30; await db.commit()
+                characters = await n2s.extract_characters(compressed)
 
-                logger.info(f"剧本生成完成，任务ID: {task_id}, 剧本ID: {script_id}, 长度: {len(workflow_result['script'])} 字符")
-            else:
-                # 工作流失败
-                error_msg = workflow_result.get("error", "未知错误")
-                self._generation_tasks[task_id] = {
-                    "status": "failed",
-                    "progress": 0,
-                    "error": error_msg,
-                    "end_time": time.time(),
-                    "workflow_result": workflow_result
-                }
-                logger.error(f"剧本生成失败，任务ID: {task_id}, 错误: {error_msg}")
+                # 阶段3: 事件提取 (40% → 55%)
+                task.progress = 50; await db.commit()
+                events = await n2s.extract_events(compressed)
 
-        except Exception as e:
-            logger.error(f"剧本生成异常: {e}")
-            self._generation_tasks[task_id] = {
-                "status": "failed",
-                "progress": 0,
-                "error": str(e),
-                "end_time": time.time()
-            }
+                # 阶段4: 编剧生成 (55% → 80%)
+                task.progress = 65; await db.commit()
+                story = await n2s.develop_story(compressed, user_req)
+                scenes = await n2s.write_script(story, user_req)
+
+                # 阶段5: 增强 (80% → 95%)
+                task.progress = 85; await db.commit()
+                enhanced = await n2s.enhance_script(scenes)
+                final_script = "\n\n".join(enhanced)
+
+                # 保存结果
+                if final_script:
+                    script = Script(
+                        task_id=task_id,
+                        title=request.title,
+                        content=final_script,
+                        theme=getattr(request, 'theme', ''),
+                        length=getattr(request, 'length', '短篇'),
+                        style=getattr(request, 'style', ''),
+                        setting=getattr(request, 'setting', ''),
+                        characters=json.dumps([c.get('name', '') for c in characters], ensure_ascii=False) if characters else None,
+                        source_type="novel",
+                        source_content=novel_content[:500],
+                        status=ScriptStatus.COMPLETED.value,
+                        user_id=str(getattr(request, 'user_id', '')),
+                        workflow_metadata={
+                            "pipeline": "vimax_novel2script",
+                            "compressed_length": len(compressed),
+                            "character_count": len(characters),
+                            "event_count": len(events),
+                            "scene_count": len(enhanced),
+                        },
+                        analysis_result=events,
+                        has_optimized_version=False,
+                    )
+                    db.add(script)
+                    await db.flush()
+
+                    task.status = TaskStatus.COMPLETED.value
+                    task.progress = 100
+                    task.script_id = script.id
+                    task.end_time = time.time()
+                    await db.commit()
+
+                    logger.info(f"剧本(ViMax流水线)生成完成，剧本ID: {script.id}, "
+                                f"{len(characters)}角色, {len(events)}事件, {len(enhanced)}场")
+                else:
+                    raise ValueError("生成的剧本内容为空")
+                    task.error = error_msg
+                    task.end_time = time.time()
+                    await db.commit()
+
+            except Exception as e:
+                logger.error(f"剧本（小说转）生成异常: {e}")
+                await db.rollback()
 
     async def generate_script_from_outline_async(self, task_id: str, request: ScriptFromOutlineRequest):
-        """异步从大纲生成剧本 - 使用LangGraph工作流"""
-        try:
-            # 确保服务已初始化
-            if not self._initialized:
-                await self.initialize()
+        """异步从大纲生成剧本"""
+        async with self._get_db() as db:
+            try:
+                if not self._initialized:
+                    await self.initialize()
 
-            logger.info(f"开始从大纲生成剧本，任务ID: {task_id}, 标题: {request.title}")
+                logger.info(f"开始从大纲生成剧本，任务ID: {task_id}")
 
-            # 更新任务状态为进行中
-            self._generation_tasks[task_id] = {
-                "status": "processing",
-                "progress": 10,
-                "result": None,
-                "start_time": time.time(),
-                "request": request.dict() if hasattr(request, 'dict') else vars(request)
-            }
+                task = await db.get(GenerationTask, task_id)
+                if not task:
+                    task = GenerationTask(
+                        task_id=task_id,
+                        status=TaskStatus.PROCESSING.value,
+                        progress=10,
+                        start_time=time.time(),
+                    )
+                    db.add(task)
+                else:
+                    task.status = TaskStatus.PROCESSING.value
+                    task.progress = 10
+                await db.commit()
 
-            # 将请求转换为字典
-            request_dict = request.dict() if hasattr(request, 'dict') else vars(request)
+                request_dict = request.dict() if hasattr(request, 'dict') else vars(request)
+                workflow_result = await self.workflow.execute(request_dict, thread_id=task_id)
 
-            # 执行LangGraph工作流
-            workflow_result = await self.workflow.execute(request_dict, thread_id=task_id)
+                if workflow_result["success"]:
+                    script = Script(
+                        task_id=task_id,
+                        title=request.title,
+                        content=workflow_result["script"],
+                        theme=getattr(request, 'theme', ''),
+                        length=getattr(request, 'length', '短篇'),
+                        style=getattr(request, 'style', ''),
+                        setting=getattr(request, 'setting', ''),
+                        characters=getattr(request, 'characters', []),
+                        source_type="outline",
+                        source_content=str(getattr(request, 'outline', ''))[:500],
+                        status=ScriptStatus.COMPLETED.value,
+                        user_id=str(getattr(request, 'user_id', '')),
+                        workflow_metadata=workflow_result.get("metadata", {}),
+                        analysis_result=workflow_result.get("analysis"),
+                        has_optimized_version=workflow_result.get("optimized_version") is not None,
+                    )
+                    db.add(script)
+                    await db.flush()
 
-            if workflow_result["success"]:
-                # 创建剧本记录
-                script_id = str(uuid4())
-                script_record = {
-                    "id": script_id,
-                    "task_id": task_id,
-                    "title": request.title,
-                    "content": workflow_result["script"],
-                    "theme": getattr(request, 'theme', ''),
-                    "length": getattr(request, 'length', '短篇'),
-                    "style": getattr(request, 'style', ''),
-                    "setting": getattr(request, 'setting', ''),
-                    "characters": getattr(request, 'characters', []),
-                    "source_type": "outline",
-                    "source_content": getattr(request, 'outline', '')[:500],  # 保存部分原文
-                    "status": "completed",
-                    "user_id": getattr(request, 'user_id', ''),
-                    "workflow_metadata": workflow_result.get("metadata", {}),
-                    "analysis_result": workflow_result.get("analysis"),
-                    "has_optimized_version": workflow_result.get("optimized_version") is not None,
-                    "created_at": time.time(),
-                    "updated_at": time.time()
-                }
+                    task.status = TaskStatus.COMPLETED.value
+                    task.progress = 100
+                    task.script_id = script.id
+                    task.end_time = time.time()
+                    await db.commit()
 
-                self._scripts_storage[script_id] = script_record
-                self._generation_tasks[task_id] = {
-                    "status": "completed",
-                    "progress": 100,
-                    "result": script_record,
-                    "end_time": time.time(),
-                    "workflow_result": workflow_result,
-                    "script_id": script_id
-                }
+                    logger.info(f"剧本（大纲转）生成完成，剧本ID: {script.id}")
+                else:
+                    error_msg = workflow_result.get("error", "未知错误")
+                    task.status = TaskStatus.FAILED.value
+                    task.error = error_msg
+                    task.end_time = time.time()
+                    await db.commit()
 
-                logger.info(f"剧本生成完成，任务ID: {task_id}, 剧本ID: {script_id}, 长度: {len(workflow_result['script'])} 字符")
-            else:
-                # 工作流失败
-                error_msg = workflow_result.get("error", "未知错误")
-                self._generation_tasks[task_id] = {
-                    "status": "failed",
-                    "progress": 0,
-                    "error": error_msg,
-                    "end_time": time.time(),
-                    "workflow_result": workflow_result
-                }
-                logger.error(f"剧本生成失败，任务ID: {task_id}, 错误: {error_msg}")
-
-        except Exception as e:
-            logger.error(f"剧本生成异常: {e}")
-            self._generation_tasks[task_id] = {
-                "status": "failed",
-                "progress": 0,
-                "error": str(e),
-                "end_time": time.time()
-            }
+            except Exception as e:
+                logger.error(f"剧本（大纲转）生成异常: {e}")
+                await db.rollback()

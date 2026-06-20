@@ -16,6 +16,7 @@ type Config struct {
 	HealthCheck     HealthCheckConfig
 	Telemetry       TelemetryConfig
 	VideoProcessing VideoProcessingConfig
+	Storage         StorageConfig
 }
 
 type DatabaseConfig struct {
@@ -86,4 +87,13 @@ type VideoProcessingConfig struct {
 	OutputDir        string
 	AllowedFormats   []string
 	MaxFileSize      int64
+}
+
+type StorageConfig struct {
+	Type      string
+	Endpoint  string
+	AccessKey string
+	SecretKey string
+	Bucket    string
+	Region    string
 }

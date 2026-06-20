@@ -21,6 +21,11 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 				Handler: LoginHandler(serverCtx),
 			},
 			{
+				Method:  http.MethodPost,
+				Path:    "/api/v1/users/logout",
+				Handler: LogoutHandler(serverCtx),
+			},
+			{
 				Method:  http.MethodGet,
 				Path:    "/api/v1/users/:id",
 				Handler: GetUserHandler(serverCtx),

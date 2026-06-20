@@ -2,8 +2,8 @@ import logging
 from typing import Dict, Any, Optional
 import asyncio
 from langchain_openai import ChatOpenAI
-from langchain.schema import SystemMessage, HumanMessage
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.callbacks.base import BaseCallbackHandler
 
 from app.core.config import settings
 from app.services.cache_service import get_cache_service
@@ -61,22 +61,25 @@ class AIService:
                 "streaming": False,
             }
 
-            # 优先使用DeepSeek
+            # 优先使用DeepSeek，其次OpenAI，否则使用Mock模式
             if settings.DEEPSEEK_API_KEY:
                 llm_kwargs["openai_api_key"] = settings.DEEPSEEK_API_KEY
                 llm_kwargs["openai_api_base"] = settings.DEEPSEEK_API_BASE
                 llm_kwargs["model_name"] = settings.DEEPSEEK_MODEL
                 logger.info(f"使用DeepSeek模型: {settings.DEEPSEEK_MODEL}")
+                self.llm = ChatOpenAI(**llm_kwargs)
+                self._mock_mode = False
             elif settings.OPENAI_API_KEY:
                 llm_kwargs["openai_api_key"] = settings.OPENAI_API_KEY
                 if settings.OPENAI_API_BASE:
                     llm_kwargs["openai_api_base"] = settings.OPENAI_API_BASE
                 logger.info(f"使用OpenAI模型: {settings.MODEL_NAME}")
+                self.llm = ChatOpenAI(**llm_kwargs)
+                self._mock_mode = False
             else:
-                raise ValueError("未配置AI API密钥，请设置DEEPSEEK_API_KEY或OPENAI_API_KEY环境变量")
-
-            # 创建LLM实例
-            self.llm = ChatOpenAI(**llm_kwargs)
+                logger.warning("未配置AI API密钥，使用Mock模式生成示例剧本")
+                self.llm = None
+                self._mock_mode = True
 
             # 配置LangChain追踪
             if settings.LANGCHAIN_TRACING and settings.LANGCHAIN_API_KEY:
@@ -94,12 +97,17 @@ class AIService:
             raise
 
     async def generate_script(self, request: Dict[str, Any]) -> str:
-        """使用LangChain生成剧本，支持缓存"""
+        """使用LangChain生成剧本，支持缓存。无API Key时使用Mock模式"""
         if not self._initialized:
             await self.initialize()
 
         try:
             logger.info(f"开始生成剧本: {request.get('title', '未命名剧本')}")
+
+            # Mock模式：直接返回示例剧本
+            if self._mock_mode:
+                await asyncio.sleep(2)  # 模拟生成延迟
+                return self._generate_mock_script(request)
 
             # 尝试从缓存获取
             if self.cache_service:
@@ -137,6 +145,98 @@ class AIService:
         except Exception as e:
             logger.error(f"剧本生成失败: {e}")
             raise
+
+    def _generate_mock_script(self, request: Dict[str, Any]) -> str:
+        """生成Mock示例剧本（开发环境用）"""
+        title = request.get('title', '未命名剧本')
+        style = request.get('style', '浪漫喜剧')
+        setting = request.get('setting', '现代都市')
+        theme = request.get('theme', '爱情')
+
+        return f'''第1集 - {title}
+
+【场景一：{setting}的咖啡馆 - 白天】
+
+（阳光透过落地窗洒在木质桌面上。咖啡馆里飘着咖啡的香气。）
+
+女主角林小雨坐在靠窗的位置，手里握着一杯已经凉掉的拿铁。
+她的目光一直盯着门口，似乎在等待什么人。
+
+（门铃响起，一个身穿深色西装的男人走进来。）
+
+男人：（环顾四周，目光落在林小雨身上）"抱歉，让你久等了。"
+
+林小雨：（站起身，勉强挤出一个微笑）"没关系，沈先生。"
+
+沈墨：他走到她对面坐下。"叫我沈墨就好。所以……你是从哪里找到我的联系方式的？"
+
+林小雨：（深吸一口气）"我是你弟弟的女朋友。"她顿了顿，"至少，曾经是。"
+
+（沈墨的表情瞬间凝固。）
+
+沈墨："沈言的……女朋友？"
+
+林小雨："我需要你的帮助。小言失踪前，留下了一个箱子。他说，如果出了什么事，就来找你。"
+
+第2集 - 箱子里的秘密
+
+【场景二：沈墨的公寓 - 夜晚】
+
+（昏暗的灯光下，一个古旧的木箱放在茶几上。沈墨和林小雨面对面坐着。）
+
+沈墨：（仔细检查箱子）"这上面有密码锁。"
+
+林小雨从包里拿出一张纸条。"小言发给我的最后一条消息——'密码是你的生日'。"
+
+（沈墨输入数字，箱子发出轻微的咔哒声。箱盖缓缓打开。）
+
+（里面是一叠文件、几张照片，还有一个U盘。）
+
+沈墨：（翻看文件，脸色越来越凝重）"这些是……"
+
+林小雨凑过来看，突然倒吸一口冷气。
+
+林小雨："这是公司的财务报表？小言怎么会有这些？"
+
+沈墨合上文件，站起身走到窗边。窗外是城市璀璨的夜景，但他的眼神却异常冰冷。
+
+沈墨："他知道了一些不该知道的事。这就是他失踪的原因。"
+
+林小雨："那我们该怎么办？"
+
+沈墨转身面对她，眼中闪过一丝决然。
+
+沈墨："我们要找出真相。不管代价是什么。"
+
+第3集 - 第一份线索
+
+【场景三：沈氏集团总部 - 上午】
+
+（高耸入云的玻璃大厦。沈墨和林小雨站在大楼入口前。）
+
+林小雨：（紧张地整理衣领）"你真的确定让我假扮助理？"
+
+沈墨："不用担心。我查过了，下个月要进行的项目涉及一笔巨额资金。"他压低声音，"而这些资金，正好和小言留下的账目对得上。"
+
+（电梯门打开，两人走出，迎面撞上一个穿着时髦的女人。）
+
+苏婉：（冷笑）"这不是沈墨吗？好久不见。这位是你的新女朋友？"她上下打量林小雨。
+
+沈墨：（冷淡地）"这是我的助理。苏婉，你似乎对公司的事很感兴趣？"
+
+苏婉的脸色微变，但很快恢复如常。
+
+苏婉："我可是公司的副总裁。"她凑近沈墨耳边，轻声说："有些事，你最好别管。"
+
+（她转身离开，高跟鞋在走廊里发出清脆的回响。）
+
+林小雨：（看着苏婉远去的背影）"她肯定知道些什么。"
+
+沈墨："她身上有香水味——玫瑰和檀香。和小言留下的那张名片上的香味一模一样。"
+
+（两人交换了一个眼神。）
+
+沈墨："看来，我们找对方向了。"'''
 
     def _build_system_prompt(self, request: Dict[str, Any]) -> str:
         """构建系统提示"""
@@ -187,6 +287,9 @@ class AIService:
             await self.initialize()
 
         try:
+            if self._mock_mode:
+                return {"analysis": "剧本结构完整", "characters": 3, "scenes": 3, "quality": "good"}
+
             # 尝试从缓存获取
             if self.cache_service:
                 cached_analysis = await self.cache_service.get_cached_analysis(script_content)
@@ -240,6 +343,10 @@ class AIService:
             await self.initialize()
 
         try:
+            if self._mock_mode:
+                await asyncio.sleep(0.5)
+                return script_content  # Mock: return original content as "optimized"
+
             # 尝试从缓存获取
             if self.cache_service:
                 cached_optimization = await self.cache_service.get_cached_optimization(script_content, feedback)
@@ -290,6 +397,10 @@ class AIService:
 
         try:
             logger.info(f"开始将小说转换为剧本: {request.get('title', '未命名剧本')}")
+
+            if self._mock_mode:
+                await asyncio.sleep(1.5)
+                return self._generate_mock_script(request)
 
             # 尝试从缓存获取
             if self.cache_service:
@@ -395,6 +506,10 @@ class AIService:
 
         try:
             logger.info(f"开始根据大纲生成剧本: {request.get('title', '未命名剧本')}")
+
+            if self._mock_mode:
+                await asyncio.sleep(1)
+                return self._generate_mock_script(request)
 
             # 尝试从缓存获取
             if self.cache_service:

@@ -85,3 +85,13 @@ VideoProcessing:
   OutputDir: "/data/videos"
   AllowedFormats: ["mp4", "avi", "mov", "mkv"]
   MaxFileSize: 1073741824 # 1GB
+
+# 对象存储配置 (MinIO / Ceph / S3 兼容)
+Storage:
+  Type: minio
+  Endpoint: minio:9000
+  AccessKey: minioadmin
+  SecretKey: minioadmin
+  Bucket: short-drama
+  Region: us-east-1
+  UseSSL: false

@@ -1,9 +1,6 @@
 package repository
 
-import (
-	"context"
-	"short-drama-platform/content-service/internal/types"
-)
+// (no imports needed currently)
 
 type CaseRepository interface {
 	// 定义案例仓库接口

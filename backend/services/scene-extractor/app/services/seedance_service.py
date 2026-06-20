@@ -8,8 +8,10 @@ import hashlib
 import httpx
 from PIL import Image
 import io
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.media_asset import MediaAsset, MediaType
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,68 @@ class SeedanceService:
             await self._client.aclose()
             self._initialized = False
             logger.info("Seedance服务已关闭")
+
+    async def _store_to_ceph(
+        self,
+        source_url: str,
+        media_type: str,
+        content_type: str,
+        related_entity_type: str,
+        related_entity_id: str,
+        user_id: Optional[str] = None,
+        db_session: Optional[AsyncSession] = None,
+    ) -> Tuple[Optional[str], Optional[str], Optional[int]]:
+        """
+        将 AI 生成的媒体从源 URL 下载并上传到 Ceph，同时记录到数据库
+
+        返回: (ceph_url, object_key, file_size)
+        """
+        from app.services.storage_service import get_storage_service
+
+        try:
+            storage = await get_storage_service()
+
+            object_key, presigned_url, file_size = await storage.upload_from_url(
+                url=source_url,
+                media_type=media_type,
+                content_type=content_type,
+                related_entity_type=related_entity_type,
+                related_entity_id=related_entity_id,
+            )
+
+            if object_key is None:
+                logger.error(f"上传到Ceph失败: {source_url[:80]}...")
+                return source_url, None, None
+
+            ceph_url = presigned_url or storage.get_object_url(object_key)
+
+            if db_session is not None:
+                try:
+                    media_asset = MediaAsset(
+                        object_key=object_key,
+                        bucket=settings.STORAGE_BUCKET,
+                        media_type=MediaType.IMAGE if media_type == "image" else MediaType.VIDEO,
+                        content_type=content_type,
+                        file_size=file_size or 0,
+                        original_url=source_url,
+                        ceph_url=ceph_url,
+                        source_service="scene-extractor",
+                        related_entity_type=related_entity_type,
+                        related_entity_id=related_entity_id,
+                        user_id=user_id,
+                    )
+                    db_session.add(media_asset)
+                    await db_session.commit()
+                    logger.info(f"媒体资产已记录到数据库: id={media_asset.id}, key={object_key}")
+                except Exception as db_err:
+                    logger.error(f"记录媒体资产到数据库失败: {db_err}")
+                    await db_session.rollback()
+
+            return ceph_url, object_key, file_size
+
+        except Exception as e:
+            logger.error(f"存储到Ceph失败: {e}")
+            return source_url, None, None
 
     def _generate_seed(self, prompt: str, custom_seed: Optional[int] = None) -> int:
         """生成种子，支持自定义种子"""
@@ -171,12 +235,24 @@ class SeedanceService:
         seed: Optional[int] = None,
         steps: int = 30,
         scale: float = 7.5,
-        sampler: str = "DPM++ 2M Karras"
+        sampler: str = "DPM++ 2M Karras",
+        store_to_ceph: bool = True,
+        related_entity_type: str = "scene",
+        related_entity_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        db_session: Optional[AsyncSession] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         生成图像（同步方式）
 
-        返回: 包含image_url, seed等信息的字典
+        参数:
+            store_to_ceph: 是否存储到 Ceph
+            related_entity_type: 关联实体类型
+            related_entity_id: 关联实体 ID
+            user_id: 用户 ID
+            db_session: 数据库会话
+
+        返回: 包含image_url(ceph_url), seed等信息的字典
         """
         if not self._initialized:
             await self.initialize()
@@ -200,9 +276,30 @@ class SeedanceService:
         result = await self._poll_job_status(job_id)
 
         if result:
+            source_image_url = result.get("output", {}).get("image_url") or result.get("image_url")
+            image_url = source_image_url
+            object_key = None
+            file_size = None
+
+            # 存储到 Ceph
+            if store_to_ceph and source_image_url:
+                entity_id = related_entity_id or job_id
+                image_url, object_key, file_size = await self._store_to_ceph(
+                    source_url=source_image_url,
+                    media_type="image",
+                    content_type="image/png",
+                    related_entity_type=related_entity_type,
+                    related_entity_id=entity_id,
+                    user_id=user_id,
+                    db_session=db_session,
+                )
+
             return {
                 "status": "completed",
-                "image_url": result.get("output", {}).get("image_url") or result.get("image_url"),
+                "image_url": image_url,
+                "original_url": source_image_url,
+                "object_key": object_key,
+                "file_size": file_size,
                 "seed": final_seed,
                 "job_id": job_id,
                 "message": "Image generated successfully"

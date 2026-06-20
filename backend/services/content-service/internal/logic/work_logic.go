@@ -1,9 +1,7 @@
 package logic
 
 import (
-	"context"
 	"short-drama-platform/content-service/internal/repository"
-	"short-drama-platform/content-service/internal/types"
 
 	"github.com/zeromicro/go-zero/core/stores/redis"
 )

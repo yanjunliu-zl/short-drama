@@ -21,9 +21,10 @@ import (
 
 // StorageType 存储类型
 const (
-	StorageS3     = "s3"
-	StorageMinIO  = "minio"
-	StorageLocal  = "local"
+	StorageS3    = "s3"
+	StorageMinIO = "minio"
+	StorageCeph  = "ceph"
+	StorageLocal = "local"
 )
 
 // StorageClient 对象存储客户端
@@ -44,18 +45,18 @@ func NewStorageClient(cfg config.Config) (*StorageClient, error) {
 
 	// 初始化本地存储路径
 	if err := os.MkdirAll(client.localBasePath, 0755); err != nil {
-		logx.Warnf("failed to create local storage path: %v", err)
+		logx.Errorf("failed to create local storage path: %v", err)
 	}
 
 	// 根据存储类型初始化客户端
 	switch strings.ToLower(storageCfg.Type) {
-	case StorageS3, StorageMinIO:
+	case StorageS3, StorageMinIO, StorageCeph:
 		return client.initMinIOClient()
 	case StorageLocal:
 		logx.Info("using local storage")
 		return client, nil
 	default:
-		logx.Warnf("unknown storage type: %s, using local storage", storageCfg.Type)
+		logx.Errorf("unknown storage type: %s, using local storage", storageCfg.Type)
 		return client, nil
 	}
 }
@@ -63,7 +64,7 @@ func NewStorageClient(cfg config.Config) (*StorageClient, error) {
 // initMinIOClient 初始化 MinIO 客户端
 func (c *StorageClient) initMinIOClient() (*StorageClient, error) {
 	opts := &minio.Options{
-		Creds:  credentials.NewV4(c.config.AccessKey, c.config.SecretKey, ""),
+		Creds:  credentials.NewStaticV4(c.config.AccessKey, c.config.SecretKey, ""),
 		Secure: false, // 如果使用 HTTP 则设为 false
 		Region: c.config.Region,
 	}
@@ -438,7 +439,7 @@ func (c *StorageClient) deleteLocalFile(objectName string) error {
 // Close 关闭存储客户端
 func (c *StorageClient) Close() error {
 	if c.client != nil {
-		c.client.Shutdown()
+		// minio client doesn't need explicit shutdown
 	}
 	return nil
 }

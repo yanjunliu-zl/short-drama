@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.api.v1.api import api_router
 from app.core.logging import setup_logging
 from app.core.deps import initialize_script_service
+from app.core.database import init_db, close_db
 from app.services.cache_service import initialize_cache_service
 from app.middleware.prometheus import MetricsEndpointMiddleware, set_health_status
 
@@ -82,7 +83,8 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting up script generation service...")
-    # 初始化数据库连接
+    # 初始化数据库连接并创建表
+    await init_db()
     # 初始化缓存服务
     await initialize_cache_service()
     # 初始化AI模型
@@ -94,6 +96,7 @@ async def startup_event():
 async def shutdown_event():
     logger.info("Shutting down script generation service...")
     # 清理资源
+    await close_db()
     logger.info("Service shutdown completed")
     set_health_status(settings.PROJECT_NAME, False)
 

@@ -47,34 +47,26 @@ http:
         accessControlMaxAge: 100
         addVaryHeader: true
 
-    # 安全头中间件
+    # 安全头中间件（本地开发已禁用 SSL 相关头）
     security-headers:
       headers:
         browserXssFilter: true
         contentTypeNosniff: true
-        frameDeny: true
-        sslRedirect: true
-        stsIncludeSubdomains: true
-        stsPreload: true
-        stsSeconds: 31536000
+        frameDeny: false
+        sslRedirect: false
 
     # 重试中间件
     retry:
       retry:
         attempts: 3
         initialInterval: 500ms
-        maxInterval: 5s
 
     # 断路器中间件
     circuit-breaker:
       circuitBreaker:
         expression: "NetworkErrorRatio() > 0.5"
 
-    # 超时中间件
-    timeout:
-      headers:
-        requestTimeout: 30s
-        responseTimeout: 60s
+    # 超时配置已移至 entrypoint 层级 (Traefik v3 不支持 headers 方式)
 
     # 请求日志中间件
     request-log:

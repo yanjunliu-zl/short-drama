@@ -12,11 +12,7 @@ http:
         - rate-limit
         - security-headers
         - retry
-        - timeout
       service: user-service
-      tls:
-        certResolver: letsencrypt
-
     # 剧本服务路由
     script-service:
       rule: "PathPrefix(`/api/v1/scripts`)"
@@ -27,11 +23,7 @@ http:
         - rate-limit
         - security-headers
         - retry
-        - timeout
       service: script-service
-      tls:
-        certResolver: letsencrypt
-
     # 视频服务路由
     video-service:
       rule: "PathPrefix(`/api/v1/videos`)"
@@ -42,10 +34,7 @@ http:
         - rate-limit
         - security-headers
         - retry
-        - timeout
       service: video-service
-      tls:
-        certResolver: letsencrypt
 
     # 最终剪辑服务路由
     final-cut-service:
@@ -57,10 +46,43 @@ http:
         - rate-limit
         - security-headers
         - retry
-        - timeout
       service: final-cut-service
-      tls:
-        certResolver: letsencrypt
+
+    # 内容服务路由 (案例广场 + 我的作品)
+    content-service:
+      rule: "PathPrefix(`/api/v1/cases`) || PathPrefix(`/api/v1/works`) || PathPrefix(`/api/v1/scenes`) || PathPrefix(`/api/v1/characters`) || PathPrefix(`/api/v1/assets`) || PathPrefix(`/api/v1/payments`)"
+      entryPoints:
+        - web
+      middlewares:
+        - cors
+        - rate-limit
+        - security-headers
+        - retry
+      service: content-service
+
+    # 分镜服务路由
+    storyboard-service:
+      rule: "PathPrefix(`/api/v1/storyboard`)"
+      entryPoints:
+        - web
+      middlewares:
+        - cors
+        - rate-limit
+        - security-headers
+        - retry
+      service: storyboard-service
+
+    # llmhua AI图像视频生成服务路由
+    llmhua-service:
+      rule: "PathPrefix(`/api/v1/llmhua`)"
+      entryPoints:
+        - web
+      middlewares:
+        - cors
+        - rate-limit
+        - security-headers
+        - retry
+      service: llmhua-service
 
     # Traefik仪表板路由
     traefik-dashboard:
@@ -70,8 +92,6 @@ http:
       middlewares:
         - auth
       service: api@internal
-      tls:
-        certResolver: letsencrypt
 
   services:
     # 用户服务
@@ -109,6 +129,36 @@ http:
       loadBalancer:
         servers:
           - url: "http://final-cut-service:8085"
+        healthCheck:
+          path: /health
+          interval: 30s
+          timeout: 5s
+
+    # 内容服务 (案例广场 + 我的作品)
+    content-service:
+      loadBalancer:
+        servers:
+          - url: "http://content-service:8081"
+        healthCheck:
+          path: /health
+          interval: 30s
+          timeout: 5s
+
+    # 分镜服务
+    storyboard-service:
+      loadBalancer:
+        servers:
+          - url: "http://storyboard-service:8001"
+        healthCheck:
+          path: /health
+          interval: 30s
+          timeout: 5s
+
+    # llmhua AI图像视频生成服务
+    llmhua-service:
+      loadBalancer:
+        servers:
+          - url: "http://llmhua-service:8002"
         healthCheck:
           path: /health
           interval: 30s

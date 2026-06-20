@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/zeromicro/go-zero/core/logx"
 )
 
 // DistributedLock 分布式锁
@@ -57,7 +56,7 @@ func (l *DistributedLock) Release(ctx context.Context) error {
 		end
 	`)
 
-	_, err := script.Exec(ctx, l.client, l.key, l.value).Result()
+	_, err := script.Run(ctx, l.client, []string{l.key}, l.value).Result()
 	if err != nil {
 		return fmt.Errorf("failed to release lock: %w", err)
 	}

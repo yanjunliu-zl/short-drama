@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -106,7 +105,7 @@ func (sd *ServiceDiscovery) GetRandomInstance(serviceName string) *api.ServiceEn
 	for _, instance := range instances {
 		score := 0
 		// 优先选择健康实例
-		if instance.HealthCheckStatus == api.HealthPassing {
+		if allHealthy(instance) {
 			score += 10
 		}
 		// 优先选择标签为primary的实例
@@ -213,4 +212,17 @@ func DeregisterService(cfg config.ConsulConfig, serviceID string) error {
 
 	logx.Infof("service %s deregistered from consul", serviceID)
 	return nil
+}
+
+// allHealthy checks if all health checks for a service instance are passing
+func allHealthy(instance *api.ServiceEntry) bool {
+	if len(instance.Checks) == 0 {
+		return false
+	}
+	for _, check := range instance.Checks {
+		if check.Status != api.HealthPassing {
+			return false
+		}
+	}
+	return true
 }

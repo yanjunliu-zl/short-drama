@@ -16,13 +16,6 @@ Prometheus:
   Port: 9081
   Path: /metrics
 
-# 链路追踪
-Telemetry:
-  Name: content-service
-  Endpoint: http://jaeger:14268/api/traces
-  Sampler: 1.0
-  Batcher: jaeger
-
 # 数据库配置
 Database:
   Host: mysql

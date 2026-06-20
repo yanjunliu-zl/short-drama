@@ -4,14 +4,14 @@ import type { LoginRequest, RegisterRequest, LoginResponse, ApiResponse } from '
 export const authService = {
   // 用户登录
   login: async (credentials: LoginRequest): Promise<ApiResponse<LoginResponse>> => {
-    const response = await api.post<ApiResponse<LoginResponse>>('/v1/users/login', credentials)
-    return response.data
+    const response = await api.post<LoginResponse>('/v1/users/login', credentials)
+    return { success: true, code: 200, data: response.data as unknown as LoginResponse }
   },
 
   // 用户注册
   register: async (userData: RegisterRequest): Promise<ApiResponse<LoginResponse>> => {
-    const response = await api.post<ApiResponse<LoginResponse>>('/v1/users/register', userData)
-    return response.data
+    const response = await api.post<LoginResponse>('/v1/users/register', userData)
+    return { success: true, code: 200, data: response.data as unknown as LoginResponse }
   },
 
   // 用户登出

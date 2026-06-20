@@ -6,6 +6,7 @@ import time
 import os
 
 from app.core.config import settings
+from app.services.storage_service import get_storage_service, close_storage_service
 
 # 设置日志
 logging.basicConfig(level=logging.INFO)
@@ -52,14 +53,17 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting up scene extractor service...")
-    # 初始化数据库连接
-    # 初始化消息队列
+    from app.core.database import init_db
+    await init_db()
+    await get_storage_service()
     logger.info("Scene extractor service started successfully")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Shutting down scene extractor service...")
-    # 清理资源
+    await close_storage_service()
+    from app.core.database import close_db
+    await close_db()
     logger.info("Scene extractor service shutdown completed")
 
 # 全局异常处理

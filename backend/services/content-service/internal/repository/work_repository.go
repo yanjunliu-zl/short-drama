@@ -1,9 +1,6 @@
 package repository
 
-import (
-	"context"
-	"short-drama-platform/content-service/internal/types"
-)
+// (no imports needed currently)
 
 type WorkRepository interface {
 	// 定义作品仓库接口

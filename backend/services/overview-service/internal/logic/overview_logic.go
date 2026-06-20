@@ -2,37 +2,47 @@ package logic
 
 import (
 	"context"
+	"fmt"
+	"short-drama-platform/overview-service/internal/repository"
 	"short-drama-platform/overview-service/internal/types"
+	"short-drama-platform/overview-service/model"
+	"time"
 
-	"github.com/zeromicro/go-zero/core/logx"
+	"github.com/zeromicro/go-zero/core/stores/redis"
 )
 
-type ServiceContext struct {
-	Logx logx.Logger
-}
-
+// OverviewLogic 概览业务逻辑
 type OverviewLogic struct {
-	ctx context.Context
-	svc *ServiceContext
+	repo  repository.OverviewRepository
+	redis *redis.Redis
 }
 
-func NewOverviewLogic(ctx context.Context, svc *ServiceContext) *OverviewLogic {
-	return &OverviewLogic{
-		ctx: ctx,
-		svc: svc,
+// NewOverviewLogic 创建概览业务逻辑实例
+func NewOverviewLogic(repo repository.OverviewRepository, redisClient *redis.Redis) types.OverviewService {
+	return &OverviewLogic{repo: repo, redis: redisClient}
+}
+
+// GetOverview 获取概览信息
+func (l *OverviewLogic) GetOverview(ctx context.Context, req *types.OverviewRequest) (*types.OverviewResponse, error) {
+	// 从数据库获取统计数据
+	totalVideos, err := l.repo.CountVideosByUserID(ctx, req.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("get overview: %w", err)
 	}
-}
 
-func (l *OverviewLogic) GetOverview(req *types.OverviewRequest) (*types.OverviewResponse, error) {
-	// TODO: 实现获取概览信息逻辑
+	totalDuration, err := l.repo.SumDurationByUserID(ctx, req.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("get overview: %w", err)
+	}
+
 	response := &types.OverviewResponse{
 		UserID:        req.UserID,
-		TotalVideos:   0,
-		TotalDuration: 0,
-		LastUpdated:   "",
+		TotalVideos:   totalVideos,
+		TotalDuration: totalDuration,
+		LastUpdated:   time.Now().Format("2006-01-02 15:04:05"),
 	}
 
-	// 初始化默认数据
+	// 默认枚举信息（实际应按视频比例/创作模式/风格维度做 GROUP BY 统计，此处提供默认结构）
 	response.VideoRatios = []types.VideoRatioInfo{
 		{Ratio: types.VideoRatioSquare, Name: "1:1", Count: 0, Percentage: 0},
 		{Ratio: types.VideoRatioPortrait, Name: "9:16", Count: 0, Percentage: 0},
@@ -61,8 +71,26 @@ func (l *OverviewLogic) GetOverview(req *types.OverviewRequest) (*types.Overview
 	return response, nil
 }
 
-func (l *OverviewLogic) SetOverviewConfig(req *types.SetOverviewConfigRequest) (*types.SetOverviewConfigResponse, error) {
-	// TODO: 实现设置概览配置逻辑
+// SetOverviewConfig 设置概览配置
+func (l *OverviewLogic) SetOverviewConfig(ctx context.Context, req *types.SetOverviewConfigRequest) (*types.SetOverviewConfigResponse, error) {
+	config := &model.OverviewConfig{
+		UserID: req.UserID,
+	}
+
+	if req.VideoRatio != nil {
+		config.VideoRatio = int(*req.VideoRatio)
+	}
+	if req.CreationMode != nil {
+		config.CreationMode = int(*req.CreationMode)
+	}
+	if req.StyleReference != nil {
+		config.StyleReference = int(*req.StyleReference)
+	}
+
+	if err := l.repo.UpsertConfig(ctx, config); err != nil {
+		return nil, fmt.Errorf("set overview config: %w", err)
+	}
+
 	return &types.SetOverviewConfigResponse{
 		Success: true,
 		Message: "配置已保存",

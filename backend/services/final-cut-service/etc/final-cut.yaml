@@ -123,11 +123,12 @@ VideoService:
   Endpoint: http://video-service:8081
   Timeout: 30s
 
-# 存储配置
+# 存储配置 (MinIO / Ceph / S3 兼容)
 Storage:
-  Type: s3
-  Endpoint: http://minio:9000
-  AccessKey: admin
-  SecretKey: admin123
+  Type: minio
+  Endpoint: minio:9000
+  AccessKey: minioadmin
+  SecretKey: minioadmin
   Bucket: short-drama
   Region: us-east-1
+  UseSSL: false

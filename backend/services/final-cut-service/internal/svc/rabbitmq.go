@@ -1,6 +1,7 @@
 package svc
 
 import (
+	"fmt"
 	"short-drama-platform/final-cut-service/internal/config"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -13,7 +14,7 @@ type RabbitMQClient struct {
 }
 
 func NewRabbitMQClient(cfg config.RabbitMQConfig) RabbitMQClient {
-	conn, err := amqp.Dial(cfg.Host + ":" + cfg.Port)
+	conn, err := amqp.Dial(fmt.Sprintf("%s:%d", cfg.Host, cfg.Port))
 	if err != nil {
 		panic(err)
 	}

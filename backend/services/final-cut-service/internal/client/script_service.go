@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"short-drama-platform/final-cut-service/internal/config"
@@ -24,7 +25,7 @@ func NewScriptServiceClient(cfg config.Config) *ScriptServiceClient {
 	return &ScriptServiceClient{
 		baseURL:    cfg.ScriptService.Endpoint,
 		httpClient: NewHTTPClient(cfg.TimeoutConfig),
-		redis:      redis.New(cfg.Redis.Host+":"+cfg.Redis.Port, cfg.Redis.Password),
+		redis:      redis.New(cfg.Redis.Host+":"+strconv.Itoa(cfg.Redis.Port), redis.WithPass(cfg.Redis.Password)),
 	}
 }
 
@@ -95,7 +96,7 @@ func (c *ScriptServiceClient) GenerateScript(ctx context.Context, req *ScriptGen
 	// 缓存结果
 	if resp.ScriptID != "" {
 		cacheData, _ := json.Marshal(resp)
-		c.redis.Setex(cacheKey, string(cacheData), 24*time.Hour)
+		c.redis.Setex(cacheKey, string(cacheData), int(24*time.Hour/time.Second))
 	}
 
 	return &resp, nil
@@ -127,7 +128,7 @@ func (c *ScriptServiceClient) GetScriptStatus(ctx context.Context, taskID string
 
 	// 缓存结果
 	cacheData, _ := json.Marshal(resp)
-	c.redis.Setex(cacheKey, string(cacheData), 5*time.Minute)
+	c.redis.Setex(cacheKey, string(cacheData), int(5*time.Minute/time.Second))
 
 	return &resp, nil
 }
@@ -162,7 +163,7 @@ func (c *ScriptServiceClient) GetScript(ctx context.Context, scriptID string) (*
 
 	// 缓存结果
 	cacheData, _ := json.Marshal(resp.Script)
-	c.redis.Setex(cacheKey, string(cacheData), 1*time.Hour)
+	c.redis.Setex(cacheKey, string(cacheData), int(1*time.Hour/time.Second))
 
 	return resp.Script, nil
 }

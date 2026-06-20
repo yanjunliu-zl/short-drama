@@ -169,6 +169,43 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 				Method:  http.MethodPost,
 				Path:    "/api/v1/works/:id/export",
 				Handler: ExportWorkHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodPut,
+					Path:    "/api/v1/works/:id/pipeline-state",
+					Handler: SavePipelineStateHandler(serverCtx),
+				},
+				{
+					Method:  http.MethodGet,
+					Path:    "/api/v1/works/:id/pipeline-state",
+					Handler: GetPipelineStateHandler(serverCtx),
+			},
+		},
+	)
+
+	// 支付路由
+	server.AddRoutes(
+		[]rest.Route{
+			{
+				Method:  http.MethodGet,
+				Path:    "/api/v1/payments",
+				Handler: ListPaymentsHandler(serverCtx),
+			},
+		},
+	)
+
+	// 资产库路由
+	server.AddRoutes(
+		[]rest.Route{
+			{
+				Method:  http.MethodGet,
+				Path:    "/api/v1/assets/personal",
+				Handler: ListPersonalAssetsHandler(serverCtx),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/api/v1/assets/company",
+				Handler: ListCompanyAssetsHandler(serverCtx),
 			},
 		},
 	)

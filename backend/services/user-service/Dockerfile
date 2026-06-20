@@ -11,6 +11,14 @@ WORKDIR /app
 COPY go.mod go.sum ./
 ENV GOSUMDB=off
 
+# 代理设置（构建时通过 --build-arg 传入）
+ARG https_proxy
+ARG http_proxy
+ARG all_proxy
+ENV https_proxy=$https_proxy
+ENV http_proxy=$http_proxy
+ENV all_proxy=$all_proxy
+
 # 下载依赖
 RUN go mod download
 
@@ -33,7 +41,7 @@ RUN addgroup -g 1001 -S appuser && adduser -u 1001 -S appuser -G appuser
 WORKDIR /app
 
 # 从构建阶段复制二进制文件
-COPY --from=builder /app/bin/user-service .
+COPY --from=builder /app/bin/user-service /usr/local/bin/
 COPY --from=builder /app/etc/user.yaml ./etc/user.yaml
 
 # 复制时区信息
@@ -53,4 +61,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 EXPOSE 8080
 
 # 启动应用
-ENTRYPOINT ["./user-service", "-f", "etc/user.yaml"]
+ENTRYPOINT ["/usr/local/bin/user-service", "-f", "etc/user.yaml"]

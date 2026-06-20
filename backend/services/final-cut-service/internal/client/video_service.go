@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"short-drama-platform/final-cut-service/internal/config"
 
+	"github.com/zeromicro/go-zero/core/logx"
 	"github.com/zeromicro/go-zero/core/stores/redis"
 )
 
@@ -23,15 +25,15 @@ func NewVideoServiceClient(cfg config.Config) *VideoServiceClient {
 	return &VideoServiceClient{
 		baseURL:    cfg.VideoService.Endpoint,
 		httpClient: NewHTTPClient(cfg.TimeoutConfig),
-		redis:      redis.New(cfg.Redis.Host+":"+cfg.Redis.Port, cfg.Redis.Password),
+		redis:      redis.New(cfg.Redis.Host+":"+strconv.Itoa(cfg.Redis.Port), redis.WithPass(cfg.Redis.Password)),
 	}
 }
 
 // VideoTaskRequest 视频任务请求
 type VideoTaskRequest struct {
-	TaskType   string   `json:"task_type"`
-	VideoIDs   []string `json:"video_ids"`
-	AudioID    string   `json:"audio_id,omitempty"`
+	TaskType     string   `json:"task_type"`
+	VideoIDs     []string `json:"video_ids"`
+	AudioID      string   `json:"audio_id,omitempty"`
 	OutputFormat string   `json:"output_format,omitempty"`
 }
 
@@ -70,7 +72,7 @@ func (c *VideoServiceClient) ProcessVideo(ctx context.Context, req *VideoTaskReq
 
 	// 缓存结果
 	cacheData, _ := json.Marshal(resp)
-	c.redis.Setex(cacheKey, string(cacheData), 1*time.Hour)
+	c.redis.Setex(cacheKey, string(cacheData), int(1*time.Hour/time.Second))
 
 	return &resp, nil
 }
@@ -101,7 +103,7 @@ func (c *VideoServiceClient) GetVideoTaskStatus(ctx context.Context, taskID stri
 
 	// 缓存结果
 	cacheData, _ := json.Marshal(resp)
-	c.redis.Setex(cacheKey, string(cacheData), 5*time.Minute)
+	c.redis.Setex(cacheKey, string(cacheData), int(5*time.Minute/time.Second))
 
 	return &resp, nil
 }

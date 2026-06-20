@@ -3,8 +3,8 @@ from typing import Dict, Any, Optional
 import asyncio
 
 from langchain_openai import ChatOpenAI
-from langchain.schema import SystemMessage, HumanMessage
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.callbacks.base import BaseCallbackHandler
 
 from app.core.config import settings
 

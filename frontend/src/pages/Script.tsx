@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Card,
   Typography,
@@ -18,7 +19,12 @@ import {
   Modal,
   Tag,
   Drawer,
+  Upload,
+  Progress,
+  Empty,
+  Spin,
 } from 'antd';
+import { usePipelinePersistence } from '@/hooks/usePipelinePersistence';
 import {
   PlusOutlined,
   EditOutlined,
@@ -32,12 +38,24 @@ import {
   StarOutlined,
   FolderOpenOutlined,
   PlayCircleOutlined,
+  BookOutlined,
+  BulbOutlined,
+  InboxOutlined,
+  ArrowLeftOutlined,
+  LoadingOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  SettingOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons';
+import { scriptService } from '@/services/scriptService';
+import { workService } from '@/services/workService';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 const { Option } = Select;
 const { TabPane } = Tabs;
+const { Dragger } = Upload;
 
 // 场景类型定义
 interface Scene {
@@ -58,7 +76,7 @@ interface Character {
   description: string;
   age: number;
   gender: string;
-  role: string; // 主角、配角、反派等
+  role: string;
 }
 
 // 集数类型定义
@@ -71,102 +89,380 @@ interface Episode {
   description?: string;
 }
 
+// 生成状态
+type GenerationStatus = 'idle' | 'generating' | 'completed' | 'failed';
+
 const Script: React.FC = () => {
-  // 初始化默认数据
-  const initialScenes: Scene[] = [
-    {
-      id: 1,
-      title: '开场 - 相遇',
-      description: '男女主角在咖啡馆初次相遇',
-      location: '城市咖啡馆',
-      timeOfDay: '下午',
-      characters: ['李明', '张薇'],
-      content: '李明走进咖啡馆，四处张望。张薇坐在角落，专注地看着手中的书。',
-      order: 1,
-    },
-    {
-      id: 2,
-      title: '对话 - 自我介绍',
-      description: '两人开始交谈，互相了解',
-      location: '咖啡馆内',
-      timeOfDay: '下午',
-      characters: ['李明', '张薇'],
-      content: '李明：你好，我能坐这里吗？\n张薇：请坐。你也喜欢这本书吗？',
-      order: 2,
-    },
-    {
-      id: 3,
-      title: '冲突 - 误会',
-      description: '男主角的朋友出现引发误会',
-      location: '咖啡馆门口',
-      timeOfDay: '傍晚',
-      characters: ['李明', '张薇', '王强'],
-      content: '王强突然出现，误会两人的关系。张薇尴尬地解释。',
-      order: 3,
-    },
-  ];
+  const navigate = useNavigate();
+  // ============ 上传相关状态 ============
+  const [inputTab, setInputTab] = useState<string>('novel');
+  const [generationStatus, setGenerationStatus] = useState<GenerationStatus>('idle');
+  const [generationProgress, setGenerationProgress] = useState(0);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [generatedScriptTitle, setGeneratedScriptTitle] = useState<string>('');
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const initialCharacters: Character[] = [
-    {
-      id: 1,
-      name: '李明',
-      description: '软件工程师，性格内向但善良',
-      age: 28,
-      gender: '男',
-      role: '主角',
-    },
-    {
-      id: 2,
-      name: '张薇',
-      description: '作家，独立自主的女性',
-      age: 26,
-      gender: '女',
-      role: '主角',
-    },
-    {
-      id: 3,
-      name: '王强',
-      description: '李明的朋友，性格直爽',
-      age: 29,
-      gender: '男',
-      role: '配角',
-    },
-  ];
+  // 表单值
+  const [formTitle, setFormTitle] = useState('');
+  const [formContent, setFormContent] = useState('');
+  const [formTheme, setFormTheme] = useState('');
+  const [formStyle, setFormStyle] = useState('浪漫喜剧');
+  const [formLength, setFormLength] = useState('短篇');
+  const [formSetting, setFormSetting] = useState('现代都市');
 
-  // 多集数据状态
-  const [episodes, setEpisodes] = useState<Episode[]>([
-    {
-      id: 'ep-1',
-      title: '第一集',
-      number: 1,
-      scenes: initialScenes,
-      characters: initialCharacters,
-      description: '故事的开端，主角相遇',
-    },
-  ]);
-
-  // 当前激活的集数
-  const [activeEpisodeId, setActiveEpisodeId] = useState<string>('ep-1');
-
-  // 当前标签页
+  // ============ 分集剧本编辑状态 ============
+  const [episodes, setEpisodes] = useState<Episode[]>([]);
+  const [activeEpisodeId, setActiveEpisodeId] = useState<string>('');
   const [activeTab, setActiveTab] = useState('scenes');
-
-  // 当前编辑的场景和角色
   const [editingScene, setEditingScene] = useState<Scene | null>(null);
   const [isSceneModalOpen, setIsSceneModalOpen] = useState(false);
   const [isCharacterModalOpen, setIsCharacterModalOpen] = useState(false);
   const [editingCharacter, setEditingCharacter] = useState<Character | null>(null);
-
-  // 抽屉状态
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [editingEpisode, setEditingEpisode] = useState<Episode | null>(null);
 
-  // 获取当前集数的数据
+  // ============ 持久化 key（user-namespaced）============
+  const { saveState: persistState, loadState: loadPersisted, restoreFromBackend, getWorkId, setWorkId } = usePipelinePersistence();
+  const STORAGE_KEY = `script_page_state_${(window as any).__USER_ID__ || 'anonymous'}`;
+
+  const saveState = (state: Partial<{
+    episodes: Episode[]
+    generatedScriptTitle: string
+    generationStatus: GenerationStatus
+    generationProgress: number
+    taskId: string
+    scriptId: number
+  }>) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {}
+  };
+
+  const loadState = () => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const clearState = () => {
+    localStorage.removeItem(STORAGE_KEY);
+  };
+
+  // ============ 初始化：恢复上次的状态 ============
+  useEffect(() => {
+    const initLoad = async () => {
+      // 1. 本地 localStorage
+      let saved = loadState();
+
+      // 2. 管道命名空间 localStorage
+      if (!saved) {
+        saved = loadPersisted('script');
+      }
+
+      // 3. 从后端恢复
+      if (!saved) {
+        const workId = getWorkId();
+        if (workId) {
+          await restoreFromBackend(workId);
+          saved = loadPersisted('script') || loadState();
+        }
+      }
+
+      if (saved) {
+        if (saved.generationStatus === 'completed' && saved.episodes?.length > 0) {
+          setEpisodes(saved.episodes || []);
+          setGeneratedScriptTitle(saved.generatedScriptTitle || '');
+          setGenerationStatus('completed');
+          setGenerationProgress(100);
+          if (saved.episodes?.length > 0) {
+            setActiveEpisodeId(saved.episodes[0].id);
+          }
+        } else if (saved.generationStatus === 'generating' && saved.taskId) {
+          scriptService.getGenerationStatus(saved.taskId).then((status) => {
+            if (status && status.status !== 'failed') {
+              setGenerationStatus('generating');
+              setGenerationProgress(saved.generationProgress || 0);
+              setGeneratedScriptTitle(saved.generatedScriptTitle || '');
+              pollGenerationStatus(saved.taskId);
+            } else {
+              clearState();
+            }
+          }).catch(() => {
+            clearState();
+          });
+        } else {
+          clearState();
+        }
+      }
+    };
+    initLoad();
+  }, []);
+
+  // ============ 轮询逻辑 ============
+  const pollGenerationStatus = useCallback((id: string) => {
+    pollingRef.current = setInterval(async () => {
+      try {
+        const status = await scriptService.getGenerationStatus(id);
+        if (status) {
+          setGenerationProgress(status.progress || 0);
+          saveState({
+            generationStatus: 'generating',
+            generationProgress: status.progress || 0,
+            taskId: id,
+            generatedScriptTitle: formTitle,
+          });
+
+          if (status.status === 'completed') {
+            clearInterval(pollingRef.current!);
+            pollingRef.current = null;
+            setGenerationStatus('completed');
+            setGenerationProgress(100);
+            message.success('剧本生成完成！');
+
+            if (status.result) {
+              const script = status.result;
+              setGeneratedScriptTitle(script.title || formTitle);
+              parseScriptToEpisodes(script.content || '', script.title || formTitle);
+            } else {
+              setGeneratedScriptTitle(formTitle);
+              createDefaultEpisodes(formTitle);
+            }
+          } else if (status.status === 'failed') {
+            clearInterval(pollingRef.current!);
+            pollingRef.current = null;
+            setGenerationStatus('failed');
+            setGenerationError(status.error || status.error_message || '剧本生成失败，请重试');
+            message.error(status.error || status.error_message || '剧本生成失败，请重试');
+            saveState({ generationStatus: 'failed' });
+          }
+        }
+      } catch (err: any) {
+        // 404 = 任务已不存在，停止轮询
+        if (err?.response?.status === 404) {
+          clearInterval(pollingRef.current!);
+          pollingRef.current = null;
+          clearState();
+          setGenerationStatus('idle');
+          console.log('任务已过期，已停止轮询');
+        } else {
+          console.error('轮询状态失败:', err?.message || err);
+        }
+      }
+    }, 3000);
+  }, [formTitle]);
+
+  // 清理轮询
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+    };
+  }, []);
+
+  // ============ 解析剧本内容为分集 ============
+  const parseScriptToEpisodes = (content: string, title: string) => {
+    const episodes: Episode[] = [];
+    const episodePattern = /(?:第\s*([一二三四五六七八九十百千万\d]+)\s*集|Episode\s+(\d+))/gi;
+    const parts = content.split(episodePattern);
+
+    if (parts.length <= 1) {
+      episodes.push({
+        id: 'ep-1',
+        title: title || '完整剧本',
+        number: 1,
+        scenes: [],
+        characters: [],
+        description: content,
+      });
+    } else {
+      let epIndex = 0;
+      let currentEpContent = '';
+      let currentEpTitle = '';
+      let epNumber = 1;
+
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i]?.trim();
+        if (!part) continue;
+
+        const epMatch = part.match(/^[一二三四五六七八九十百千万\d]+$/);
+        if (epMatch && i + 1 < parts.length) {
+          if (currentEpContent) {
+            episodes.push({
+              id: `ep-${epIndex + 1}`,
+              title: currentEpTitle || `第${epNumber}集`,
+              number: epNumber,
+              scenes: [],
+              characters: [],
+              description: currentEpContent.trim(),
+            });
+            epIndex++;
+          }
+          epNumber = epIndex + 1;
+          currentEpTitle = `第${part}集`;
+          currentEpContent = '';
+        } else if (part) {
+          currentEpContent += part + '\n';
+        }
+      }
+
+      if (currentEpContent) {
+        episodes.push({
+          id: `ep-${epIndex + 1}`,
+          title: currentEpTitle || `第${epNumber}集`,
+          number: epNumber,
+          scenes: [],
+          characters: [],
+          description: currentEpContent.trim(),
+        });
+      }
+    }
+
+    setEpisodes(episodes);
+    if (episodes.length > 0) {
+      setActiveEpisodeId(episodes[0].id);
+    }
+  };
+
+  const createDefaultEpisodes = (title: string) => {
+    const defaultEpisode: Episode = {
+      id: 'ep-1',
+      title: title || '第一集',
+      number: 1,
+      scenes: [],
+      characters: [],
+      description: '剧本内容将在此展示',
+    };
+    setEpisodes([defaultEpisode]);
+    setActiveEpisodeId(defaultEpisode.id);
+  };
+
+  // ============ 生成剧本 ============
+  const handleGenerate = async () => {
+    if (!formTitle.trim()) {
+      message.warning('请输入剧本标题');
+      return;
+    }
+    if (!formContent.trim()) {
+      message.warning('请输入内容');
+      return;
+    }
+
+    setGenerationStatus('generating');
+    setGenerationProgress(0);
+    setGenerationError(null);
+
+    try {
+      let response;
+
+      if (inputTab === 'novel') {
+        response = await scriptService.generateScriptFromNovel({
+          title: formTitle,
+          novel_content: formContent,
+          theme: formTheme,
+          length: formLength,
+          style: formStyle,
+          setting: formSetting,
+        });
+      } else if (inputTab === 'script') {
+        response = await scriptService.generateScript({
+          title: formTitle,
+          description: formContent.slice(0, 500),
+          genre: 'drama' as any,
+          target_duration_minutes: formLength === '短篇' ? 10 : formLength === '中篇' ? 30 : 60,
+          character_count: 3,
+          style: formStyle as any,
+          theme: formTheme,
+        });
+      } else if (inputTab === 'idea') {
+        response = await scriptService.generateScriptFromOutline({
+          title: formTitle,
+          outline: formContent,
+          theme: formTheme,
+          length: formLength,
+          style: formStyle,
+          setting: formSetting,
+        });
+      }
+
+      if (response?.task_id) {
+        const id = response.task_id;
+        setGenerationProgress(10);
+        saveState({
+          generationStatus: 'generating',
+          generationProgress: 10,
+          taskId: id,
+          generatedScriptTitle: formTitle,
+        });
+        message.info('剧本生成任务已提交，正在生成中...');
+        pollGenerationStatus(id);
+      } else {
+        throw new Error('未获取到任务ID');
+      }
+    } catch (err: any) {
+      setGenerationStatus('failed');
+      setGenerationError(err?.response?.data?.detail || err?.message || '生成请求失败');
+      message.error('生成请求失败，请重试');
+    }
+  };
+
+  // 自动保存：当生成完成且 episodes 有数据时保存
+  useEffect(() => {
+    if (generationStatus === 'completed' && episodes.length > 0) {
+      const scriptData = {
+        episodes: JSON.parse(JSON.stringify(episodes)),
+        generatedScriptTitle,
+        generationStatus,
+        generationProgress,
+      };
+      saveState(scriptData);
+
+      // 确保有 workId：没有则自动创建作品
+      const ensureWork = async () => {
+        let workId = getWorkId();
+        if (!workId) {
+          try {
+            const work = await workService.createWork({
+              title: generatedScriptTitle || '未命名剧本',
+              type: '短剧',
+              description: '',
+              userId: (window as any).__USER_ID__ || 'anonymous',
+            });
+            if (work?.id) {
+              setWorkId(work.id);
+              workId = work.id;
+            }
+          } catch (e) {
+            console.error('自动创建作品失败:', e);
+          }
+        }
+        // 持久化到后端
+        if (workId) {
+          persistState('script', scriptData, workId);
+        }
+      };
+      ensureWork();
+    }
+  }, [episodes, generationStatus, generatedScriptTitle, generationProgress]);
+
+  // 返回上传视图
+  const handleBackToUpload = () => {
+    // 保留 localStorage 缓存，只重置组件状态
+    setGenerationStatus('idle');
+    setGenerationProgress(0);
+    setGenerationError(null);
+    setEpisodes([]);
+    setActiveEpisodeId('');
+  };
+
+  // ============ 集数操作 ============
   const currentEpisode = episodes.find(ep => ep.id === activeEpisodeId);
   const currentScenes = currentEpisode?.scenes || [];
   const currentCharacters = currentEpisode?.characters || [];
 
-  // 集数操作
   const handleAddEpisode = () => {
     const newEpisode: Episode = {
       id: `ep-${Date.now()}`,
@@ -214,7 +510,16 @@ const Script: React.FC = () => {
     }
   };
 
-  // 场景操作
+  // ============ 场景操作 ============
+  const updateEpisodeScenes = (scenes: Scene[]) => {
+    if (currentEpisode) {
+      const updatedEpisodes = episodes.map(ep =>
+        ep.id === currentEpisode.id ? { ...ep, scenes } : ep
+      );
+      setEpisodes(updatedEpisodes);
+    }
+  };
+
   const handleAddScene = () => {
     const newScene: Scene = {
       id: Date.now(),
@@ -250,13 +555,15 @@ const Script: React.FC = () => {
   const handleSaveScene = (values: any) => {
     if (editingScene) {
       const updatedScene = { ...editingScene, ...values };
-      const updatedScenes = currentScenes.map(scene =>
-        scene.id === updatedScene.id ? updatedScene : scene
-      );
+      let updatedScenes: Scene[];
 
-      if (!editingScene.id) {
-        // 添加新场景
-        updatedScenes.push(updatedScene);
+      const exists = currentScenes.find(s => s.id === updatedScene.id);
+      if (exists) {
+        updatedScenes = currentScenes.map(scene =>
+          scene.id === updatedScene.id ? updatedScene : scene
+        );
+      } else {
+        updatedScenes = [...currentScenes, updatedScene];
       }
 
       updateEpisodeScenes(updatedScenes);
@@ -265,7 +572,16 @@ const Script: React.FC = () => {
     }
   };
 
-  // 角色操作
+  // ============ 角色操作 ============
+  const updateEpisodeCharacters = (characters: Character[]) => {
+    if (currentEpisode) {
+      const updatedEpisodes = episodes.map(ep =>
+        ep.id === currentEpisode.id ? { ...ep, characters } : ep
+      );
+      setEpisodes(updatedEpisodes);
+    }
+  };
+
   const handleAddCharacter = () => {
     const newCharacter: Character = {
       id: Date.now(),
@@ -299,13 +615,15 @@ const Script: React.FC = () => {
   const handleSaveCharacter = (values: any) => {
     if (editingCharacter) {
       const updatedCharacter = { ...editingCharacter, ...values };
-      const updatedCharacters = currentCharacters.map(char =>
-        char.id === updatedCharacter.id ? updatedCharacter : char
-      );
+      let updatedCharacters: Character[];
 
-      if (!editingCharacter.id) {
-        // 添加新角色
-        updatedCharacters.push(updatedCharacter);
+      const exists = currentCharacters.find(c => c.id === updatedCharacter.id);
+      if (exists) {
+        updatedCharacters = currentCharacters.map(char =>
+          char.id === updatedCharacter.id ? updatedCharacter : char
+        );
+      } else {
+        updatedCharacters = [...currentCharacters, updatedCharacter];
       }
 
       updateEpisodeCharacters(updatedCharacters);
@@ -314,26 +632,252 @@ const Script: React.FC = () => {
     }
   };
 
-  // 更新当前集数的场景和角色
-  const updateEpisodeScenes = (scenes: Scene[]) => {
-    if (currentEpisode) {
-      const updatedEpisodes = episodes.map(ep =>
-        ep.id === currentEpisode.id ? { ...ep, scenes } : ep
-      );
-      setEpisodes(updatedEpisodes);
-    }
+  // ============ 文件上传处理 ============
+  const handleFileUpload = (file: File): boolean => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      setFormContent(text);
+      message.success(`已加载文件: ${file.name}`);
+    };
+    reader.onerror = () => {
+      message.error('文件读取失败');
+    };
+    reader.readAsText(file);
+    return false; // 阻止自动上传
   };
 
-  const updateEpisodeCharacters = (characters: Character[]) => {
-    if (currentEpisode) {
-      const updatedEpisodes = episodes.map(ep =>
-        ep.id === currentEpisode.id ? { ...ep, characters } : ep
-      );
-      setEpisodes(updatedEpisodes);
-    }
-  };
+  // ============ 渲染：上传视图 ============
+  const renderUploadForm = () => (
+    <div style={{ maxWidth: 800, margin: '0 auto', padding: '24px 0' }}>
+      <Form layout="vertical" size="large">
+        <Form.Item
+          label="剧本标题"
+          required
+          rules={[{ required: true, message: '请输入剧本标题' }]}
+        >
+          <Input
+            placeholder="给你的剧本起个名字..."
+            value={formTitle}
+            onChange={(e) => setFormTitle(e.target.value)}
+            prefix={<FileTextOutlined style={{ color: '#d2d2d7' }} />}
+          />
+        </Form.Item>
 
-  // 渲染场景列表
+        <Form.Item
+          label={
+            <span>
+              {inputTab === 'novel' ? '小说内容' : inputTab === 'script' ? '剧本内容' : '想法/大纲'}
+            </span>
+          }
+          required
+        >
+          <TextArea
+            placeholder={
+              inputTab === 'novel'
+                ? '在此粘贴您的小说内容，或使用下方的文件上传功能...'
+                : inputTab === 'script'
+                ? '在此粘贴您的剧本内容...'
+                : '在此描述您的创意想法或剧本大纲...'
+            }
+            rows={12}
+            value={formContent}
+            onChange={(e) => setFormContent(e.target.value)}
+            style={{ fontSize: 14 }}
+          />
+        </Form.Item>
+
+        {inputTab === 'novel' && (
+          <Form.Item label="上传小说文件">
+            <Dragger
+              accept=".txt,.md,.docx"
+              multiple={false}
+              beforeUpload={handleFileUpload}
+              maxCount={1}
+            >
+              <p className="ant-upload-drag-icon">
+                <InboxOutlined />
+              </p>
+              <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
+              <p className="ant-upload-hint">支持 .txt, .md 文件</p>
+            </Dragger>
+          </Form.Item>
+        )}
+
+        <Row gutter={24}>
+          <Col span={8}>
+            <Form.Item label="剧本主题">
+              <Input
+                placeholder="例如：爱情、复仇、成长"
+                value={formTheme}
+                onChange={(e) => setFormTheme(e.target.value)}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item label="剧本风格">
+              <Select value={formStyle} onChange={setFormStyle}>
+                <Option value="浪漫喜剧">浪漫喜剧</Option>
+                <Option value="悬疑推理">悬疑推理</Option>
+                <Option value="科幻未来">科幻未来</Option>
+                <Option value="古风历史">古风历史</Option>
+                <Option value="都市情感">都市情感</Option>
+                <Option value="奇幻冒险">奇幻冒险</Option>
+                <Option value="恐怖惊悚">恐怖惊悚</Option>
+                <Option value="动作武侠">动作武侠</Option>
+              </Select>
+            </Form.Item>
+          </Col>
+          <Col span={8}>
+            <Form.Item label="剧本长度">
+              <Select value={formLength} onChange={setFormLength}>
+                <Option value="短篇">短篇（~10分钟）</Option>
+                <Option value="中篇">中篇（~30分钟）</Option>
+                <Option value="长篇">长篇（~60分钟）</Option>
+              </Select>
+            </Form.Item>
+          </Col>
+        </Row>
+
+        <Form.Item label="故事背景">
+          <Input
+            placeholder="例如：现代都市、古代宫廷、未来世界"
+            value={formSetting}
+            onChange={(e) => setFormSetting(e.target.value)}
+          />
+        </Form.Item>
+
+        <div style={{ textAlign: 'center', marginTop: 32 }}>
+          <Button
+            type="primary"
+            size="large"
+            icon={generationStatus === 'generating' ? <LoadingOutlined /> : <PlayCircleOutlined />}
+            onClick={handleGenerate}
+            loading={generationStatus === 'generating'}
+            style={{ minWidth: 200, height: 48, fontSize: 16 }}
+          >
+            {generationStatus === 'generating' ? '生成中...' : '开始生成剧本'}
+          </Button>
+        </div>
+      </Form>
+
+      {/* 生成进度 */}
+      {generationStatus === 'generating' && (
+        <div style={{ marginTop: 24, textAlign: 'center' }}>
+          <Progress
+            percent={generationProgress}
+            status="active"
+            strokeColor={{ from: '#0066cc', to: '#34c759' }}
+          />
+          <Text type="secondary">
+            <LoadingOutlined style={{ marginRight: 8 }} />
+            AI 正在分析内容并生成剧本，请稍候...
+          </Text>
+        </div>
+      )}
+
+      {/* 生成失败 */}
+      {generationStatus === 'failed' && (
+        <div style={{ marginTop: 24, textAlign: 'center' }}>
+          <div style={{ color: '#ff3b30', marginBottom: 16 }}>
+            <CloseCircleOutlined style={{ fontSize: 48 }} />
+            <Title level={4} type="danger">生成失败</Title>
+            <Text type="danger">{generationError}</Text>
+          </div>
+          <Button type="primary" onClick={handleGenerate}>
+            重新生成
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+
+  // ============ 渲染：上传标签页 ============
+  const renderUploadTabs = () => (
+    <div style={{ padding: '24px', height: 'calc(100vh - 120px)', overflow: 'auto' }}>
+      <div style={{ maxWidth: 900, margin: '0 auto' }}>
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <Title level={2}>
+            <FileTextOutlined style={{ marginRight: 12 }} />
+            故事剧本创作
+          </Title>
+          <Text type="secondary" style={{ fontSize: 16 }}>
+            选择一种方式开始创作您的短剧剧本
+          </Text>
+        </div>
+
+        <Tabs
+          activeKey={inputTab}
+          onChange={(key) => {
+            setInputTab(key);
+            setGenerationStatus('idle');
+            setGenerationProgress(0);
+            setGenerationError(null);
+          }}
+          type="card"
+          size="large"
+          centered
+          style={{ marginBottom: 24 }}
+        >
+          <TabPane
+            tab={
+              <span>
+                <BookOutlined />
+                上传小说
+              </span>
+            }
+            key="novel"
+          />
+          <TabPane
+            tab={
+              <span>
+                <FileTextOutlined />
+                上传剧本
+              </span>
+            }
+            key="script"
+          />
+          <TabPane
+            tab={
+              <span>
+                <BulbOutlined />
+                上传想法
+              </span>
+            }
+            key="idea"
+          />
+          <TabPane
+            tab={
+              <span>
+                <InboxOutlined />
+                预留功能
+              </span>
+            }
+            key="reserved"
+          />
+        </Tabs>
+
+        {/* 根据标签页显示不同内容 */}
+        {inputTab === 'reserved' ? (
+          <div style={{ textAlign: 'center', padding: '80px 0' }}>
+            <Empty
+              image={<InboxOutlined style={{ fontSize: 80, color: '#e5e5ea' }} />}
+              description={
+                <div>
+                  <Title level={4} type="secondary">功能开发中</Title>
+                  <Text type="secondary">此功能正在规划中，敬请期待...</Text>
+                </div>
+              }
+            />
+          </div>
+        ) : (
+          renderUploadForm()
+        )}
+      </div>
+    </div>
+  );
+
+  // ============ 渲染：场景列表 ============
   const renderScenes = () => (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -377,7 +921,7 @@ const Script: React.FC = () => {
 
                 <Divider style={{ margin: '12px 0' }} />
 
-                <div style={{ background: '#f5f5f5', padding: 12, borderRadius: 4 }}>
+                <div style={{ background: '#ffffff', padding: 12, borderRadius: 4 }}>
                   <Text strong>场景内容：</Text>
                   <div style={{ whiteSpace: 'pre-wrap', marginTop: 8 }}>{scene.content}</div>
                 </div>
@@ -387,7 +931,7 @@ const Script: React.FC = () => {
         )}
       />
       {currentScenes.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+        <div style={{ textAlign: 'center', padding: 40, color: '#aeaeb2' }}>
           <FileTextOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }} />
           <p>暂无场景，点击"添加场景"按钮开始创建</p>
         </div>
@@ -395,7 +939,7 @@ const Script: React.FC = () => {
     </div>
   );
 
-  // 渲染角色列表
+  // ============ 渲染：角色列表 ============
   const renderCharacters = () => (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -422,8 +966,8 @@ const Script: React.FC = () => {
                 avatar={
                   <Avatar
                     style={{
-                      backgroundColor: character.role === '主角' ? '#1890ff' :
-                                      character.role === '配角' ? '#52c41a' : '#fa541c',
+                      backgroundColor: character.role === '主角' ? '#0066cc' :
+                                      character.role === '配角' ? '#34c759' : '#ff9500',
                       fontSize: 20,
                     }}
                   >
@@ -451,7 +995,7 @@ const Script: React.FC = () => {
         ))}
       </Row>
       {currentCharacters.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+        <div style={{ textAlign: 'center', padding: 40, color: '#aeaeb2' }}>
           <UserOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }} />
           <p>暂无角色，点击"添加角色"按钮开始创建</p>
         </div>
@@ -459,7 +1003,7 @@ const Script: React.FC = () => {
     </div>
   );
 
-  // 渲染大纲
+  // ============ 渲染：大纲 ============
   const renderOutline = () => (
     <div>
       <Title level={4}>剧本大纲</Title>
@@ -488,10 +1032,10 @@ const Script: React.FC = () => {
     </div>
   );
 
-  // 渲染集数列表
+  // ============ 渲染：集数列表 ============
   const renderEpisodeList = () => (
-    <div style={{ borderRight: '1px solid #f0f0f0', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '16px', borderBottom: '1px solid #f0f0f0' }}>
+    <div style={{ borderRight: '1px solid #f5f5f7', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '16px', borderBottom: '1px solid #f5f5f7' }}>
         <Title level={4} style={{ margin: 0 }}>
           <FolderOpenOutlined style={{ marginRight: 8 }} />
           集数列表
@@ -507,8 +1051,8 @@ const Script: React.FC = () => {
             style={{
               padding: '12px 16px',
               cursor: 'pointer',
-              backgroundColor: activeEpisodeId === episode.id ? '#e6f7ff' : 'transparent',
-              borderBottom: '1px solid #f0f0f0',
+              backgroundColor: activeEpisodeId === episode.id ? '#e8f2fd' : 'transparent',
+              borderBottom: '1px solid #f5f5f7',
               transition: 'background-color 0.2s',
             }}
           >
@@ -516,11 +1060,11 @@ const Script: React.FC = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <StarOutlined
                   style={{
-                    color: activeEpisodeId === episode.id ? '#1890ff' : '#d9d9d9',
+                    color: activeEpisodeId === episode.id ? '#0066cc' : '#e5e5ea',
                     fontSize: 16
                   }}
                 />
-                <Text strong style={{ color: activeEpisodeId === episode.id ? '#1890ff' : undefined }}>
+                <Text strong style={{ color: activeEpisodeId === episode.id ? '#0066cc' : undefined }}>
                   {episode.title}
                 </Text>
               </div>
@@ -558,7 +1102,7 @@ const Script: React.FC = () => {
         ))}
       </div>
 
-      <div style={{ padding: '16px', borderTop: '1px solid #f0f0f0' }}>
+      <div style={{ padding: '16px', borderTop: '1px solid #f5f5f7' }}>
         <Button
           type="dashed"
           block
@@ -571,281 +1115,312 @@ const Script: React.FC = () => {
     </div>
   );
 
-  return (
-    <div style={{ padding: '24px', height: 'calc(100vh - 120px)', display: 'flex' }}>
-      {/* 左侧集数列表 */}
-      <div style={{ width: 280, marginRight: 24, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
-        {renderEpisodeList()}
+  // ============ 主体提取弹窗 ============
+  const [isExtractModalOpen, setIsExtractModalOpen] = useState(false);
+  const [extractedEntities, setExtractedEntities] = useState<{
+    characters: { name: string; role: string; description: string }[]
+    locations: string[]
+    items: string[]
+  } | null>(null);
+
+  const handleExtractEntities = async () => {
+    try {
+      const fullText = episodes.map((ep) => ep.description).join('\n');
+      if (!fullText.trim()) {
+        message.warning('剧本内容为空，无法提取');
+        return;
+      }
+      message.loading({ content: '正在提取角色、场景、道具...', key: 'extract', duration: 0 });
+      const data = await scriptService.extractEntities(fullText);
+      message.destroy('extract');
+
+      // 构建场景数据（从地点列表）
+      const extractedScenes = (data.locations || []).map((loc: any, idx: number) => ({
+        id: idx + 1,
+        name: typeof loc === 'string' ? loc : (loc.name || ''),
+        description: typeof loc === 'object' ? (loc.description || '') : '',
+        type: '室内',
+        environment: '',
+        size: '中等',
+        tags: [],
+      }));
+
+      // 构建角色数据
+      const extractedCharacters = (data.characters || []).map((c: any, idx: number) => ({
+        id: idx + 1,
+        name: c.name || '',
+        description: c.description || '',
+        age: 25,
+        gender: c.role === '反派' ? '男' : '女',
+        occupation: '',
+        personality: c.description || '',
+        appearance: '',
+        tags: [c.role || '配角'],
+      }));
+
+      // 构建道具数据
+      const extractedProps = (data.props || []).map((p: any, idx: number) => ({
+        id: idx + 1,
+        name: typeof p === 'string' ? p : (p.name || ''),
+        description: typeof p === 'object' ? (p.description || '') : '',
+        category: '其他',
+        material: '',
+        size: '小型',
+        tags: [],
+      }));
+
+      // 存储到 localStorage 供 Scene 页面读取
+      localStorage.setItem('extracted_entities', JSON.stringify({
+        scenes: extractedScenes,
+        characters: extractedCharacters,
+        props: extractedProps,
+        extractedAt: new Date().toISOString(),
+      }));
+
+      const totalCount = extractedCharacters.length + extractedScenes.length + extractedProps.length;
+      message.success(`提取完成：${extractedCharacters.length} 个角色、${extractedScenes.length} 个场景、${extractedProps.length} 个道具`);
+      navigate('/scene');
+    } catch {
+      message.destroy('extract');
+      message.error('主体提取失败，请重试');
+    }
+  };
+
+  // ============ 全局设置状态 ============
+  const [settingsOpen, setSettingsOpen] = useState(true);
+  const [scriptSettings, setScriptSettings] = useState({
+    videoRatio: '16:9',
+    creationMode: 'ai',
+    styleReference: [] as string[],
+    videoQuality: '1080p',
+    frameRate: 30,
+    aiCharacterCount: 2,
+    scriptLength: 5,
+    styleCategory: '',
+    styleDescription: '',
+  });
+
+  const updateSetting = (key: string, value: any) => {
+    setScriptSettings((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const videoRatioOptions = [
+    { value: '16:9', label: '16:9 (横)' },
+    { value: '9:16', label: '9:16 (竖)' },
+    { value: '1:1', label: '1:1 (方)' },
+    { value: '4:3', label: '4:3' },
+  ];
+
+  // ============ 渲染：分集剧本展示 ============
+  const renderScriptEditor = () => (
+    <div style={{ height: 'calc(100vh - 64px)', display: 'flex', flexDirection: 'column' }}>
+      {/* 顶部主体提取栏 */}
+      <div style={{
+        padding: '8px 24px', background: '#fff', borderBottom: '1px solid #e5e5ea',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Button size="small" icon={<ArrowLeftOutlined />} onClick={handleBackToUpload}>返回</Button>
+          <Title level={5} style={{ margin: 0 }}>
+            <FileTextOutlined style={{ marginRight: 6 }} />
+            {generatedScriptTitle || currentEpisode?.title || '剧本'}
+          </Title>
+          <Tag color="success" style={{ fontSize: 12 }}>已生成</Tag>
+        </div>
+        <Button
+          type="primary"
+          size="middle"
+          icon={<ExperimentOutlined />}
+          onClick={handleExtractEntities}
+        >
+          主体提取
+        </Button>
       </div>
 
-      {/* 右侧内容区域 */}
-      <div style={{ flex: 1, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.1)', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '24px', borderBottom: '1px solid #f0f0f0' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <Title level={2} style={{ margin: 0 }}>
-                <FileTextOutlined style={{ marginRight: 12 }} />
-                {currentEpisode?.title}
-              </Title>
-              <Text type="secondary">
-                创建和管理您的剧本内容，包括场景、角色和剧情
-              </Text>
-            </div>
-            <Button
-              type="primary"
-              icon={<PlayCircleOutlined />}
-              onClick={() => message.info('预览功能开发中')}
-            >
-              预览本集
+      {/* 下方内容区 */}
+      <div style={{ flex: 1, display: 'flex', gap: 16, padding: '16px 24px', overflow: 'hidden' }}>
+        {/* 左侧集数列表 */}
+        <div style={{ width: 220, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '16px', borderBottom: '1px solid #f5f5f7' }}>
+            <Title level={5} style={{ margin: 0 }}>
+              <FolderOpenOutlined style={{ marginRight: 6 }} />
+              集数列表
+            </Title>
+            <Text type="secondary" style={{ fontSize: 12 }}>共 {episodes.length} 集</Text>
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {episodes.map((episode) => (
+              <div
+                key={episode.id}
+                onClick={() => setActiveEpisodeId(episode.id)}
+                style={{
+                  padding: '10px 16px', cursor: 'pointer', borderBottom: '1px solid #f5f5f7',
+                  backgroundColor: activeEpisodeId === episode.id ? '#e8f2fd' : 'transparent',
+                }}
+              >
+                <Text strong style={{ fontSize: 13, color: activeEpisodeId === episode.id ? '#0066cc' : undefined }}>
+                  {episode.title}
+                </Text>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 中间剧本内容 */}
+        <div style={{ flex: 1, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '12px 24px', borderBottom: '1px solid #f5f5f7', display: 'flex', justifyContent: 'flex-end' }}>
+            <Button size="small" onClick={() => setSettingsOpen(!settingsOpen)}>
+              {settingsOpen ? '收起设置' : '全局设置'}
             </Button>
           </div>
+          <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px' }}>
+            <div style={{
+              background: '#fafafa', borderRadius: 6, padding: '24px 28px',
+              fontFamily: '"Noto Serif SC", STSong, serif', fontSize: 14, lineHeight: 2,
+              whiteSpace: 'pre-wrap', color: '#1d1d1f', minHeight: 300,
+            }}>
+              {currentEpisode?.description || '选择左侧集数查看剧本内容'}
+            </div>
+          </div>
         </div>
 
-        <div style={{ padding: '24px', flex: 1 }}>
-          <Tabs activeKey={activeTab} onChange={setActiveTab}>
-            <TabPane tab="场景管理" key="scenes">
-              {renderScenes()}
-            </TabPane>
-            <TabPane tab="角色管理" key="characters">
-              {renderCharacters()}
-            </TabPane>
-            <TabPane tab="剧本大纲" key="outline">
-              {renderOutline()}
-            </TabPane>
-          </Tabs>
-        </div>
+        {/* 右侧全局设置 */}
+        {settingsOpen && (
+          <div style={{ width: 300, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)', overflowY: 'auto' }}>
+            <div style={{ padding: '16px', borderBottom: '1px solid #f5f5f7' }}>
+              <Title level={5} style={{ margin: 0 }}>
+                <SettingOutlined style={{ marginRight: 6 }} />
+                全局设置
+              </Title>
+            </div>
+            <div style={{ padding: '12px 16px' }}>
+              <Form layout="vertical" size="small">
+                <Form.Item label="视频比例">
+                  <Select value={scriptSettings.videoRatio} onChange={(v) => updateSetting('videoRatio', v)}>
+                    {videoRatioOptions.map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+                  </Select>
+                </Form.Item>
+                <Form.Item label="画质">
+                  <Select value={scriptSettings.videoQuality} onChange={(v) => updateSetting('videoQuality', v)}>
+                    <Option value="4k">4K</Option>
+                    <Option value="1080p">1080p</Option>
+                    <Option value="720p">720p</Option>
+                  </Select>
+                </Form.Item>
+                <Form.Item label="帧率">
+                  <Select value={scriptSettings.frameRate} onChange={(v) => updateSetting('frameRate', v)}>
+                    <Option value={24}>24 fps</Option>
+                    <Option value={30}>30 fps</Option>
+                    <Option value={60}>60 fps</Option>
+                  </Select>
+                </Form.Item>
+                <Divider style={{ margin: '8px 0' }} />
+                <Form.Item label="创作模式">
+                  <Select value={scriptSettings.creationMode} onChange={(v) => updateSetting('creationMode', v)}>
+                    <Option value="ai">AI 生成</Option>
+                    <Option value="assist">AI 辅助</Option>
+                    <Option value="manual">手动</Option>
+                  </Select>
+                </Form.Item>
+                <Form.Item label="角色数量">
+                  <InputNumber min={1} max={10} value={scriptSettings.aiCharacterCount} onChange={(v) => updateSetting('aiCharacterCount', v)} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item label="剧本时长(分钟)">
+                  <InputNumber min={1} max={60} value={scriptSettings.scriptLength} onChange={(v) => updateSetting('scriptLength', v)} style={{ width: '100%' }} />
+                </Form.Item>
+                <Divider style={{ margin: '8px 0' }} />
+                <Form.Item label="视频风格">
+                  <Select value={scriptSettings.styleCategory} onChange={(v) => updateSetting('styleCategory', v)} placeholder="选择风格" allowClear>
+                    <Option value="古风写实">古风写实</Option>
+                    <Option value="赛博朋克">赛博朋克</Option>
+                    <Option value="都市情感">都市情感</Option>
+                    <Option value="日漫">日漫</Option>
+                    <Option value="3D国风">3D国风</Option>
+                    <Option value="皮克斯风格">皮克斯风格</Option>
+                    <Option value="水墨画">水墨画</Option>
+                  </Select>
+                </Form.Item>
+                <Form.Item label="风格描述">
+                  <TextArea rows={3} value={scriptSettings.styleDescription}
+                    onChange={(e) => updateSetting('styleDescription', e.target.value)}
+                    placeholder="描述想要的视频风格..." />
+                </Form.Item>
+                <Button type="primary" block icon={<SaveOutlined />}
+                  onClick={() => message.success('设置已保存')}>
+                  保存设置
+                </Button>
+              </Form>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* 场景编辑模态框 */}
+      {/* 主体提取弹窗 */}
       <Modal
-        title={editingScene?.id ? '编辑场景' : '添加场景'}
-        open={isSceneModalOpen}
-        onCancel={() => {
-          setIsSceneModalOpen(false);
-          setEditingScene(null);
-        }}
-        footer={null}
-        width={600}
+        title={<><ExperimentOutlined style={{ marginRight: 8 }} />主体提取结果</>}
+        open={isExtractModalOpen}
+        onCancel={() => setIsExtractModalOpen(false)}
+        footer={<Button onClick={() => setIsExtractModalOpen(false)}>关闭</Button>}
+        width={640}
       >
-        <Form
-          layout="vertical"
-          onFinish={handleSaveScene}
-          initialValues={editingScene || {}}
-        >
-          <Form.Item
-            label="场景标题"
-            name="title"
-            rules={[{ required: true, message: '请输入场景标题' }]}
-          >
-            <Input placeholder="例如：开场 - 相遇" />
-          </Form.Item>
-          <Form.Item
-            label="场景描述"
-            name="description"
-          >
-            <Input placeholder="简要描述这个场景的内容" />
-          </Form.Item>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                label="地点"
-                name="location"
-                rules={[{ required: true, message: '请输入地点' }]}
-              >
-                <Input placeholder="例如：城市咖啡馆" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                label="时间"
-                name="timeOfDay"
-              >
-                <Select placeholder="选择时间">
-                  <Option value="早晨">早晨</Option>
-                  <Option value="上午">上午</Option>
-                  <Option value="中午">中午</Option>
-                  <Option value="下午">下午</Option>
-                  <Option value="傍晚">傍晚</Option>
-                  <Option value="夜晚">夜晚</Option>
-                </Select>
-              </Form.Item>
-            </Col>
-          </Row>
-          <Form.Item
-            label="场景顺序"
-            name="order"
-          >
-            <InputNumber min={1} max={100} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item
-            label="场景内容"
-            name="content"
-            rules={[{ required: true, message: '请输入场景内容' }]}
-          >
-            <TextArea rows={6} placeholder="详细描述场景内容，包括对话和动作" />
-          </Form.Item>
-          <Form.Item
-            label="参与角色"
-            name="characters"
-          >
-            <Select
-              mode="tags"
-              tokenSeparators={[',']}
-              style={{ width: '100%' }}
-              placeholder="输入角色名称，按回车确认"
-              options={currentCharacters.map(char => ({
-                value: char.name,
-                label: char.name,
-              }))}
-            />
-          </Form.Item>
-          <div style={{ textAlign: 'right' }}>
-            <Space>
-              <Button onClick={() => {
-                setIsSceneModalOpen(false);
-                setEditingScene(null);
-              }}>
-                取消
-              </Button>
-              <Button type="primary" htmlType="submit">
-                保存
-              </Button>
-            </Space>
+        {extractedEntities === null && (
+          <div style={{ textAlign: 'center', padding: 40 }}>
+            <Spin size="large" />
+            <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>AI 正在分析剧本，提取主体信息...</Text>
           </div>
-        </Form>
+        )}
+        {extractedEntities && extractedEntities.characters.length === 0 && extractedEntities.locations.length === 0 && extractedEntities.items.length === 0 && (
+          <Text type="secondary">未从剧本中提取到角色和地点信息。</Text>
+        )}
+        {extractedEntities && (extractedEntities.characters.length > 0 || extractedEntities.locations.length > 0 || extractedEntities.items.length > 0) && (
+          <div>
+            {extractedEntities.characters.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <Title level={5}>👤 角色 ({extractedEntities.characters.length})</Title>
+                <Row gutter={[12, 12]}>
+                  {extractedEntities.characters.slice(0, 6).map((c: any, i: number) => (
+                    <Col span={12} key={i}>
+                      <Card size="small" style={{ background: '#f8f8fa' }}>
+                        <Text strong>{c.name}</Text>
+                        {c.role && <Tag style={{ marginLeft: 4 }}>{c.role}</Tag>}
+                        <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>{(c.description || '').slice(0, 60)}</Text>
+                      </Card>
+                    </Col>
+                  ))}
+                </Row>
+              </div>
+            )}
+            {extractedEntities.locations.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <Title level={5}>📍 地点 ({extractedEntities.locations.length})</Title>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {extractedEntities.locations.slice(0, 10).map((loc: any, i: number) => (
+                    <Tag key={i} color="blue">{typeof loc === 'string' ? loc : loc.name}</Tag>
+                  ))}
+                </div>
+              </div>
+            )}
+            {extractedEntities.items.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <Title level={5}>📦 关键物品 ({extractedEntities.items.length})</Title>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {extractedEntities.items.slice(0, 12).map((item: any, i: number) => (
+                    <Tag key={i} color="orange">{typeof item === 'string' ? item : item.name}</Tag>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
-
-      {/* 角色编辑模态框 */}
-      <Modal
-        title={editingCharacter?.id ? '编辑角色' : '添加角色'}
-        open={isCharacterModalOpen}
-        onCancel={() => {
-          setIsCharacterModalOpen(false);
-          setEditingCharacter(null);
-        }}
-        footer={null}
-        width={500}
-      >
-        <Form
-          layout="vertical"
-          onFinish={handleSaveCharacter}
-          initialValues={editingCharacter || {}}
-        >
-          <Form.Item
-            label="角色名称"
-            name="name"
-            rules={[{ required: true, message: '请输入角色名称' }]}
-          >
-            <Input placeholder="例如：李明" />
-          </Form.Item>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                label="年龄"
-                name="age"
-                rules={[{ required: true, message: '请输入年龄' }]}
-              >
-                <InputNumber min={1} max={120} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                label="性别"
-                name="gender"
-              >
-                <Select placeholder="选择性别">
-                  <Option value="男">男</Option>
-                  <Option value="女">女</Option>
-                  <Option value="其他">其他</Option>
-                </Select>
-              </Form.Item>
-            </Col>
-          </Row>
-          <Form.Item
-            label="角色类型"
-            name="role"
-          >
-            <Select placeholder="选择角色类型">
-              <Option value="主角">主角</Option>
-              <Option value="配角">配角</Option>
-              <Option value="反派">反派</Option>
-              <Option value="群众">群众</Option>
-            </Select>
-          </Form.Item>
-          <Form.Item
-            label="角色描述"
-            name="description"
-          >
-            <TextArea rows={4} placeholder="描述角色的性格、背景等信息" />
-          </Form.Item>
-          <div style={{ textAlign: 'right' }}>
-            <Space>
-              <Button onClick={() => {
-                setIsCharacterModalOpen(false);
-                setEditingCharacter(null);
-              }}>
-                取消
-              </Button>
-              <Button type="primary" htmlType="submit">
-                保存
-              </Button>
-            </Space>
-          </div>
-        </Form>
-      </Modal>
-
-      {/* 集数编辑抽屉 */}
-      <Drawer
-        title={editingEpisode ? `编辑 ${editingEpisode.title}` : '添加集数'}
-        placement="right"
-        width={480}
-        open={isDrawerOpen}
-        onClose={() => {
-          setIsDrawerOpen(false);
-          setEditingEpisode(null);
-        }}
-      >
-        <Form
-          layout="vertical"
-          onFinish={handleSaveEpisode}
-          initialValues={editingEpisode || {}}
-        >
-          <Form.Item
-            label="集数标题"
-            name="title"
-            rules={[{ required: true, message: '请输入集数标题' }]}
-          >
-            <Input placeholder="例如：第一集 - 初次相遇" />
-          </Form.Item>
-          <Form.Item
-            label="集数编号"
-            name="number"
-          >
-            <InputNumber min={1} max={100} style={{ width: '100%' }} disabled={!!editingEpisode?.id} />
-          </Form.Item>
-          <Form.Item
-            label="集数描述"
-            name="description"
-          >
-            <TextArea rows={4} placeholder="描述本集的主要内容..." />
-          </Form.Item>
-          <div style={{ textAlign: 'right', marginTop: 24 }}>
-            <Space>
-              <Button onClick={() => {
-                setIsDrawerOpen(false);
-                setEditingEpisode(null);
-              }}>
-                取消
-              </Button>
-              <Button type="primary" htmlType="submit">
-                保存
-              </Button>
-            </Space>
-          </div>
-        </Form>
-      </Drawer>
     </div>
   );
+
+  // ============ 主渲染 ============
+  // 生成完成或已有分集数据时显示分集编辑器，否则显示上传视图
+  const showEditor = generationStatus === 'completed' && episodes.length > 0;
+
+  return showEditor ? renderScriptEditor() : renderUploadTabs();
 };
 
 export default Script;

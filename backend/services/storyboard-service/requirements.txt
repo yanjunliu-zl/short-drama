@@ -3,8 +3,10 @@ fastapi==0.104.1
 uvicorn[standard]==0.24.0
 
 # 数据库
-sqlalchemy==2.0.29
+sqlalchemy[asyncio]==2.0.29
+aiomysql==0.2.0
 alembic==1.13.1
+pymysql==1.1.0
 
 # 环境变量
 python-dotenv==1.0.0

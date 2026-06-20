@@ -14,7 +14,6 @@ type Config struct {
 	RateLimit     RateLimitConfig
 	CircuitBreaker CircuitBreakerConfig
 	HealthCheck   HealthCheckConfig
-	Telemetry     TelemetryConfig
 }
 
 type DatabaseConfig struct {
@@ -70,11 +69,4 @@ type CircuitBreakerConfig struct {
 type HealthCheckConfig struct {
 	Interval string
 	Timeout  string
-}
-
-type TelemetryConfig struct {
-	Name     string
-	Endpoint string
-	Sampler  float64
-	Batcher  string
 }

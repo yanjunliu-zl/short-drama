@@ -1,47 +1,41 @@
 package svc
 
 import (
-	"context"
+	"fmt"
 	"short-drama-platform/final-cut-service/internal/client"
 	"short-drama-platform/final-cut-service/internal/config"
 	"short-drama-platform/final-cut-service/internal/repository"
 
-	"github.com/go-redis/redis/v8"
+	goredis "github.com/go-redis/redis/v8"
 	"github.com/zeromicro/go-zero/core/stores/redis"
 	"github.com/zeromicro/go-zero/core/stores/sqlx"
-	"github.com/zeromicro/go-zero/core/stores/rediscluster"
 )
 
 type ServiceContext struct {
-	Config            config.Config
-	DB                sqlx.SqlConn
-	Redis             *redis.Redis
-	RedisCluster      *redisCluster.Client
-	RabbitMQ          RabbitMQClient
+	Config             config.Config
+	DB                 sqlx.SqlConn
+	Redis              *redis.Redis
+	RedisCluster       interface{}
+	RabbitMQ           RabbitMQClient
 	FinalCutRepository repository.FinalCutRepository
-	ScriptService     *client.ScriptServiceClient
-	VideoService      *client.VideoServiceClient
-	StorageClient     *client.StorageClient
-	ServiceDiscovery  *client.ServiceDiscovery
-	DistributedLocker *client.DistributedLocker
+	ScriptService      *client.ScriptServiceClient
+	VideoService       *client.VideoServiceClient
+	StorageClient      *client.StorageClient
+	ServiceDiscovery   *client.ServiceDiscovery
+	DistributedLocker  *client.DistributedLocker
 }
 
 func NewServiceContext(c config.Config) *ServiceContext {
-	dsn := c.Database.User + ":" + c.Database.Password + "@tcp(" + c.Database.Host + ":" + c.Database.Port + ")/" + c.Database.DBName + "?parseTime=true&loc=Local"
-	db := sqlx.NewMysql(dsn, c.Database.MaxOpenConns)
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&loc=Local",
+		c.Database.User, c.Database.Password, c.Database.Host, c.Database.Port, c.Database.DBName)
+	db := sqlx.NewMysql(dsn)
 
 	// 单机Redis
-	rds := redis.New(c.Redis.Host+":"+c.Redis.Port, c.Redis.Password)
+	addr := fmt.Sprintf("%s:%d", c.Redis.Host, c.Redis.Port)
+	rds := redis.New(addr, redis.WithPass(c.Redis.Password))
 
-	// Redis集群支持
-	var redisCluster *redisCluster.Client
-	if c.RedisCluster.Enabled {
-		redisCluster = redisCluster.New(c.RedisCluster.Nodes, redisCluster.Options{
-			Password:   c.RedisCluster.Password,
-			PoolSize:   c.RedisCluster.PoolSize,
-			MinIdleConns: c.RedisCluster.MinIdleConns,
-		})
-	}
+	// Redis集群支持 (当前未启用，保留接口)
+	var redisCluster interface{}
 
 	// 存储客户端
 	storageClient, err := client.NewStorageClient(c)
@@ -55,30 +49,29 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		sd, err := client.NewServiceDiscovery(c.Consul)
 		if err == nil {
 			serviceDiscovery = sd
-			// 启动服务监控
 			go serviceDiscovery.RefreshServices()
 		}
 	}
 
 	// 分布式锁
 	var distributedLocker *client.DistributedLocker
-	if redisCluster != nil {
-		distributedLocker = client.NewDistributedLocker(redisCluster)
+	if rc, ok := redisCluster.(*goredis.Client); ok && rc != nil {
+		distributedLocker = client.NewDistributedLocker(rc)
 	}
 
 	rabbitMQ := NewRabbitMQClient(c.RabbitMQ)
 
 	return &ServiceContext{
-		Config:            c,
-		DB:                db,
-		Redis:             rds,
-		RedisCluster:      redisCluster,
-		RabbitMQ:          rabbitMQ,
+		Config:             c,
+		DB:                 db,
+		Redis:              rds,
+		RedisCluster:       redisCluster,
+		RabbitMQ:           rabbitMQ,
 		FinalCutRepository: repository.NewFinalCutRepository(db),
-		ScriptService:     client.NewScriptServiceClient(c),
-		VideoService:      client.NewVideoServiceClient(c),
-		StorageClient:     storageClient,
-		ServiceDiscovery:  serviceDiscovery,
-		DistributedLocker: distributedLocker,
+		ScriptService:      client.NewScriptServiceClient(c),
+		VideoService:       client.NewVideoServiceClient(c),
+		StorageClient:      storageClient,
+		ServiceDiscovery:   serviceDiscovery,
+		DistributedLocker:  distributedLocker,
 	}
 }

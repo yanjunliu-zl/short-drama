@@ -9,6 +9,7 @@ from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.deps import initialize_storyboard_service, close_storyboard_service
+from app.core.database import init_db, close_db
 
 # 设置日志
 setup_logging()
@@ -45,6 +46,7 @@ async def add_process_time_header(request: Request, call_next):
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting up storyboard generation service...")
+    await init_db()
     await initialize_storyboard_service()
     logger.info("Service started successfully")
 
@@ -53,6 +55,7 @@ async def startup_event():
 async def shutdown_event():
     logger.info("Shutting down storyboard generation service...")
     await close_storyboard_service()
+    await close_db()
     logger.info("Service shutdown completed")
 
 

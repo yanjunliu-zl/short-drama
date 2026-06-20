@@ -13,6 +13,7 @@ from app.schemas.script import (
     GenerateResponse
 )
 from app.services.script_service import ScriptService
+from app.services.novel2script_service import Novel2ScriptService
 from app.core.deps import get_script_service
 
 router = APIRouter()
@@ -230,5 +231,27 @@ async def generate_script_from_outline(
             message="Script generation from outline started",
             script=None
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+@router.post("/extract-entities")
+async def extract_entities(
+    request: dict,
+    script_service: ScriptService = Depends(get_script_service)
+):
+    """从剧本内容中提取主体（角色、地点、道具）"""
+    try:
+        content = request.get("content", "")
+        if not content:
+            raise HTTPException(status_code=400, detail="Content is required")
+
+        mock_mode = getattr(script_service.ai_service, '_mock_mode', False)
+        n2s = Novel2ScriptService(
+            llm=script_service.ai_service.llm if not mock_mode else None,
+            mock_mode=mock_mode
+        )
+        result = await n2s.extract_entities(content)
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

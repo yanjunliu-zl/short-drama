@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
-	"short-drama-platform/final-cut-service/internal/model"
 	"short-drama-platform/final-cut-service/internal/svc"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -18,31 +20,9 @@ import (
 
 // FinalCutTaskMessage 最终剪辑任务消息
 type FinalCutTaskMessage struct {
-	TaskID          string   `json:"task_id"`
-	ProjectID       string   `json:"project_id"`
-	VideoIDs        []string `json:"video_ids"`
-	AudioID         string   `json:"audio_id"`
-	Transcript      string   `json:"transcript"`
-	CutPoints       []CutPoint `json:"cut_points"`
-	Effects         []Effect   `json:"effects"`
-	FontSize        int        `json:"font_size"`
-	FontColor       string     `json:"font_color"`
-	BackgroundColor string     `json:"background_color"`
-}
-
-// CutPoint 切点信息
-type CutPoint struct {
-	StartTime float64 `json:"start_time"`
-	EndTime   float64 `json:"end_time"`
-	SceneID   string  `json:"scene_id"`
-}
-
-// Effect 特效信息
-type Effect struct {
-	Name      string                 `json:"name"`
-	StartTime float64                `json:"start_time"`
-	EndTime   float64                `json:"end_time"`
-	Params    map[string]interface{} `json:"params"`
+	TaskID    string   `json:"task_id"`
+	ProjectID string   `json:"project_id"`
+	VideoURLs []string `json:"video_urls"`
 }
 
 // Consumer 消费者
@@ -63,12 +43,10 @@ func NewConsumer(ctx context.Context, svcCtx *svc.ServiceContext, queueName stri
 
 // Start 开始消费
 func (c *Consumer) Start() error {
-	// 确保存储桶存在
 	if err := c.svcCtx.StorageClient.EnsureBucket(c.ctx); err != nil {
 		logx.Errorf("failed to ensure bucket: %v", err)
 	}
 
-	// 开始消费队列
 	deliveries, err := c.svcCtx.RabbitMQ.Consume(c.queueName, "final-cut-consumer")
 	if err != nil {
 		return fmt.Errorf("failed to consume queue: %w", err)
@@ -86,7 +64,7 @@ func (c *Consumer) Start() error {
 
 // handleMessage 处理消息
 func (c *Consumer) handleMessage(d amqp.Delivery) {
-	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Minute)
 	defer cancel()
 
 	var msg FinalCutTaskMessage
@@ -96,7 +74,7 @@ func (c *Consumer) handleMessage(d amqp.Delivery) {
 		return
 	}
 
-	logx.Infof("Processing final cut task: %s", msg.TaskID)
+	logx.Infof("Processing final cut task: %s with %d video URLs", msg.TaskID, len(msg.VideoURLs))
 
 	// 更新任务状态为处理中
 	if err := c.svcCtx.FinalCutRepository.UpdateStatus(msg.TaskID, "processing"); err != nil {
@@ -105,86 +83,199 @@ func (c *Consumer) handleMessage(d amqp.Delivery) {
 		return
 	}
 
-	// 更新进度
-	c.updateTaskProgress(msg.TaskID, 10)
+	c.updateTaskProgress(msg.TaskID, 5)
 
-	// 调用视频服务处理视频
+	// 执行 ffmpeg 拼接
 	videoURL, thumbnailURL, duration, err := c.processVideo(ctx, &msg)
 	if err != nil {
 		logx.Errorf("failed to process video: %v", err)
-
-		// 更新任务状态为失败
 		c.svcCtx.FinalCutRepository.UpdateError(msg.TaskID, err.Error())
-
-		// 发送失败消息到死信队列（可选）
+		c.updateTaskProgress(msg.TaskID, 0)
 		d.Ack(false)
 		return
 	}
 
-	c.updateTaskProgress(msg.TaskID, 100)
+	c.updateTaskProgress(msg.TaskID, 95)
 
 	// 更新任务结果
 	if err := c.svcCtx.FinalCutRepository.UpdateResult(
-		msg.TaskID,
-		videoURL,
-		thumbnailURL,
-		duration,
+		msg.TaskID, videoURL, thumbnailURL, duration,
 	); err != nil {
 		logx.Errorf("failed to update task result: %v", err)
 	}
 
-	// 上传视频文件到对象存储（如果本地有文件）
-	// 这里假设视频文件已经由视频服务处理完成并返回了URL
-	// 如果需要重新上传，可以取消注释下面的代码
+	c.updateTaskProgress(msg.TaskID, 100)
 
-	// if videoURL != "" {
-	// 	// 下载视频文件（如果需要重新上传到对象存储）
-	// 	tempPath := filepath.Join("/tmp", fmt.Sprintf("%s.mp4", msg.TaskID))
-	// 	defer os.Remove(tempPath)
-
-	// 	if err := c.downloadVideoFromService(videoURL, tempPath); err == nil {
-	// 		objectName := fmt.Sprintf("final-cut/%s/output.mp4", msg.TaskID)
-	// 		uploadedURL, err := c.svcCtx.StorageClient.UploadFile(ctx, tempPath, objectName, "video/mp4")
-	// 		if err != nil {
-	// 			logx.Errorf("failed to upload video to storage: %v", err)
-	// 		} else {
-	// 			logx.Infof("Video uploaded to storage: %s", uploadedURL)
-	// 		}
-	// 	}
-	// }
-
-	logx.Infof("Final cut task completed: %s", msg.TaskID)
+	logx.Infof("Final cut task completed: %s, video: %s, duration: %.1fs", msg.TaskID, videoURL, duration)
 	d.Ack(false)
 }
 
-// processVideo 处理视频
+// processVideo 使用 ffmpeg 拼接视频
 func (c *Consumer) processVideo(ctx context.Context, msg *FinalCutTaskMessage) (string, string, float64, error) {
-	// 调用视频服务处理视频
-	resp, err := c.svcCtx.VideoService.ProcessVideo(ctx, &svc.VideoTaskRequest{
-		TaskType:   "final-cut",
-		VideoIDs:   msg.VideoIDs,
-		AudioID:    msg.AudioID,
-		OutputFormat: "mp4",
-	})
-	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to process video: %w", err)
+	if len(msg.VideoURLs) == 0 {
+		return "", "", 0, fmt.Errorf("no video URLs provided")
 	}
 
-	// 等待视频处理完成
-	videoURL := resp.VideoURL
-	thumbnailURL := resp.Thumbnail
+	workDir := filepath.Join("/tmp/final-cut-workdir", msg.TaskID)
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		return "", "", 0, fmt.Errorf("failed to create work dir: %w", err)
+	}
+	defer os.RemoveAll(workDir)
 
-	// 模拟处理时间
-	time.Sleep(2 * time.Second)
+	// Step 1: 下载所有视频文件
+	var inputFiles []string
+	for i, url := range msg.VideoURLs {
+		inputPath := filepath.Join(workDir, fmt.Sprintf("input_%03d.mp4", i))
+		logx.Infof("Downloading video %d/%d: %s", i+1, len(msg.VideoURLs), url)
 
-	// 更新进度
-	c.updateTaskProgress(msg.TaskID, 50)
+		if err := downloadFile(ctx, url, inputPath); err != nil {
+			logx.Errorf("failed to download video %d: %v", i, err)
+			continue // skip failed downloads
+		}
 
-	// 这里可以添加更多的视频处理逻辑
-	// 比如：使用ffmpeg进行视频剪辑、添加字幕、特效等
+		// 验证文件是否有效
+		if info, err := os.Stat(inputPath); err != nil || info.Size() == 0 {
+			logx.Errorf("downloaded file is empty or missing: %s", inputPath)
+			continue
+		}
 
-	// 返回处理结果
-	return videoURL, thumbnailURL, 60.0, nil
+		inputFiles = append(inputFiles, inputPath)
+	}
+
+	if len(inputFiles) == 0 {
+		return "", "", 0, fmt.Errorf("all video downloads failed")
+	}
+
+	c.updateTaskProgress(msg.TaskID, 20)
+
+	// Step 2: 创建 concat file list
+	fileListPath := filepath.Join(workDir, "filelist.txt")
+	fileList, err := os.Create(fileListPath)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to create filelist: %w", err)
+	}
+	for _, f := range inputFiles {
+		fmt.Fprintf(fileList, "file '%s'\n", f)
+	}
+	fileList.Close()
+
+	c.updateTaskProgress(msg.TaskID, 30)
+
+	// Step 3: ffmpeg concat — 先尝试 stream copy
+	outputPath := filepath.Join(workDir, "output.mp4")
+
+	err = runFFmpeg(ctx,
+		"-f", "concat", "-safe", "0", "-i", fileListPath,
+		"-c", "copy",
+		"-y", outputPath,
+	)
+	if err != nil {
+		logx.Errorf("stream copy failed, trying re-encode: %v", err)
+		// Step 4: 回退为重新编码
+		err = runFFmpeg(ctx,
+			"-f", "concat", "-safe", "0", "-i", fileListPath,
+			"-c:v", "libx264", "-preset", "fast", "-crf", "23",
+			"-c:a", "aac", "-b:a", "128k",
+			"-pix_fmt", "yuv420p",
+			"-y", outputPath,
+		)
+		if err != nil {
+			return "", "", 0, fmt.Errorf("ffmpeg concat failed: %w", err)
+		}
+	}
+
+	c.updateTaskProgress(msg.TaskID, 70)
+
+	// Step 5: ffprobe 获取时长
+	duration := getVideoDuration(ctx, outputPath)
+
+	// Step 6: 生成缩略图
+	thumbnailPath := filepath.Join(workDir, "thumbnail.jpg")
+	runFFmpeg(ctx,
+		"-i", outputPath,
+		"-ss", "00:00:01",
+		"-vframes", "1",
+		"-f", "image2",
+		"-y", thumbnailPath,
+	)
+
+	c.updateTaskProgress(msg.TaskID, 80)
+
+	// Step 7: 上传到 MinIO/Ceph
+	videoObjectName := fmt.Sprintf("final-cut/%s/output.mp4", msg.TaskID)
+	videoURL, err := c.svcCtx.StorageClient.UploadFile(ctx, outputPath, videoObjectName, "video/mp4")
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to upload video: %w", err)
+	}
+
+	var thumbnailURL string
+	if _, err := os.Stat(thumbnailPath); err == nil {
+		thumbnailObjectName := fmt.Sprintf("final-cut/%s/thumbnail.jpg", msg.TaskID)
+		thumbnailURL, _ = c.svcCtx.StorageClient.UploadFile(ctx, thumbnailPath, thumbnailObjectName, "image/jpeg")
+	}
+
+	return videoURL, thumbnailURL, duration, nil
+}
+
+// downloadFile 下载文件到本地
+func downloadFile(ctx context.Context, url, filePath string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+// runFFmpeg 执行 ffmpeg 命令
+func runFFmpeg(ctx context.Context, args ...string) error {
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// 截断输出避免日志过大
+		outputStr := string(output)
+		if len(outputStr) > 500 {
+			outputStr = outputStr[len(outputStr)-500:]
+		}
+		return fmt.Errorf("ffmpeg error: %w, output: %s", err, outputStr)
+	}
+	return nil
+}
+
+// getVideoDuration 获取视频时长（秒）
+func getVideoDuration(ctx context.Context, videoPath string) float64 {
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		videoPath,
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		logx.Errorf("ffprobe failed: %v", err)
+		return 0
+	}
+
+	var duration float64
+	fmt.Sscanf(string(output), "%f", &duration)
+	return duration
 }
 
 // updateTaskProgress 更新任务进度
@@ -193,7 +284,6 @@ func (c *Consumer) updateTaskProgress(taskID string, progress int) {
 		logx.Errorf("failed to update task progress: %v", err)
 	}
 
-	// 更新Redis缓存
 	cacheKey := "final_cut:task:" + taskID
 	cacheData := map[string]interface{}{
 		"task_id":    taskID,
@@ -205,16 +295,8 @@ func (c *Consumer) updateTaskProgress(taskID string, progress int) {
 	c.svcCtx.Redis.Setex(cacheKey, cacheBytes, 24*time.Hour)
 }
 
-// downloadVideoFromService 从视频服务下载视频
-func (c *Consumer) downloadVideoFromService(videoURL, filePath string) error {
-	// 这里可以实现从视频服务下载视频的逻辑
-	// 暂时返回nil，表示不需要下载
-	return nil
-}
-
 // Stop 停止消费
 func (c *Consumer) Stop() error {
-	// 关闭RabbitMQ连接
 	return c.svcCtx.RabbitMQ.Close()
 }
 
@@ -222,3 +304,6 @@ func (c *Consumer) Stop() error {
 func (c *Consumer) EnsureBucket(ctx context.Context) error {
 	return c.svcCtx.StorageClient.EnsureBucket(ctx)
 }
+
+// 确保 uuid 包被使用（保持兼容）
+var _ = uuid.New

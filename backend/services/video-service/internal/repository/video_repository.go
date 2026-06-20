@@ -3,13 +3,13 @@ package repository
 import (
 	"context"
 	"fmt"
-	"sort"
-	"time"
 	"short-drama-platform/video-service/model"
+	"time"
 
 	"github.com/zeromicro/go-zero/core/stores/sqlx"
 )
 
+// VideoRepository 视频数据仓库接口
 type VideoRepository interface {
 	// 视频操作
 	Create(ctx context.Context, video *model.Video) error
@@ -27,195 +27,218 @@ type VideoRepository interface {
 
 	// 视频使用记录
 	CreateUsageRecord(ctx context.Context, usage *model.VideoUsage) error
+
+	// 媒体资产记录
+	CreateMediaAsset(ctx context.Context, asset *model.MediaAsset) error
 }
 
-// 模拟实现 - 使用内存存储
-type mockVideoRepository struct {
-	videos            []*model.Video
-	processingJobs    []*model.VideoProcessingJob
-	usageRecords      []*model.VideoUsage
+// mysqlVideoRepository MySQL 实现
+type mysqlVideoRepository struct {
+	conn sqlx.SqlConn
 }
 
+// NewVideoRepository 创建 MySQL 视频仓库实例
 func NewVideoRepository(conn sqlx.SqlConn) VideoRepository {
-	// 返回模拟实现，稍后替换为数据库实现
-	return newMockVideoRepository()
+	return &mysqlVideoRepository{conn: conn}
 }
 
-func newMockVideoRepository() *mockVideoRepository {
-	repo := &mockVideoRepository{
-		videos:         make([]*model.Video, 0),
-		processingJobs: make([]*model.VideoProcessingJob, 0),
-		usageRecords:   make([]*model.VideoUsage, 0),
-	}
+// ==============================
+// 视频 CRUD
+// ==============================
 
-	// 初始化一些模拟数据
-	repo.initMockData()
-	return repo
-}
+var createVideoSQL = `INSERT INTO videos (id, title, description, user_id, file_name, file_size, file_format, file_path, status, progress, metadata, created_at, updated_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NOW(), NOW())`
 
-func (r *mockVideoRepository) initMockData() {
-	// 视频模拟数据
-	r.videos = []*model.Video{
-		{
-			ID:          "1",
-			Title:       "示例视频1",
-			Description: "这是一个示例视频",
-			UserID:      "user123",
-			FileName:    "sample1.mp4",
-			FileSize:    1024000,
-			FileFormat:  "mp4",
-			Status:      model.VideoStatusProcessed,
-			Progress:    100,
-			CreatedAt:   time.Now().Add(-24 * time.Hour),
-			UpdatedAt:   time.Now().Add(-12 * time.Hour),
-			ProcessedAt: time.Now().Add(-12 * time.Hour),
-		},
-		{
-			ID:          "2",
-			Title:       "示例视频2",
-			Description: "正在处理的视频",
-			UserID:      "user123",
-			FileName:    "sample2.avi",
-			FileSize:    2048000,
-			FileFormat:  "avi",
-			Status:      model.VideoStatusProcessing,
-			Progress:    50,
-			CreatedAt:   time.Now().Add(-1 * time.Hour),
-			UpdatedAt:   time.Now(),
-		},
+func (r *mysqlVideoRepository) Create(ctx context.Context, video *model.Video) error {
+	video.ID = fmt.Sprintf("vid_%d", time.Now().UnixNano())
+	_, err := r.conn.ExecCtx(ctx, createVideoSQL,
+		video.ID, video.Title, video.Description, video.UserID,
+		video.FileName, video.FileSize, video.FileFormat, video.FilePath,
+		video.Status, video.Metadata,
+	)
+	if err != nil {
+		return fmt.Errorf("create video: %w", err)
 	}
-}
-
-func (r *mockVideoRepository) Create(ctx context.Context, video *model.Video) error {
-	video.ID = fmt.Sprintf("video_%d", len(r.videos)+1)
-	video.CreatedAt = time.Now()
-	video.UpdatedAt = time.Now()
-	if video.Status == "" {
-		video.Status = model.VideoStatusUploaded
-	}
-	if video.Progress == 0 {
-		video.Progress = 0
-	}
-
-	r.videos = append(r.videos, video)
 	return nil
 }
 
-func (r *mockVideoRepository) FindByID(ctx context.Context, id string) (*model.Video, error) {
-	for _, video := range r.videos {
-		if video.ID == id {
-			return video, nil
-		}
+var findVideoByIDSQL = `SELECT id, title, description, user_id, file_name, file_size, file_format, file_path,
+	output_path, status, progress, error_msg, metadata, created_at, updated_at, processed_at
+	FROM videos WHERE id = ?`
+
+func (r *mysqlVideoRepository) FindByID(ctx context.Context, id string) (*model.Video, error) {
+	var video model.Video
+	err := r.conn.QueryRowCtx(ctx, &video, findVideoByIDSQL, id)
+	if err != nil {
+		return nil, fmt.Errorf("find video by id %s: %w", id, err)
 	}
-	return nil, fmt.Errorf("video not found: %s", id)
+	return &video, nil
 }
 
-func (r *mockVideoRepository) FindByUserID(ctx context.Context, userID string, status string, page, pageSize int) ([]*model.Video, error) {
-	var filtered []*model.Video
-	for _, video := range r.videos {
-		if video.UserID == userID || userID == "" {
-			if status == "" || string(video.Status) == status {
-				filtered = append(filtered, video)
-			}
-		}
-	}
+var findVideosByUserSQL = `SELECT id, title, description, user_id, file_name, file_size, file_format, file_path,
+	output_path, status, progress, error_msg, metadata, created_at, updated_at, processed_at
+	FROM videos WHERE user_id = ?`
 
-	// 按创建时间倒序排序
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].CreatedAt.After(filtered[j].CreatedAt)
-	})
+func (r *mysqlVideoRepository) FindByUserID(ctx context.Context, userID string, status string, page, pageSize int) ([]*model.Video, error) {
+	sql := findVideosByUserSQL
+	args := []interface{}{userID}
 
-	// 分页
-	start := (page - 1) * pageSize
-	if start >= len(filtered) {
-		return []*model.Video{}, nil
+	if status != "" {
+		sql += " AND status = ?"
+		args = append(args, status)
 	}
-	end := start + pageSize
-	if end > len(filtered) {
-		end = len(filtered)
-	}
+	sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	offset := (page - 1) * pageSize
+	args = append(args, pageSize, offset)
 
-	return filtered[start:end], nil
+	var videos []*model.Video
+	err := r.conn.QueryRowsCtx(ctx, &videos, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("find videos by user: %w", err)
+	}
+	return videos, nil
 }
 
-func (r *mockVideoRepository) CountByUserID(ctx context.Context, userID string, status string) (int64, error) {
+var countVideosByUserSQL = `SELECT COUNT(*) FROM videos WHERE user_id = ?`
+
+func (r *mysqlVideoRepository) CountByUserID(ctx context.Context, userID string, status string) (int64, error) {
+	sql := countVideosByUserSQL
+	args := []interface{}{userID}
+
+	if status != "" {
+		sql += " AND status = ?"
+		args = append(args, status)
+	}
+
 	var count int64
-	for _, video := range r.videos {
-		if video.UserID == userID || userID == "" {
-			if status == "" || string(video.Status) == status {
-				count++
-			}
-		}
+	err := r.conn.QueryRowCtx(ctx, &count, sql, args...)
+	if err != nil {
+		return 0, fmt.Errorf("count videos by user: %w", err)
 	}
 	return count, nil
 }
 
-func (r *mockVideoRepository) Update(ctx context.Context, video *model.Video) error {
-	for i, v := range r.videos {
-		if v.ID == video.ID {
-			video.UpdatedAt = time.Now()
-			r.videos[i] = video
-			return nil
-		}
-	}
-	return fmt.Errorf("video not found: %s", video.ID)
-}
+var updateVideoSQL = `UPDATE videos SET title=?, description=?, file_name=?, file_path=?, output_path=?,
+	status=?, progress=?, error_msg=?, metadata=?, processed_at=?, updated_at=NOW()
+	WHERE id=?`
 
-func (r *mockVideoRepository) Delete(ctx context.Context, id string) error {
-	for i, video := range r.videos {
-		if video.ID == id {
-			r.videos = append(r.videos[:i], r.videos[i+1:]...)
-			return nil
-		}
+func (r *mysqlVideoRepository) Update(ctx context.Context, video *model.Video) error {
+	_, err := r.conn.ExecCtx(ctx, updateVideoSQL,
+		video.Title, video.Description, video.FileName, video.FilePath,
+		video.OutputPath, video.Status, video.Progress, video.ErrorMsg,
+		video.Metadata, video.ProcessedAt, video.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update video %s: %w", video.ID, err)
 	}
-	return fmt.Errorf("video not found: %s", id)
-}
-
-func (r *mockVideoRepository) CreateProcessingJob(ctx context.Context, job *model.VideoProcessingJob) error {
-	job.ID = fmt.Sprintf("job_%d", len(r.processingJobs)+1)
-	job.CreatedAt = time.Now()
-	job.UpdatedAt = time.Now()
-	if job.Status == "" {
-		job.Status = "pending"
-	}
-
-	r.processingJobs = append(r.processingJobs, job)
 	return nil
 }
 
-func (r *mockVideoRepository) FindProcessingJobByID(ctx context.Context, id string) (*model.VideoProcessingJob, error) {
-	for _, job := range r.processingJobs {
-		if job.ID == id {
-			return job, nil
-		}
+var deleteVideoSQL = `DELETE FROM videos WHERE id = ?`
+
+func (r *mysqlVideoRepository) Delete(ctx context.Context, id string) error {
+	_, err := r.conn.ExecCtx(ctx, deleteVideoSQL, id)
+	if err != nil {
+		return fmt.Errorf("delete video %s: %w", id, err)
 	}
-	return nil, fmt.Errorf("processing job not found: %s", id)
+	return nil
 }
 
-func (r *mockVideoRepository) FindProcessingJobsByVideoID(ctx context.Context, videoID string) ([]*model.VideoProcessingJob, error) {
-	var result []*model.VideoProcessingJob
-	for _, job := range r.processingJobs {
-		if job.VideoID == videoID {
-			result = append(result, job)
-		}
+// ==============================
+// 处理任务
+// ==============================
+
+var createProcessingJobSQL = `INSERT INTO video_processing_jobs (id, video_id, job_type, status, progress, priority, params, created_at, updated_at)
+	VALUES (?, ?, ?, ?, 0, ?, ?, NOW(), NOW())`
+
+func (r *mysqlVideoRepository) CreateProcessingJob(ctx context.Context, job *model.VideoProcessingJob) error {
+	job.ID = fmt.Sprintf("j_%d", time.Now().UnixNano())
+	_, err := r.conn.ExecCtx(ctx, createProcessingJobSQL,
+		job.ID, job.VideoID, job.JobType, job.Status, job.Priority, job.Params,
+	)
+	if err != nil {
+		return fmt.Errorf("create processing job: %w", err)
 	}
-	return result, nil
+	return nil
 }
 
-func (r *mockVideoRepository) UpdateProcessingJob(ctx context.Context, job *model.VideoProcessingJob) error {
-	for i, j := range r.processingJobs {
-		if j.ID == job.ID {
-			job.UpdatedAt = time.Now()
-			r.processingJobs[i] = job
-			return nil
-		}
+var findProcessingJobByIDSQL = `SELECT id, video_id, job_type, status, progress, priority, params, result, error,
+	created_at, updated_at, started_at, completed_at
+	FROM video_processing_jobs WHERE id = ?`
+
+func (r *mysqlVideoRepository) FindProcessingJobByID(ctx context.Context, id string) (*model.VideoProcessingJob, error) {
+	var job model.VideoProcessingJob
+	err := r.conn.QueryRowCtx(ctx, &job, findProcessingJobByIDSQL, id)
+	if err != nil {
+		return nil, fmt.Errorf("find processing job by id %s: %w", id, err)
 	}
-	return fmt.Errorf("processing job not found: %s", job.ID)
+	return &job, nil
 }
 
-func (r *mockVideoRepository) CreateUsageRecord(ctx context.Context, usage *model.VideoUsage) error {
-	usage.ID = int64(len(r.usageRecords) + 1)
-	usage.CreatedAt = time.Now()
-	r.usageRecords = append(r.usageRecords, usage)
+var findProcessingJobsByVideoSQL = `SELECT id, video_id, job_type, status, progress, priority, params, result, error,
+	created_at, updated_at, started_at, completed_at
+	FROM video_processing_jobs WHERE video_id = ? ORDER BY created_at DESC`
+
+func (r *mysqlVideoRepository) FindProcessingJobsByVideoID(ctx context.Context, videoID string) ([]*model.VideoProcessingJob, error) {
+	var jobs []*model.VideoProcessingJob
+	err := r.conn.QueryRowsCtx(ctx, &jobs, findProcessingJobsByVideoSQL, videoID)
+	if err != nil {
+		return nil, fmt.Errorf("find processing jobs by video: %w", err)
+	}
+	return jobs, nil
+}
+
+var updateProcessingJobSQL = `UPDATE video_processing_jobs SET status=?, progress=?, result=?, error=?,
+	started_at=?, completed_at=?, updated_at=NOW()
+	WHERE id=?`
+
+func (r *mysqlVideoRepository) UpdateProcessingJob(ctx context.Context, job *model.VideoProcessingJob) error {
+	_, err := r.conn.ExecCtx(ctx, updateProcessingJobSQL,
+		job.Status, job.Progress, job.Result, job.Error,
+		job.StartedAt, job.CompletedAt, job.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update processing job %s: %w", job.ID, err)
+	}
+	return nil
+}
+
+// ==============================
+// 使用记录
+// ==============================
+
+var createUsageRecordSQL = `INSERT INTO video_usages (video_id, user_id, action, created_at)
+	VALUES (?, ?, ?, NOW())`
+
+func (r *mysqlVideoRepository) CreateUsageRecord(ctx context.Context, usage *model.VideoUsage) error {
+	result, err := r.conn.ExecCtx(ctx, createUsageRecordSQL,
+		usage.VideoID, usage.UserID, usage.Action,
+	)
+	if err != nil {
+		return fmt.Errorf("create usage record: %w", err)
+	}
+	id, _ := result.LastInsertId()
+	usage.ID = id
+	return nil
+}
+
+// ==============================
+// 媒体资产
+// ==============================
+
+var createMediaAssetSQL = `INSERT INTO media_assets (object_key, bucket, media_type, content_type, file_size, original_url, ceph_url, source_service, related_entity_type, related_entity_id, user_id, metadata_json, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`
+
+func (r *mysqlVideoRepository) CreateMediaAsset(ctx context.Context, asset *model.MediaAsset) error {
+	result, err := r.conn.ExecCtx(ctx, createMediaAssetSQL,
+		asset.ObjectKey, asset.Bucket, asset.MediaType, asset.ContentType,
+		asset.FileSize, asset.OriginalURL, asset.CephURL, asset.SourceService,
+		asset.RelatedEntityType, asset.RelatedEntityID, asset.UserID, asset.Metadata,
+	)
+	if err != nil {
+		return fmt.Errorf("create media asset: %w", err)
+	}
+	id, _ := result.LastInsertId()
+	asset.ID = id
 	return nil
 }

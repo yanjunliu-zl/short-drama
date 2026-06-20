@@ -99,3 +99,83 @@ class TaskStatusResponse(BaseModel):
     error: Optional[str] = Field(default=None, description="错误信息")
     created_at: Optional[str] = Field(default=None, description="创建时间")
     completed_at: Optional[str] = Field(default=None, description="完成时间")
+
+
+# ==================== 分镜头批量视频生成模型 ====================
+
+class ShotRequest(BaseModel):
+    """单个分镜头请求（用于视频生成）"""
+    id: int = Field(..., description="镜头唯一ID")
+    number: int = Field(..., description="镜头编号")
+    shotType: str = Field(..., description="镜头类型：远景/全景/中景/近景/特写")
+    duration: int = Field(default=5, description="时长(秒)")
+    cameraAngle: str = Field(default="正面平视", description="摄像机角度")
+    sceneRef: str = Field(default="", description="关联场景")
+    characters: List[str] = Field(default=[], description="出场角色")
+    description: str = Field(..., description="画面描述")
+    dialogue: str = Field(default="", description="对白/旁白")
+    soundEffects: List[str] = Field(default=[], description="音效")
+    music: str = Field(default="", description="背景音乐")
+    notes: str = Field(default="", description="备注")
+
+
+class ShotEpisodeRequest(BaseModel):
+    """一集的分镜请求"""
+    id: str = Field(..., description="集ID")
+    title: str = Field(..., description="集标题")
+    number: int = Field(..., description="集编号")
+    shots: List[ShotRequest] = Field(default=[], description="该集的分镜头")
+    description: Optional[str] = Field(default=None, description="集描述")
+
+
+class ShotsToVideoRequest(BaseModel):
+    """批量分镜头生成视频请求"""
+    storyboard_id: Optional[str] = Field(default=None, description="分镜ID")
+    episodes: List[ShotEpisodeRequest] = Field(..., description="分集镜头数据")
+    style: Optional[str] = Field(default="写实风格", description="整体风格")
+    width: Optional[int] = Field(default=1920, description="视频宽度")
+    height: Optional[int] = Field(default=1920, description="视频高度")
+    fps: Optional[int] = Field(default=24, description="帧率")
+    user_id: Optional[str] = Field(default=None, description="用户ID")
+
+
+class ShotVideoResult(BaseModel):
+    """单个镜头的视频生成结果"""
+    shot_id: int = Field(..., description="镜头ID")
+    shot_number: int = Field(..., description="镜头编号")
+    episode_id: str = Field(..., description="所属集ID")
+    episode_title: str = Field(default="", description="所属集标题")
+    status: str = Field(..., description="状态: completed/failed")
+    video_url: Optional[str] = Field(default=None, description="生成的视频URL")
+    image_url: Optional[str] = Field(default=None, description="中间生成的图像URL")
+    file_size: Optional[int] = Field(default=None, description="文件大小(bytes)")
+    error: Optional[str] = Field(default=None, description="错误信息")
+
+
+class ShotsToVideoResponse(BaseModel):
+    """批量分镜头视频生成响应"""
+    task_id: str = Field(..., description="任务ID")
+    status: str = Field(..., description="状态")
+    message: str = Field(..., description="消息")
+    total_shots: int = Field(default=0, description="总镜头数")
+    completed_shots: int = Field(default=0, description="已完成镜头数")
+    results: List[ShotVideoResult] = Field(default=[], description="各镜头结果")
+
+
+# ==================== 预览图像生成模型 ====================
+
+class PreviewImageRequest(BaseModel):
+    """场景/角色/道具预览图像生成请求"""
+    description: str = Field(..., description="图像描述（场景环境、角色外貌或道具外观）")
+    category: str = Field(default="scene", description="类型: scene/character/prop")
+    style: Optional[str] = Field(default="写实风格", description="图像风格")
+    width: Optional[int] = Field(default=1920, description="图像宽度")
+    height: Optional[int] = Field(default=1920, description="图像高度")
+
+
+class PreviewImageResponse(BaseModel):
+    """预览图像生成响应"""
+    task_id: str = Field(..., description="任务ID")
+    status: str = Field(default="processing", description="状态")
+    image_url: Optional[str] = Field(default=None, description="生成的图像URL")
+    message: str = Field(default="", description="消息")

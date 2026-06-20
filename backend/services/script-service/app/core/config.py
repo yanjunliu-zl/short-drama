@@ -35,7 +35,7 @@ class Settings(BaseSettings):
             return [i.strip() for i in v.split(",")]
         return v
 
-    ALLOWED_HOSTS: List[str] = ["localhost", "127.0.0.1", "0.0.0.0"]
+    ALLOWED_HOSTS: List[str] = ["*"]
 
     # 数据库配置 - 集群部署支持
     DB_HOST: str = os.getenv("DB_HOST", "mysql")

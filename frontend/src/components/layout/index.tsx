@@ -1,5 +1,5 @@
 import React, { ReactNode } from 'react';
-import { Layout as AntLayout, Menu } from 'antd';
+import { Layout as AntLayout, Menu, Button, Space, Dropdown, Avatar } from 'antd';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import {
   FileTextOutlined,
@@ -7,10 +7,15 @@ import {
   CameraOutlined,
   PlayCircleOutlined,
   EyeOutlined,
-  SettingOutlined
+  SettingOutlined,
+  WalletOutlined,
+  UserOutlined,
+  LoginOutlined,
+  LogoutOutlined,
 } from '@ant-design/icons';
+import { useAuth } from '@/hooks/useAuth';
 
-const { Sider, Content } = AntLayout;
+const { Sider, Content, Header } = AntLayout;
 
 interface LayoutProps {
   children: ReactNode;
@@ -20,6 +25,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [collapsed, setCollapsed] = React.useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const { user, isAuthenticated, logout } = useAuth();
 
   // 路由到菜单key的映射
   const routeMap: Record<string, string> = {
@@ -29,6 +35,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     '/storyboard': 'storyboard_script',
     '/video': 'storyboard_video',
     '/final-cut': 'final_video',
+    '/payment': 'payment_center',
     // 首页 '/' 没有对应的菜单项
   };
 
@@ -40,6 +47,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     'storyboard_script': '/storyboard',
     'storyboard_video': '/video',
     'final_video': '/final-cut',
+    'payment_center': '/payment',
   };
 
   // 获取当前选中的菜单key
@@ -87,6 +95,31 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     },
   ];
 
+  // 用户下拉菜单
+  const userMenuItems = [
+    {
+      key: 'profile',
+      icon: <UserOutlined />,
+      label: '个人中心',
+      onClick: () => navigate('/overview'),
+    },
+    {
+      key: 'payment',
+      icon: <WalletOutlined />,
+      label: '支付中心',
+      onClick: () => navigate('/payment'),
+    },
+    {
+      type: 'divider' as const,
+    },
+    {
+      key: 'logout',
+      icon: <LogoutOutlined />,
+      label: '退出登录',
+      onClick: () => logout(),
+    },
+  ];
+
   return (
     <AntLayout style={{ minHeight: '100vh' }}>
       <Sider
@@ -95,8 +128,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         onCollapse={setCollapsed}
         width={250}
         style={{
-          background: '#e5e7eb',
-          borderRight: '1px solid #d1d5db',
+          background: '#f5f5f7',
+          borderRight: '1px solid #e5e5ea',
         }}
       >
         <Link to="/" style={{ textDecoration: 'none' }}>
@@ -105,16 +138,16 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            borderBottom: '1px solid #d1d5db',
-            background: '#e5e7eb',
+            borderBottom: '1px solid #e5e5ea',
+            background: '#f5f5f7',
             cursor: 'pointer'
           }}>
             {!collapsed ? (
-              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#0080ff' }}>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#0066cc' }}>
                 拓扑漫剧
               </div>
             ) : (
-              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#0080ff' }}>
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#0066cc' }}>
                 T
               </div>
             )}
@@ -127,14 +160,95 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           onClick={handleMenuClick}
           style={{ borderRight: 'none', background: 'transparent', marginTop: '16px' }}
         />
+
+        {/* 侧边栏底部用户区域 */}
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            padding: '16px',
+            borderTop: '1px solid #e5e5ea',
+          }}
+        >
+          {isAuthenticated ? (
+            <Dropdown menu={{ items: userMenuItems }} placement="topRight" trigger={['click']}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  transition: 'background 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLElement).style.background = '#f2f2f7'
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLElement).style.background = 'transparent'
+                }}
+              >
+                <Avatar
+                  size={collapsed ? 28 : 32}
+                  icon={<UserOutlined />}
+                  style={{ backgroundColor: '#0066cc', flexShrink: 0 }}
+                />
+                {!collapsed && (
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 14,
+                        fontWeight: 500,
+                        color: '#1d1d1f',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {user?.username || '用户'}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#86868b' }}>
+                      {user?.email || ''}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Dropdown>
+          ) : (
+            <Space direction={collapsed ? 'vertical' : 'horizontal'} size={4}>
+              <Button
+                type="text"
+                icon={<LoginOutlined />}
+                onClick={() => navigate('/login')}
+                block={collapsed}
+                style={{ color: '#86868b' }}
+              >
+                {!collapsed && '登录'}
+              </Button>
+              {!collapsed && (
+                <Button
+                  type="primary"
+                  size="small"
+                  onClick={() => navigate('/register')}
+                  style={{ fontSize: 13 }}
+                >
+                  注册
+                </Button>
+              )}
+            </Space>
+          )}
+        </div>
       </Sider>
       <AntLayout>
         <Content
           style={{
             padding: 0,
             margin: 0,
-            minHeight: 'calc(100vh - 0px)',
-            background: '#e5e7eb',
+            minHeight: '100vh',
+            background: '#ffffff',
           }}
         >
           {children}
