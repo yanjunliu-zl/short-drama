@@ -25,13 +25,13 @@ export interface GetPipelineStateResponse {
 export const pipelineService = {
   /** 保存完整管道状态到后端 */
   savePipelineState: async (workId: string, data: PipelineState): Promise<SavePipelineStateResponse> => {
-    const response = await api.put<SavePipelineStateResponse>(`/v1/works/${workId}/pipeline-state`, { data })
+    const response = await api.put<SavePipelineStateResponse>(`/v1/works/${workId}/pipeline`, { data })
     return response.data
   },
 
   /** 从后端加载完整管道状态 */
   getPipelineState: async (workId: string): Promise<GetPipelineStateResponse> => {
-    const response = await api.get<GetPipelineStateResponse>(`/v1/works/${workId}/pipeline-state`)
+    const response = await api.get<GetPipelineStateResponse>(`/v1/works/${workId}/pipeline`)
     return response.data
   },
 }

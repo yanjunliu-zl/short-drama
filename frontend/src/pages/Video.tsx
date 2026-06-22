@@ -1,975 +1,333 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { finalCutService } from '@/services/finalCutService';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { usePipelinePersistence } from '@/hooks/usePipelinePersistence';
 import {
-  Card,
-  Typography,
-  Button,
-  Space,
-  Tag,
-  Modal,
-  Form,
-  Input,
-  InputNumber,
-  Select,
-  message,
-  Row,
-  Col,
-  Slider,
-  Switch,
-  Progress,
-  Drawer,
+  Typography, Button, Space, Tag, message, Radio, Select, Progress,
 } from 'antd';
 import {
-  PlayCircleOutlined,
-  VideoCameraOutlined,
-  SettingOutlined,
-  DownloadOutlined,
-  EyeOutlined,
-  CloudUploadOutlined,
-  ReloadOutlined,
-  CheckCircleOutlined,
-  FolderOpenOutlined,
-  StarOutlined,
-  EditOutlined,
-  DeleteOutlined,
-  PlusOutlined,
+  PlayCircleOutlined, PauseCircleOutlined, VideoCameraOutlined,
+  SoundOutlined, MutedOutlined, FullscreenOutlined, MoreOutlined,
+  StarOutlined, ThunderboltOutlined, LoadingOutlined,
+  CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined,
+  PictureOutlined, CopyOutlined, EyeOutlined, PlusOutlined,
+  AppstoreOutlined, CaretRightOutlined, UploadOutlined,
 } from '@ant-design/icons';
+import { scriptService } from '@/services/scriptService';
 
 const { Title, Text } = Typography;
-const { TextArea } = Input;
 const { Option } = Select;
 
-// 视频生成任务类型定义
 interface VideoTask {
-  id: number;
-  name: string;
-  episodeId: string;
-  episodeTitle: string;
-  shotNumber?: number;
-  shotDescription?: string;
+  id: number; name: string; episodeId: string; episodeTitle: string;
+  shotNumber?: number; shotDescription?: string; shotType?: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
-  progress: number;
-  duration: number;
-  resolution: string;
-  format: string;
-  videoUrl?: string;
-  thumbnailUrl?: string;
-  fileSize?: number;
-  createdAt: string;
-  estimatedCompletion?: string;
+  progress: number; duration: number; videoUrl?: string; thumbnailUrl?: string; fileSize?: number; createdAt: string;
 }
-
-// 视频设置类型定义
-interface VideoSettings {
-  resolution: string;
-  frameRate: number;
-  aspectRatio: string;
-  format: string;
-  quality: number;
-  enableSubtitles: boolean;
-  enableWatermark: boolean;
-  watermarkText: string;
-  enableAudio: boolean;
-  audioVolume: number;
-  outputPath: string;
-}
-
-// 集数类型定义
-interface Episode {
-  id: string;
-  title: string;
-  number: number;
-  description?: string;
-}
+interface Episode { id: string; title: string; number: number; description?: string; }
 
 const Video: React.FC = () => {
   const navigate = useNavigate();
-  const { saveState, getWorkId, loadState, restoreFromBackend } = usePipelinePersistence();
+  const [searchParams] = useSearchParams();
+  const { saveState, getWorkId, loadState, restoreFromBackend, setWorkId } = usePipelinePersistence();
 
-  // 多集数据状态
   const [episodes, setEpisodes] = useState<Episode[]>([]);
-
-  // 当前激活的集数
-  const [activeEpisodeId, setActiveEpisodeId] = useState<string>('ep-1');
-
-  // 抽屉状态
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [editingEpisode, setEditingEpisode] = useState<Episode | null>(null);
-
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [isFinalCutProcessing, setIsFinalCutProcessing] = useState(false);
-  const finalCutPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [activeTab, setActiveTab] = useState('preview');
-  const [videoSettings, setVideoSettings] = useState<VideoSettings>({
-    resolution: '1920x1080',
-    frameRate: 30,
-    aspectRatio: '16:9',
-    format: 'mp4',
-    quality: 85,
-    enableSubtitles: true,
-    enableWatermark: false,
-    watermarkText: 'TopSeeker',
-    enableAudio: true,
-    audioVolume: 80,
-    outputPath: '/videos/output.mp4',
-  });
-
+  const [activeEpisodeId, setActiveEpisodeId] = useState('ep-1');
   const [videoTasks, setVideoTasks] = useState<VideoTask[]>([]);
+  const [selectedTask, setSelectedTask] = useState<VideoTask | null>(null);
 
-  // 加载视频结果：优先 localStorage，空则从后端恢复
+  const [playing, setPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const playerRef = useRef<HTMLDivElement>(null);
+
+  const [visualStyle, setVisualStyle] = useState('2D吉卜力动画');
+  const [photoStyle, setPhotoStyle] = useState('经典电影');
+  const [aspectRatio, setAspectRatio] = useState('portrait');
+  const [genMode, setGenMode] = useState('merge');
+  const [frameMode, setFrameMode] = useState('first');
+  const [clusterMode, setClusterMode] = useState(true);
+  const [genAll, setGenAll] = useState(false);
+  const [genProgress, setGenProgress] = useState(0);
+  const [activeTab, setActiveTab] = useState('edit');
+
+  const fmt = (t: number) => { const m = Math.floor(t / 60), s = Math.floor(t % 60); return `${m}:${s.toString().padStart(2, '0')}`; };
+
   useEffect(() => {
-    const loadData = async () => {
-      let data = loadState('videoResults');
-      if (!data) {
-        const oldData = localStorage.getItem('shot_video_results');
-        if (oldData) { try { data = JSON.parse(oldData); } catch {} }
-      }
-      if (!data) {
-        const workId = getWorkId();
-        if (workId) {
-          await restoreFromBackend(workId);
-          data = loadState('videoResults');
-        }
-      }
-      if (data && data.episodes && data.episodes.length > 0) {
-        try {
-          setEpisodes(data.episodes.map((ep: any) => ({
-            id: ep.id,
-            title: ep.title,
-            number: ep.number,
-            description: ep.description,
-          })));
-          setActiveEpisodeId(data.episodes[0].id);
+    const load = async () => {
+      const urlWorkId = searchParams.get('workId');
+      if (urlWorkId) { setWorkId(urlWorkId); await restoreFromBackend(urlWorkId); }
 
-          // 构建视频任务列表
-          const tasks: VideoTask[] = [];
-          let taskIdCounter = 0;
-          for (const ep of data.episodes) {
-            const videoResults = ep.videoResults || [];
-            for (const shot of (ep.shots || [])) {
-              taskIdCounter++;
-              const videoResult = videoResults.find(
-                (r: any) => r.shot_id === shot.id
-              );
-              tasks.push({
-                id: taskIdCounter,
-                name: `${ep.title} - 镜头${shot.number} [${shot.shotType}]`,
-                episodeId: ep.id,
-                episodeTitle: ep.title,
-                shotNumber: shot.number,
-                shotDescription: shot.description,
-                status: videoResult?.status === 'completed' ? 'completed' :
-                        videoResult?.status === 'failed' ? 'failed' : 'pending',
-                progress: videoResult?.status === 'completed' ? 100 : 0,
-                duration: shot.duration || 5,
-                resolution: '1920x1080',
-                format: 'mp4',
-                videoUrl: videoResult?.video_url,
-                fileSize: videoResult?.file_size,
-                createdAt: data.generatedAt || new Date().toISOString(),
-              });
-            }
+      // 加载分镜数据（用于构建待生成任务列表）
+      let storyData = loadState('storyboard');
+      if (!storyData) { const o = localStorage.getItem('shot_generation_result'); if (o) try { storyData = JSON.parse(o); } catch {} }
+      // 加载已有的视频结果
+      let videoData = loadState('videoResults');
+      if (!videoData) { const o = localStorage.getItem('shot_video_results'); if (o) try { videoData = JSON.parse(o); } catch {} }
+
+      // 合并分镜数据中的剧集和视频结果
+      const allEps = (storyData?.episodes || videoData?.episodes || []);
+      if (allEps.length > 0) {
+        setEpisodes(allEps.map((e: any) => ({ id: e.id, title: e.title, number: e.number, description: e.description })));
+
+        const urlEpId = searchParams.get('episodeId');
+        const urlShotNum = searchParams.get('shotNumber');
+        // 优先选中 URL 指定的剧集，否则第一个
+        const initialEpId = urlEpId || allEps[0].id;
+        setActiveEpisodeId(initialEpId);
+
+        const tasks: VideoTask[] = []; let tid = 0;
+        for (const ep of allEps) {
+          for (const s of (ep.shots || [])) { tid++;
+            const r = (videoData?.episodes?.find((ve: any) => ve.id === ep.id)?.videoResults || ep.videoResults || []).find((x: any) => x.shot_id === s.id);
+            tasks.push({ id: tid, name: `${ep.title} 镜头${s.number}`, episodeId: ep.id, episodeTitle: ep.title, shotNumber: s.number, shotDescription: s.description, shotType: s.shotType, status: r?.status === 'completed' ? 'completed' : r?.status === 'failed' ? 'failed' : 'pending', progress: r?.status === 'completed' ? 100 : 0, duration: s.duration || 5, resolution: '1920x1080', format: 'mp4', videoUrl: r?.video_url, thumbnailUrl: r?.image_url, fileSize: r?.file_size, createdAt: videoData?.generatedAt || storyData?.generatedAt || '' });
           }
-          setVideoTasks(tasks);
-          const completedCount = tasks.filter(t => t.status === 'completed').length;
-          message.success(`已加载 ${data.episodes.length} 集共 ${tasks.length} 个镜头视频（${completedCount} 个已完成）`);
-          // 持久化到后端
-          saveState('videoResults', data, getWorkId() || undefined);
-        } catch (e) {
-          console.error('Failed to load shot video results:', e);
+        }
+        setVideoTasks(tasks);
+
+        if (urlEpId && urlShotNum) {
+          const target = tasks.find(t => t.episodeId === urlEpId && t.shotNumber === Number(urlShotNum));
+          if (target) setSelectedTask(target);
+          else if (tasks.length) setSelectedTask(tasks[0]);
+        } else if (tasks.length) {
+          setSelectedTask(tasks[0]);
         }
       }
     };
-    loadData();
-  }, []);
+    load();
+  }, [searchParams]);
 
-  // 集数操作
-  const handleAddEpisode = () => {
-    const newEpisode: Episode = {
-      id: `ep-${Date.now()}`,
-      title: `第${episodes.length + 1}集`,
-      number: episodes.length + 1,
-      description: '新集数',
-    };
-    setEpisodes([...episodes, newEpisode]);
-    setActiveEpisodeId(newEpisode.id);
-    message.success(`已添加 ${newEpisode.title}`);
-  };
+  const epTasks = videoTasks.filter(t => t.episodeId === activeEpisodeId);
+  const completed = epTasks.filter(t => t.status === 'completed').length;
+  const pending = epTasks.filter(t => t.status === 'pending').length;
 
-  const handleEditEpisode = (episode: Episode) => {
-    setEditingEpisode(episode);
-    setIsDrawerOpen(true);
-  };
-
-  const handleDeleteEpisode = (id: string) => {
-    Modal.confirm({
-      title: '确认删除',
-      content: '确定要删除这集吗？删除后内容将无法恢复。',
-      onOk: () => {
-        const filtered = episodes.filter(ep => ep.id !== id);
-        if (filtered.length > 0) {
-          const newActiveId = id === activeEpisodeId ? filtered[0].id : activeEpisodeId;
-          setActiveEpisodeId(newActiveId);
-        }
-        setEpisodes(filtered);
-        message.success('集数已删除');
-      },
-    });
-  };
-
-  const handleSaveEpisode = (values: any) => {
-    if (editingEpisode) {
-      const updatedEpisodes = episodes.map(ep =>
-        ep.id === editingEpisode.id ? { ...ep, ...values } : ep
-      );
-      setEpisodes(updatedEpisodes);
-      message.success('集数信息已更新');
-      setIsDrawerOpen(false);
-      setEditingEpisode(null);
-    }
-  };
-
-  const handleSettingsSave = (values: any) => {
-    setVideoSettings({ ...videoSettings, ...values });
-    setIsSettingsModalOpen(false);
-    message.success('设置已保存');
-  };
-
-  // 剪辑成片 — 拼接当前集所有已完成镜头视频
-  const handleFinalCut = useCallback(async () => {
-    const currentTasks = videoTasks.filter(
-      t => t.episodeId === activeEpisodeId && t.status === 'completed' && t.videoUrl
-    );
-    if (currentTasks.length === 0) {
-      message.warning('当前集没有已完成的视频，请先在分镜脚本页面生成视频');
-      return;
-    }
-    const videoUrls = currentTasks.map(t => t.videoUrl!);
-    const currentEpisode = episodes.find(ep => ep.id === activeEpisodeId);
-
-    setIsFinalCutProcessing(true);
-
+  const handleGenSingle = async (task: VideoTask) => {
+    if (task.status === 'processing') return;
+    setVideoTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: 'processing' as const, progress: 10 } : t));
     try {
-      const response = await finalCutService.createFinalCut({
-        project_id: activeEpisodeId,
-        episode_title: currentEpisode?.title,
-        video_urls: videoUrls,
-      });
-
-      if (response?.task_id) {
-        message.info(`剪辑任务已提交，正在拼接 ${videoUrls.length} 个镜头视频...`);
-
-        finalCutPollingRef.current = setInterval(async () => {
-          try {
-            const status = await finalCutService.getFinalCutStatus(response.task_id);
-
-            if (status?.status === 'completed') {
-              if (finalCutPollingRef.current) {
-                clearInterval(finalCutPollingRef.current);
-                finalCutPollingRef.current = null;
-              }
-              setIsFinalCutProcessing(false);
-              message.success('剪辑完成！正在跳转到成片页面...');
-
-              const finalCutData = {
-                taskId: response.task_id,
-                episodeTitle: currentEpisode?.title,
-                videoUrl: status.video_url,
-                thumbnailUrl: status.thumbnail_url,
-                duration: status.duration,
-                completedAt: new Date().toISOString(),
-              };
-              localStorage.setItem('final_cut_result', JSON.stringify(finalCutData));
-
-              // 持久化到后端
-              saveState('finalCut', finalCutData, getWorkId() || undefined);
-              navigate('/final-cut');
-            } else if (status?.status === 'failed') {
-              if (finalCutPollingRef.current) {
-                clearInterval(finalCutPollingRef.current);
-                finalCutPollingRef.current = null;
-              }
-              setIsFinalCutProcessing(false);
-              message.error(status.error_message || '剪辑失败');
-            }
-          } catch (err: any) {
-            if (err?.response?.status === 404) {
-              if (finalCutPollingRef.current) {
-                clearInterval(finalCutPollingRef.current);
-                finalCutPollingRef.current = null;
-              }
-              setIsFinalCutProcessing(false);
-              message.error('剪辑任务已过期');
-            }
-          }
-        }, 3000);
-      } else {
-        throw new Error('未获取到任务ID');
-      }
-    } catch (err: any) {
-      setIsFinalCutProcessing(false);
-      message.error(err?.response?.data?.detail || err?.message || '剪辑请求失败');
-    }
-  }, [videoTasks, activeEpisodeId, episodes, navigate]);
-
-  // 清理轮询
-  useEffect(() => {
-    return () => {
-      if (finalCutPollingRef.current) {
-        clearInterval(finalCutPollingRef.current);
-      }
-    };
-  }, []);
-
-  const renderVideoPreview = () => {
-    const currentTasks = videoTasks.filter(t => t.episodeId === activeEpisodeId);
-    const firstCompleted = currentTasks.find(t => t.status === 'completed' && t.videoUrl);
-    const hasMedia = !!firstCompleted;
-    const isImage = hasMedia && /\.(png|jpg|jpeg|webp)(\?|$)/i.test(firstCompleted.videoUrl!);
-
-    return (
-    <div>
-      <Title level={4}>视频预览</Title>
-      <div style={{
-        width: '100%',
-        height: 400,
-        backgroundColor: '#000',
-        borderRadius: 8,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: 'white',
-        marginBottom: 16,
-        position: 'relative',
-        overflow: 'hidden',
-      }}>
-        {hasMedia ? (
-          isImage ? (
-            <img src={firstCompleted.videoUrl} alt="预览图"
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-          ) : (
-            <video
-              src={firstCompleted.videoUrl}
-              controls
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-              poster={firstCompleted.thumbnailUrl}
-            />
-          )
-        ) : (
-          <div style={{ textAlign: 'center' }}>
-            <VideoCameraOutlined style={{ fontSize: 64, marginBottom: 16 }} />
-            <div style={{ fontSize: 18, marginBottom: 8 }}>视频预览区域</div>
-            <Text type="secondary">
-              {videoTasks.length === 0
-                ? '请先在分镜脚本页面生成视频'
-                : currentTasks.length === 0
-                ? '当前集暂无视频'
-                : '该集暂无已完成的视频'}
-            </Text>
-          </div>
-        )}
-      </div>
-
-      <div style={{ display: 'flex', justifyContent: 'center', gap: 16, marginBottom: 24 }}>
-        <Button
-          size="large"
-          icon={<SettingOutlined />}
-          onClick={() => setIsSettingsModalOpen(true)}
-        >
-          视频设置
-        </Button>
-        <Button
-          size="large"
-          icon={<DownloadOutlined />}
-          disabled={!hasMedia}
-          onClick={() => {
-            if (firstCompleted?.videoUrl) {
-              window.open(firstCompleted.videoUrl, '_blank');
-            }
-          }}
-        >
-          下载视频
-        </Button>
-      </div>
-
-      {/* 镜头选择列表 */}
-      {currentTasks.length > 0 && (
-        <div style={{ marginTop: 16 }}>
-          <Text strong>本集镜头视频：</Text>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-            {currentTasks.map(task => (
-              <Tag
-                key={task.id}
-                color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : 'default'}
-                style={{ cursor: task.videoUrl ? 'pointer' : 'default' }}
-              >
-                镜头{task.shotNumber}
-                {task.status === 'completed' ? ' ✓' : task.status === 'failed' ? ' ✗' : ''}
-              </Tag>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-    );
+      const ep = episodes.find(e => e.id === task.episodeId);
+      const sb = loadState('storyboard') || JSON.parse(localStorage.getItem('shot_generation_result') || '{}');
+      const sEp = sb?.episodes?.find((e: any) => e.id === task.episodeId);
+      const shot = sEp?.shots?.find((s: any) => s.number === task.shotNumber);
+      if (!shot) throw new Error('Shot not found');
+      const resp = await scriptService.generateShotsVideo({ episodes: [{ ...ep, shots: [shot] }], fps: 24 });
+      if (!resp?.task_id) throw new Error('No task');
+      const poll = setInterval(async () => {
+        const s = await scriptService.getShotsVideoStatus(resp.task_id);
+        setVideoTasks(prev => prev.map(t => t.id === task.id ? { ...t, progress: s?.progress || 10 } : t));
+        if (s?.status === 'completed') { clearInterval(poll); const r = await scriptService.getShotsVideoResult(resp.task_id); const fr = r.results?.[0]; setVideoTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: 'completed' as const, progress: 100, videoUrl: fr?.video_url, thumbnailUrl: fr?.image_url } : t)); message.success(`镜头${task.shotNumber} 生成完成`); }
+        else if (s?.status === 'failed') { clearInterval(poll); setVideoTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: 'failed' as const } : t)); }
+      }, 3000);
+    } catch { setVideoTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: 'failed' as const } : t)); }
   };
 
-  const renderTasks = () => (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Title level={4}>生成任务</Title>
-        <Button icon={<ReloadOutlined />} onClick={() => message.info('已刷新任务列表')}>
-          刷新
-        </Button>
-      </div>
-
-      <div style={{ maxHeight: 500, overflowY: 'auto' }}>
-        {videoTasks.map((task) => (
-          <Card
-            key={task.id}
-            style={{ marginBottom: 12 }}
-            size="small"
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-                  <Text strong style={{ marginRight: 12 }}>{task.name}</Text>
-                  <Tag color={
-                    task.status === 'completed' ? 'success' :
-                    task.status === 'processing' ? 'processing' :
-                    task.status === 'failed' ? 'error' : 'default'
-                  }>
-                    {task.status === 'completed' ? '已完成' :
-                     task.status === 'processing' ? '处理中' :
-                     task.status === 'failed' ? '失败' : '等待中'}
-                  </Tag>
-                  <Tag color="blue" style={{ marginLeft: 8 }}>{task.episodeTitle}</Tag>
-                </div>
-
-                <div style={{ display: 'flex', gap: 24, marginBottom: 8 }}>
-                  <div>
-                    <Text type="secondary">镜头: </Text>
-                    <Text>{task.shotNumber ? `#${task.shotNumber}` : '-'}</Text>
-                  </div>
-                  <div>
-                    <Text type="secondary">时长: </Text>
-                    <Text>{task.duration}秒</Text>
-                  </div>
-                  <div>
-                    <Text type="secondary">分辨率: </Text>
-                    <Text>{task.resolution}</Text>
-                  </div>
-                  <div>
-                    <Text type="secondary">格式: </Text>
-                    <Text>{task.format.toUpperCase()}</Text>
-                  </div>
-                </div>
-
-                {task.shotDescription && (
-                  <div style={{ marginBottom: 8 }}>
-                    <Text type="secondary">画面描述: </Text>
-                    <Text style={{ fontSize: 12 }}>{task.shotDescription}</Text>
-                  </div>
-                )}
-
-                {task.fileSize && (
-                  <div style={{ marginBottom: 8 }}>
-                    <Text type="secondary">文件大小: </Text>
-                    <Text>{(task.fileSize / 1024 / 1024).toFixed(1)} MB</Text>
-                  </div>
-                )}
-
-                <div>
-                  <Text type="secondary">创建时间: </Text>
-                  <Text>{task.createdAt}</Text>
-                </div>
-
-                {task.estimatedCompletion && (
-                  <div>
-                    <Text type="secondary">预计完成: </Text>
-                    <Text>{task.estimatedCompletion}</Text>
-                  </div>
-                )}
-              </div>
-
-              <div style={{ textAlign: 'center', minWidth: 100 }}>
-                {task.status === 'processing' ? (
-                  <>
-                    <Progress
-                      type="circle"
-                      percent={task.progress}
-                      size={60}
-                      status="active"
-                    />
-                    <div style={{ marginTop: 8 }}>
-                      <Text type="secondary">处理中...</Text>
-                    </div>
-                  </>
-                ) : task.status === 'completed' ? (
-                  <>
-                    <CheckCircleOutlined style={{ fontSize: 32, color: '#34c759' }} />
-                    <div style={{ marginTop: 8 }}>
-                      {task.videoUrl && (
-                        <>
-                          <Button type="link" icon={<EyeOutlined />} size="small"
-                            onClick={() => window.open(task.videoUrl, '_blank')}>预览</Button>
-                          <Button type="link" icon={<DownloadOutlined />} size="small"
-                            onClick={() => {
-                              if (task.videoUrl) {
-                                const a = document.createElement('a');
-                                a.href = task.videoUrl!;
-                                a.download = `${task.name}.mp4`;
-                                a.click();
-                              }
-                            }}>下载</Button>
-                        </>
-                      )}
-                      {!task.videoUrl && <Text type="secondary" style={{ fontSize: 11 }}>无视频URL</Text>}
-                    </div>
-                  </>
-                ) : (
-                  <Progress
-                    type="circle"
-                    percent={task.progress}
-                    size={60}
-                    status="normal"
-                  />
-                )}
-              </div>
-            </div>
-
-            {task.status === 'processing' && (
-              <>
-                <div style={{ margin: '12px 0' }} />
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <Text type="secondary">当前进度: {task.progress}%</Text>
-                  </div>
-                  <div>
-                    <Progress
-                      percent={task.progress}
-                      status="active"
-                      style={{ width: 200 }}
-                    />
-                  </div>
-                </div>
-              </>
-            )}
-          </Card>
-        ))}
-      </div>
-    </div>
-  );
-
-  const renderGenerationLog = () => {
-    const currentTasks = videoTasks.filter(t => t.episodeId === activeEpisodeId);
-    const currentEpisode = episodes.find(ep => ep.id === activeEpisodeId);
-
-    return (
-    <div>
-      <Title level={4}>生成日志</Title>
-      <div style={{
-        backgroundColor: '#ffffff',
-        borderRadius: 8,
-        padding: 16,
-        height: 300,
-        overflowY: 'auto',
-        fontFamily: 'monospace',
-        fontSize: 12,
-      }}>
-        <div style={{ marginBottom: 16 }}>
-          <Text strong>当前集数：</Text>
-          <Tag color="blue">{currentEpisode?.title || '无'}</Tag>
-          <Text style={{ marginLeft: 16 }}>镜头总数：{currentTasks.length}</Text>
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <Text strong>生成任务列表：</Text>
-        </div>
-        {currentTasks.length === 0 ? (
-          <Text type="secondary">暂无生成日志。请在分镜脚本页面点击"生成故事板"开始生成视频。</Text>
-        ) : (
-          <ul style={{ margin: 0, paddingLeft: 20 }}>
-            {currentTasks.map(task => (
-              <li key={task.id} style={{
-                marginBottom: 8,
-                color: task.status === 'completed' ? '#34c759' :
-                       task.status === 'failed' ? '#ff3b30' :
-                       task.status === 'processing' ? '#0066cc' : '#aeaeb2'
-              }}>
-                <Text strong>[{new Date(task.createdAt).toLocaleTimeString()}]</Text>{' '}
-                镜头{task.shotNumber} ({task.name.split('[')[1]?.replace(']', '') || '-'}){' '}
-                {task.status === 'completed' ? '✓ 已完成' :
-                 task.status === 'failed' ? '✗ 失败' :
-                 task.status === 'processing' ? '⏳ 处理中...' : '○ 等待中'}
-                {task.fileSize && task.status === 'completed'
-                  ? ` (${(task.fileSize / 1024 / 1024).toFixed(1)}MB)`
-                  : ''}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
-    );
+  const handleGenAll = async () => {
+    const pts = videoTasks.filter(t => t.status === 'pending'); if (!pts.length) { message.info('没有待生成的镜头'); return; }
+    setGenAll(true); setGenProgress(5);
+    try {
+      const epData = episodes.map(e => ({ ...e, shots: (loadState('storyboard') || JSON.parse(localStorage.getItem('shot_generation_result') || '{}'))?.episodes?.find((x: any) => x.id === e.id)?.shots || [] }));
+      const resp = await scriptService.generateShotsVideo({ episodes: epData, fps: 24 });
+      if (!resp?.task_id) throw new Error('No task');
+      const poll = setInterval(async () => { const s = await scriptService.getShotsVideoStatus(resp.task_id); setGenProgress(s?.progress || 10); if (s?.status === 'completed') { clearInterval(poll); setGenAll(false); const r = await scriptService.getShotsVideoResult(resp.task_id); setVideoTasks(prev => prev.map(t => { const m = r.results?.find((x: any) => x.shot_id === t.shotNumber && x.episode_id === t.episodeId); return m ? { ...t, status: 'completed' as const, progress: 100, videoUrl: m.video_url, thumbnailUrl: m.image_url } : t; })); message.success('全部生成完成'); } else if (s?.status === 'failed') { clearInterval(poll); setGenAll(false); message.error('生成失败'); } }, 3000);
+    } catch { setGenAll(false); message.error('生成失败'); }
   };
-
-  // 渲染集数列表
-  const renderEpisodeList = () => (
-    <div style={{ borderRight: '1px solid #f5f5f7', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ padding: '16px', borderBottom: '1px solid #f5f5f7' }}>
-        <Title level={4} style={{ margin: 0 }}>
-          <FolderOpenOutlined style={{ marginRight: 8 }} />
-          集数列表
-        </Title>
-        <Text type="secondary" style={{ fontSize: 12 }}>共 {episodes.length} 集</Text>
-      </div>
-
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-        {episodes.map((episode) => (
-          <div
-            key={episode.id}
-            onClick={() => setActiveEpisodeId(episode.id)}
-            style={{
-              padding: '12px 16px',
-              cursor: 'pointer',
-              backgroundColor: activeEpisodeId === episode.id ? '#e8f2fd' : 'transparent',
-              borderBottom: '1px solid #f5f5f7',
-              transition: 'background-color 0.2s',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <StarOutlined
-                  style={{
-                    color: activeEpisodeId === episode.id ? '#0066cc' : '#e5e5ea',
-                    fontSize: 16
-                  }}
-                />
-                <Text strong style={{ color: activeEpisodeId === episode.id ? '#0066cc' : undefined }}>
-                  {episode.title}
-                </Text>
-              </div>
-              <Space size="small">
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<EditOutlined />}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleEditEpisode(episode);
-                  }}
-                />
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<DeleteOutlined />}
-                  danger
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteEpisode(episode.id);
-                  }}
-                />
-              </Space>
-            </div>
-            {episode.description && (
-              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
-                {episode.description}
-              </Text>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <div style={{ padding: '16px', borderTop: '1px solid #f5f5f7' }}>
-        <Button
-          type="dashed"
-          block
-          icon={<PlusOutlined />}
-          onClick={handleAddEpisode}
-        >
-          添加新集数
-        </Button>
-      </div>
-    </div>
-  );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)' }}>
-      {/* 顶部操作栏 */}
-      <div style={{
-        padding: '12px 24px', background: '#fff', borderBottom: '1px solid #e5e5ea',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      }}>
-        <div>
-          <Title level={4} style={{ margin: 0 }}>
-            <VideoCameraOutlined style={{ marginRight: 8 }} />
-            分镜视频
-          </Title>
-          <Text type="secondary" style={{ fontSize: 12 }}>将分镜脚本生成为视频，支持预览和下载</Text>
+    <div style={{ height: 'calc(100vh - 64px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* ── Top Bar ── */}
+      {/* 顶部导航栏 — 与 Script 页风格一致 */}
+      <div style={{ height: 72, background: '#fff', borderBottom: '1px solid #e5e5ea', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 48px', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Text strong style={{ fontSize: 15, color: '#1d1d1f' }}>
+            <VideoCameraOutlined style={{ marginRight: 6 }} />
+            {episodes.find(e => e.id === activeEpisodeId)?.title || '视频制作'} · 分镜视频
+          </Text>
         </div>
-        <Button
-          type="primary"
-          size="middle"
-          icon={<VideoCameraOutlined />}
-          onClick={handleFinalCut}
-          loading={isFinalCutProcessing}
-          disabled={isFinalCutProcessing}
-        >
-          {isFinalCutProcessing ? '正在剪辑...' : '剪辑成片'}
-        </Button>
+        <Space>
+          <Text style={{ color: '#86868b', fontSize: 12 }}>共 {videoTasks.length} 镜头</Text>
+          <Button size="small" type="primary" icon={<ThunderboltOutlined />} onClick={handleGenAll} loading={genAll}>
+            {genAll ? `生成中 ${genProgress}%` : '剪辑成片'}
+          </Button>
+        </Space>
       </div>
 
-      {/* 内容区 */}
-      <div style={{ flex: 1, display: 'flex', padding: '16px 24px', gap: 16, overflow: 'hidden' }}>
-        {/* 左侧集数列表 */}
-        <div style={{ width: 280, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
-          {renderEpisodeList()}
+      {/* ── Main Content ── */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', background: '#fff' }}>
+      {/* ── LEFT: Episode/Shot List (~15%) ── */}
+      <div style={{ width: '15%', minWidth: 160, background: '#f9fafb', borderRight: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ padding: 12, borderBottom: '1px solid #e5e7eb', background: '#fff' }}>
+          <Text strong style={{ fontSize: 13 }}>集数列表</Text>
+          <Text style={{ color: '#6b7280', fontSize: 11, marginLeft: 4 }}>共 {episodes.length} 集</Text>
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', padding: 4 }}>
+          {episodes.map(ep => {
+            const epT = videoTasks.filter(t => t.episodeId === ep.id);
+            const isActive = ep.id === activeEpisodeId;
+            return (
+              <div key={ep.id} onClick={() => setActiveEpisodeId(ep.id)}
+                style={{ padding: '10px 12px', cursor: 'pointer', borderRadius: 6, marginBottom: 2,
+                  background: isActive ? '#fff' : 'transparent', border: isActive ? '1px solid #2563eb' : '1px solid transparent' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <Text strong style={{ fontSize: 12, color: isActive ? '#2563eb' : '#111' }}>{ep.title}</Text>
+                  <Text style={{ fontSize: 10, color: '#6b7280' }}>{epT.length} 镜头</Text>
+                </div>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {epT.map(t => (
+                    <div key={t.id} onClick={e => { e.stopPropagation(); setSelectedTask(t); }}
+                      title={t.name}
+                      style={{ width: 28, height: 28, borderRadius: 4, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 500,
+                        background: t.status === 'completed' ? '#d1fae5' : t.status === 'processing' ? '#dbeafe' : t.status === 'failed' ? '#fee2e2' : '#f3f4f6',
+                        color: t.status === 'completed' ? '#065f46' : t.status === 'processing' ? '#1e40af' : t.status === 'failed' ? '#991b1b' : '#6b7280',
+                        border: selectedTask?.id === t.id ? '2px solid #2563eb' : '1px solid transparent',
+                      }}>
+                      {t.shotNumber || '?'}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          {episodes.length === 0 && <div style={{ textAlign: 'center', padding: 20, color: '#9ca3af', fontSize: 12 }}>暂无集数数据</div>}
+        </div>
+      </div>
+
+      {/* ── MIDDLE: Config Panel (~30%) ── */}
+      <div style={{ width: '30%', minWidth: 380, borderRight: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px' }}>
+
+          {/* Global Config Card */}
+          <div style={{ background: '#fff', borderRadius: 8, padding: 12, border: '1px solid #f0f0f0', marginBottom: 8 }}>
+            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center' }}><Text style={{ width: 80, color: '#111', fontSize: 13, flexShrink: 0 }}>视觉风格</Text><Select value={visualStyle} onChange={setVisualStyle} style={{ flex: 1 }} options={['写实', '2D吉卜力动画', '3D国风', '日漫'].map(v => ({ value: v, label: v }))} /></div>
+            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center' }}><Text style={{ width: 80, color: '#111', fontSize: 13, flexShrink: 0 }}>摄影风格</Text><Select value={photoStyle} onChange={setPhotoStyle} style={{ flex: 1 }} options={['经典电影', '纪实风格', '黑色电影'].map(v => ({ value: v, label: v }))} /></div>
+            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center' }}><Text style={{ width: 80, color: '#111', fontSize: 13, flexShrink: 0 }}>画面比例</Text><Radio.Group value={aspectRatio} onChange={e => setAspectRatio(e.target.value)} size="small"><Radio.Button value="landscape">横屏</Radio.Button><Radio.Button value="portrait">竖屏</Radio.Button><Radio.Button value="hd">高清(2K)</Radio.Button></Radio.Group></div>
+            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}><Text style={{ color: '#111', fontSize: 13 }}>画质</Text><Button size="small" type="primary" ghost>标准(480P)</Button><Text style={{ color: '#111', fontSize: 13, marginLeft: 8 }}>生成方式</Text><Button size="small" onClick={() => setGenMode('single')}>单图生成</Button><Button size="small" type="primary" style={{ background: genMode === 'merge' ? '#2563eb' : undefined, borderColor: '#2563eb' }} onClick={() => setGenMode('merge')}>合并生成</Button></div>
+            <Text style={{ color: '#9ca3af', fontSize: 11, display: 'block', marginBottom: 6 }}>(best quality, masterpiece, 8k, high detailed:1.2), (Studio Ghibli style:1...</Text>
+            <div style={{ marginBottom: 10 }}><Text style={{ color: '#111', fontSize: 13, marginRight: 8 }}>首/尾帧</Text><Radio.Group value={frameMode} onChange={e => setFrameMode(e.target.value)} size="small"><Radio.Button value="first">仅首帧</Radio.Button><Radio.Button value="last">仅尾帧</Radio.Button><Radio.Button value="both">首+尾</Radio.Button></Radio.Group></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}><Select size="small" value="cluster" style={{ flex: 1 }} options={[{ value: 'cluster', label: 'Cluster (聚类去)' }]} /><Button size="small" type="default" ghost style={{ borderColor: '#2563eb', color: '#2563eb' }}>范例图开</Button></div>
+            <Button type="primary" block icon={<StarOutlined />} onClick={handleGenAll} loading={genAll} style={{ background: '#111', borderColor: '#111', borderRadius: 8, height: 40, fontSize: 14 }}>{genAll ? `生成中 ${genProgress}%` : '执行合并生成'}</Button>
+          </div>
+
+          {/* Selected Shot Card */}
+          {selectedTask && (
+            <div style={{ background: '#fff', borderRadius: 8, padding: 12, border: '1px solid #f0f0f0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <Tag color="blue" style={{ margin: 0 }}>分镜 #{selectedTask.shotNumber}</Tag>
+                <Tag style={{ background: '#f3f4f6', border: 'none', color: '#6b7280' }}>1-1-{selectedTask.shotNumber}</Tag>
+                <Tag style={{ background: '#f3f4f6', border: 'none', color: '#6b7280' }}>MS {selectedTask.shotType || '中景'}</Tag>
+                <Button size="small" type="link" icon={<ReloadOutlined />} onClick={() => handleGenSingle(selectedTask)} loading={selectedTask.status === 'processing'} style={{ marginLeft: 'auto', color: '#2563eb' }} />
+              </div>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 8 }}>
+                <div style={{ width: 80, textAlign: 'center' }}>
+                  <Text style={{ color: '#6b7280', fontSize: 11, display: 'block', marginBottom: 4 }}>首帧</Text>
+                  <div style={{ width: 80, height: 100, background: '#f9fafb', borderRadius: 4, border: '2px solid #2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                    {selectedTask.thumbnailUrl ? <img src={selectedTask.thumbnailUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : <PictureOutlined style={{ fontSize: 24, color: '#ccc' }} />}
+                  </div>
+                </div>
+                <div style={{ width: 80, textAlign: 'center' }}>
+                  <Text style={{ color: '#6b7280', fontSize: 11, display: 'block', marginBottom: 4 }}>视角</Text>
+                  <div style={{ width: 80, height: 100, border: '2px dashed #d1d5db', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', color: '#9ca3af' }}><UploadOutlined style={{ fontSize: 18 }} /><Text style={{ fontSize: 10 }}>上传/生成</Text></div>
+                </div>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, justifyContent: 'center' }}>
+                  <Button size="small" type="primary" ghost icon={<ThunderboltOutlined />} block>AI 生成</Button>
+                  <Button size="small" style={{ borderColor: '#c4b5fd', color: '#7c3aed', background: '#f5f3ff' }} block>角色库 1-1 {selectedTask.shotNumber}</Button>
+                  <Button size="small" type="text" block style={{ color: '#6b7280', fontSize: 11 }}>从素材库</Button>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                <Button size="small" icon={<ReloadOutlined />}>重新生成</Button>
+                <div style={{ width: 40, height: 24, background: '#f3f4f6', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CaretRightOutlined style={{ fontSize: 10 }} /></div>
+                <Button size="small" icon={<CopyOutlined />} type="text" /><Button size="small" icon={<StarOutlined />} type="text" />
+              </div>
+              <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>
+                <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
+                  <Tag color="purple" style={{ fontSize: 10 }}>剧本</Tag><Tag style={{ background: '#f3f4f6', border: 'none', fontSize: 10, color: '#6b7280' }}>首帧</Tag><Tag style={{ background: '#f3f4f6', border: 'none', fontSize: 10, color: '#6b7280' }}>尾帧</Tag><Tag color="green" style={{ fontSize: 10 }}>视频</Tag>
+                </div>
+                <Text style={{ color: '#c4b5fd', fontSize: 11 }}>剧本: {selectedTask.shotDescription?.slice(0, 40) || '暂无描述'}</Text>
+              </div>
+            </div>
+          )}
+
+          {/* Shot list */}
+          <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {epTasks.map((t, i) => (
+              <div key={t.id} onClick={() => setSelectedTask(t)} style={{ padding: '4px 10px', cursor: 'pointer', borderRadius: 4, fontSize: 12, background: selectedTask?.id === t.id ? '#2563eb' : '#f3f4f6', color: selectedTask?.id === t.id ? '#fff' : '#111' }}>
+                #{i + 1} {t.shotType || '中景'}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{ borderTop: '1px solid #f0f0f0', padding: '8px 16px', display: 'flex', gap: 16, fontSize: 11, color: '#6b7280' }}>
+          ✅{completed} ❌{epTasks.filter(t => t.status === 'failed').length} ⏳{pending} 共{epTasks.length}镜头
+        </div>
+      </div>
+
+      {/* ── RIGHT: Video Preview (~55%) ── */}
+      <div style={{ width: '55%', background: '#f3f4f6', display: 'flex', flexDirection: 'column', padding: 24, gap: 16 }}>
+        {/* Upper: Video Player */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 0 }}>
+          <div ref={playerRef} style={{ width: '100%', maxWidth: 600, maxHeight: '100%', aspectRatio: '9/16', background: '#1a1a2e', borderRadius: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative', border: '2px solid #fff', boxShadow: '0 8px 32px rgba(0,0,0,0.12)' }}>
+            {selectedTask?.videoUrl ? (
+              <video ref={videoRef} src={selectedTask.videoUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                onTimeUpdate={() => videoRef.current && setCurrentTime(videoRef.current.currentTime)}
+                onLoadedMetadata={() => videoRef.current && setDuration(videoRef.current.duration)}
+                onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)}
+                poster={selectedTask.thumbnailUrl || undefined} />
+            ) : selectedTask?.thumbnailUrl ? (
+              <img src={selectedTask.thumbnailUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            ) : (
+              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280', flexDirection: 'column', gap: 8 }}>
+                <VideoCameraOutlined style={{ fontSize: 48 }} /><Text style={{ color: '#9ca3af', fontSize: 13 }}>选择左侧镜头预览</Text>
+              </div>
+            )}
+            <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(0,0,0,0.55)', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Button type="text" size="small" icon={playing ? <PauseCircleOutlined /> : <CaretRightOutlined />} onClick={() => { if (videoRef.current) { if (playing) videoRef.current.pause(); else videoRef.current.play(); setPlaying(!playing); } }} style={{ color: '#fff' }} />
+              <Text style={{ color: '#e5e7eb', fontSize: 11 }}>{fmt(currentTime)}</Text>
+              <div style={{ flex: 1, height: 3, background: 'rgba(255,255,255,0.3)', borderRadius: 2, cursor: 'pointer' }} onClick={e => { const rect = (e.target as HTMLElement).getBoundingClientRect(); const pct = (e.clientX - rect.left) / rect.width; if (videoRef.current) { videoRef.current.currentTime = pct * duration; setCurrentTime(pct * duration); } }}>
+                <div style={{ width: `${(currentTime / (duration || 1)) * 100}%`, height: '100%', background: '#fff', borderRadius: 2 }} />
+              </div>
+              <Text style={{ color: '#e5e7eb', fontSize: 11 }}>{fmt(duration)}</Text>
+              <Button type="text" size="small" icon={isMuted ? <MutedOutlined /> : <SoundOutlined />} onClick={() => { if (videoRef.current) { videoRef.current.muted = !isMuted; setIsMuted(!isMuted); } }} style={{ color: '#fff' }} />
+              <Button type="text" size="small" icon={<FullscreenOutlined />} onClick={() => playerRef.current?.requestFullscreen()} style={{ color: '#fff' }} />
+              <Button type="text" size="small" icon={<MoreOutlined />} style={{ color: '#fff' }} />
+            </div>
+          </div>
         </div>
 
-        {/* 右侧内容区域 */}
-        <div style={{ flex: 1, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '16px 24px', borderBottom: '1px solid #f5f5f7' }}>
-            <Title level={5} style={{ margin: 0 }}>{episodes.find(ep => ep.id === activeEpisodeId)?.title}</Title>
+        {/* Lower: Shot Strip — 当前剧集所有镜头缩略图 */}
+        <div style={{ flexShrink: 0, background: '#fff', borderRadius: 8, border: '1px solid #e5e7eb', padding: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <Text strong style={{ fontSize: 13, color: '#111' }}>{episodes.find(e => e.id === activeEpisodeId)?.title || '当前剧集'} · 镜头列表</Text>
+            <Text style={{ fontSize: 12, color: '#6b7280' }}>{epTasks.length} 个镜头</Text>
           </div>
-          <div style={{ padding: '24px', flex: 1, overflow: 'auto' }}>
-            <div style={{ marginBottom: 24 }}>
-              <Space>
-                <Button type={activeTab === 'preview' ? 'primary' : 'default'} icon={<PlayCircleOutlined />} onClick={() => setActiveTab('preview')}>视频预览</Button>
-                <Button type={activeTab === 'tasks' ? 'primary' : 'default'} icon={<CloudUploadOutlined />} onClick={() => setActiveTab('tasks')}>生成任务</Button>
-                <Button type={activeTab === 'log' ? 'primary' : 'default'} icon={<EyeOutlined />} onClick={() => setActiveTab('log')}>生成日志</Button>
-              </Space>
-            </div>
-            <div style={{ marginTop: 24 }}>
-              {activeTab === 'preview' && renderVideoPreview()}
-              {activeTab === 'tasks' && renderTasks()}
-              {activeTab === 'log' && renderGenerationLog()}
-            </div>
+          <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 4 }}>
+            {epTasks.map(t => (
+              <div key={t.id} onClick={() => { setSelectedTask(t); if (t.videoUrl && videoRef.current) { videoRef.current.src = t.videoUrl; videoRef.current.play(); setPlaying(true); } }}
+                style={{ cursor: 'pointer', flexShrink: 0, width: 140, borderRadius: 8, overflow: 'hidden', border: selectedTask?.id === t.id ? '2px solid #2563eb' : '1px solid #e5e7eb', background: '#f9fafb' }}>
+                <div style={{ height: 120, background: '#1a1a2e', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+                  {t.thumbnailUrl ? <img src={t.thumbnailUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : <VideoCameraOutlined style={{ color: '#555', fontSize: 24 }} />}
+                  {/* 右上角状态 + 时长 */}
+                  <div style={{ position: 'absolute', top: 2, right: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Text style={{ color: '#fff', fontSize: 10, background: 'rgba(0,0,0,0.6)', padding: '1px 4px', borderRadius: 3 }}>{t.duration || 5}s</Text>
+                    {t.status === 'completed' && <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 12 }} />}
+                    {t.status === 'processing' && <LoadingOutlined style={{ color: '#2563eb', fontSize: 12 }} />}
+                  </div>
+                  {t.status === 'pending' && (
+                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.3)' }}>
+                      <ThunderboltOutlined style={{ color: '#fff', fontSize: 20, cursor: 'pointer' }} onClick={e => { e.stopPropagation(); handleGenSingle(t); }} />
+                    </div>
+                  )}
+                </div>
+                <div style={{ padding: '3px 4px', textAlign: 'center', lineHeight: 1.3 }}>
+                  <Text style={{ fontSize: 10, color: '#111', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>镜头{t.shotNumber}</Text>
+                </div>
+              </div>
+            ))}
+            {epTasks.length === 0 && <Text style={{ color: '#9ca3af', fontSize: 12, padding: 16 }}>暂无镜头数据</Text>}
           </div>
         </div>
-      </div>{/* end content area */}
-
-      {/* 视频设置模态框 */}
-      <Modal
-        title="视频设置"
-        open={isSettingsModalOpen}
-        onCancel={() => setIsSettingsModalOpen(false)}
-        footer={null}
-        width={700}
-      >
-        <Form
-          layout="vertical"
-          onFinish={handleSettingsSave}
-          initialValues={videoSettings}
-        >
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                label="分辨率"
-                name="resolution"
-                rules={[{ required: true, message: '请选择分辨率' }]}
-              >
-                <Select>
-                  <Option value="3840x2160">4K (3840x2160)</Option>
-                  <Option value="2560x1440">2K (2560x1440)</Option>
-                  <Option value="1920x1080">全高清 (1920x1080)</Option>
-                  <Option value="1280x720">高清 (1280x720)</Option>
-                  <Option value="854x480">标清 (854x480)</Option>
-                </Select>
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                label="帧率 (FPS)"
-                name="frameRate"
-                rules={[{ required: true, message: '请选择帧率' }]}
-              >
-                <Select>
-                  <Option value={60}>60 FPS</Option>
-                  <Option value={30}>30 FPS</Option>
-                  <Option value={25}>25 FPS</Option>
-                  <Option value={24}>24 FPS</Option>
-                </Select>
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                label="画面比例"
-                name="aspectRatio"
-              >
-                <Select>
-                  <Option value="16:9">16:9 (宽屏)</Option>
-                  <Option value="4:3">4:3 (标准)</Option>
-                  <Option value="1:1">1:1 (正方形)</Option>
-                  <Option value="21:9">21:9 (超宽屏)</Option>
-                </Select>
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                label="输出格式"
-                name="format"
-              >
-                <Select>
-                  <Option value="mp4">MP4</Option>
-                  <Option value="mov">MOV</Option>
-                  <Option value="avi">AVI</Option>
-                  <Option value="webm">WebM</Option>
-                </Select>
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Form.Item
-            label="视频质量"
-            name="quality"
-          >
-            <Slider
-              min={1}
-              max={100}
-              marks={{
-                1: '最低',
-                25: '低',
-                50: '中',
-                75: '高',
-                100: '最高',
-              }}
-            />
-          </Form.Item>
-
-          <div style={{ margin: '16px 0' }} />
-
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                label="启用音频"
-                name="enableAudio"
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                label="音频音量"
-                name="audioVolume"
-              >
-                <Slider min={0} max={100} />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <div style={{ margin: '16px 0' }} />
-
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                label="启用字幕"
-                name="enableSubtitles"
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                label="启用水印"
-                name="enableWatermark"
-                valuePropName="checked"
-              >
-                <Switch />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Form.Item
-            label="水印文本"
-            name="watermarkText"
-            dependencies={['enableWatermark']}
-          >
-            {({ getFieldValue }) =>
-              getFieldValue('enableWatermark') ? (
-                <Input placeholder="输入水印文本" />
-              ) : (
-                <Text type="secondary">水印已禁用</Text>
-              )
-            }
-          </Form.Item>
-
-          <Form.Item
-            label="输出路径"
-            name="outputPath"
-          >
-            <Input placeholder="/path/to/output/video.mp4" />
-          </Form.Item>
-
-          <div style={{ textAlign: 'right' }}>
-            <Space>
-              <Button onClick={() => setIsSettingsModalOpen(false)}>
-                取消
-              </Button>
-              <Button type="primary" htmlType="submit">
-                保存设置
-              </Button>
-            </Space>
-          </div>
-        </Form>
-      </Modal>
-
-      {/* 集数编辑抽屉 */}
-      <Drawer
-        title={editingEpisode ? `编辑 ${editingEpisode.title}` : '添加集数'}
-        placement="right"
-        width={480}
-        open={isDrawerOpen}
-        onClose={() => {
-          setIsDrawerOpen(false);
-          setEditingEpisode(null);
-        }}
-      >
-        <Form
-          layout="vertical"
-          onFinish={handleSaveEpisode}
-          initialValues={editingEpisode || {}}
-        >
-          <Form.Item
-            label="集数标题"
-            name="title"
-            rules={[{ required: true, message: '请输入集数标题' }]}
-          >
-            <Input placeholder="例如：第一集 - 初次相遇" />
-          </Form.Item>
-          <Form.Item
-            label="集数编号"
-            name="number"
-          >
-            <InputNumber min={1} max={100} style={{ width: '100%' }} disabled={!!editingEpisode?.id} />
-          </Form.Item>
-          <Form.Item
-            label="集数描述"
-            name="description"
-          >
-            <TextArea rows={4} placeholder="描述本集的主要内容..." />
-          </Form.Item>
-          <div style={{ textAlign: 'right', marginTop: 24 }}>
-            <Space>
-              <Button onClick={() => {
-                setIsDrawerOpen(false);
-                setEditingEpisode(null);
-              }}>
-                取消
-              </Button>
-              <Button type="primary" htmlType="submit">
-                保存
-              </Button>
-            </Space>
-          </div>
-        </Form>
-      </Drawer>
+      </div>
+      </div>{/* end main content */}
     </div>
   );
 };

@@ -27,9 +27,10 @@ import {
   CameraOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { scriptService } from '@/services/scriptService';
 import { usePipelinePersistence } from '@/hooks/usePipelinePersistence';
+import { pipelineService } from '@/services/pipelineService';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -74,29 +75,56 @@ interface PropItem {
 }
 
 const Scene: React.FC = () => {
+  const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState('scenes');
   const [scenes, setScenes] = useState<SceneItem[]>([]);
 
-  // 从 localStorage 加载持久化数据
+  // 从 localStorage / pipeline 加载持久化数据
   useEffect(() => {
-    // 加载主体提取结果
-    const saved = localStorage.getItem('extracted_entities');
-    if (saved) {
-      try {
-        const data = JSON.parse(saved);
-        if (data.scenes?.length) setScenes(data.scenes);
-        if (data.characters?.length) setCharacters(data.characters);
-        if (data.props?.length) setProps(data.props);
-      } catch {}
-    }
-    // 加载预览图像缓存
-    const savedImages = localStorage.getItem('scene_preview_images');
-    if (savedImages) {
-      try {
-        setPreviewImages(JSON.parse(savedImages));
-      } catch {}
-    }
-  }, []);
+    const initLoad = async () => {
+      const urlWorkId = searchParams.get('workId');
+      if (urlWorkId) {
+        // 从后端恢复该项目的数据
+        setWorkId(urlWorkId);
+        await restoreFromBackend(urlWorkId);
+      } else {
+        // 无活跃作品，清空显示
+        setScenes([]);
+        setCharacters([]);
+        setProps([]);
+        return;
+      }
+
+      // 优先从 pipeline localStorage 加载（workId 感知）
+      const savedScenes = loadState('scenes');
+      const savedCharacters = loadState('characters');
+      const savedProps = loadState('props');
+
+      if (savedScenes?.length) setScenes(savedScenes);
+      if (savedCharacters?.length) setCharacters(savedCharacters);
+      if (savedProps?.length) setProps(savedProps);
+
+      // 回退：从全局 key 加载（兼容旧数据）
+      if (!savedScenes?.length && !savedCharacters?.length && !savedProps?.length) {
+        const saved = localStorage.getItem('extracted_entities');
+        if (saved) {
+          try {
+            const data = JSON.parse(saved);
+            if (data.scenes?.length) setScenes(data.scenes);
+            if (data.characters?.length) setCharacters(data.characters);
+            if (data.props?.length) setProps(data.props);
+          } catch {}
+        }
+      }
+
+      // 加载预览图像缓存
+      const savedImages = localStorage.getItem('scene_preview_images');
+      if (savedImages) {
+        try { setPreviewImages(JSON.parse(savedImages)); } catch {}
+      }
+    };
+    initLoad();
+  }, [searchParams]);
 
   // 保留的模拟数据引用（已弃用）
   const _mock = []; // deprecated mock data, replaced by extracted_entities
@@ -111,19 +139,32 @@ const Scene: React.FC = () => {
   const [isPropModalOpen, setIsPropModalOpen] = useState(false);
 
   // 智能分镜状态
-  const { saveState: persistState, loadState, getWorkId } = usePipelinePersistence();
+  const { loadState, getWorkId, setWorkId, restoreFromBackend, userId } = usePipelinePersistence();
 
-  // 自动持久化：scenes/characters/props 变化时保存到 localStorage
+  // 自动持久化：直接 GET-merge-PUT，不依赖 hook
   useEffect(() => {
     if (scenes.length || characters.length || props.length) {
       localStorage.setItem('extracted_entities', JSON.stringify({
         scenes, characters, props,
         updatedAt: new Date().toISOString(),
       }));
-      // 同时持久化到后端
-      persistState('scenes', scenes, getWorkId() || undefined);
-      persistState('characters', characters, getWorkId() || undefined);
-      persistState('props', props, getWorkId() || undefined);
+      (async () => {
+        const wId = getWorkId();
+        if (!wId) return;
+        try {
+          const resp = await pipelineService.getPipelineState(wId);
+          const existing = (resp as any)?.data || {};
+          existing.scenes = scenes;
+          existing.characters = characters;
+          existing.props = props;
+          existing.updatedAt = new Date().toISOString();
+          await pipelineService.savePipelineState(wId, existing);
+          // 也写到 localStorage
+          localStorage.setItem(`pipeline_${userId}_scenes`, JSON.stringify(scenes));
+          localStorage.setItem(`pipeline_${userId}_characters`, JSON.stringify(characters));
+          localStorage.setItem(`pipeline_${userId}_props`, JSON.stringify(props));
+        } catch (e) { console.error('Scene save failed:', e); }
+      })();
     }
   }, [scenes, characters, props]);
   const navigate = useNavigate();
@@ -151,16 +192,30 @@ const Scene: React.FC = () => {
             // 获取完整结果
             const result = await scriptService.getShotGenerationResult(id);
             if (result.episodes) {
-              // 存入 localStorage 供 Storyboard 页面读取
+              // 保存到 pipeline localStorage + 后端（不再用旧全局 key）
               const storyboardData = {
                 episodes: result.episodes,
                 generatedAt: new Date().toISOString(),
               };
-              localStorage.setItem('shot_generation_result', JSON.stringify(storyboardData));
-              // 持久化到后端
-              persistState('storyboard', storyboardData, getWorkId() || undefined);
-              // 导航到分镜页面
-              navigate('/storyboard');
+              const wId = getWorkId();
+              if (wId) {
+                // 直接保存 storyboard（不通过 saveAllToBackend，避免 buildFullState 遗漏）
+                try {
+                  const resp = await pipelineService.getPipelineState(wId);
+                  const existing = (resp as any)?.data || {};
+                  existing.storyboard = storyboardData;
+                  if (!existing.script) {
+                    // 从 sessionStorage 恢复 script（防止丢失）
+                    const sess = sessionStorage.getItem('current_script');
+                    if (sess) { try { existing.script = JSON.parse(sess); } catch {} }
+                  }
+                  existing.updatedAt = new Date().toISOString();
+                  await pipelineService.savePipelineState(wId, existing);
+                  // 同步写 localStorage
+                  localStorage.setItem(`pipeline_${userId}_storyboard`, JSON.stringify(storyboardData));
+                } catch (e) { console.error('Save storyboard failed:', e); }
+              }
+              navigate(wId ? `/storyboard?workId=${wId}` : '/storyboard');
             }
           } else if (status.status === 'failed') {
             if (pollingRef.current) {
@@ -186,14 +241,20 @@ const Scene: React.FC = () => {
 
   // 智能分镜 — 开始生成
   const handleSmartShotDivision = useCallback(async () => {
-    // 从 localStorage 读取剧本内容（优先命名空间 key，兼容旧 key）
-    let savedState = loadState('script');
-    if (!savedState) {
-      const oldData = localStorage.getItem('script_page_state');
-      if (oldData) { try { savedState = JSON.parse(oldData); } catch {} }
+    // 从 sessionStorage 读取（Script 页面主体提取时写入，最可靠）
+    let savedState: any = null;
+    const sessData = sessionStorage.getItem('current_script');
+    if (sessData) { try { savedState = JSON.parse(sessData); } catch {} }
+    // 回退到 pipeline/localStorage
+    if (!savedState || !savedState.episodes?.length) {
+      savedState = loadState('script');
+      if (!savedState) {
+        const oldData = localStorage.getItem(`script_page_state_${(window as any).__USER_ID__ || 'anonymous'}`);
+        if (oldData) { try { savedState = JSON.parse(oldData); } catch {} }
+      }
     }
-    if (!savedState) savedState = {};
-    const episodes = savedState.episodes || [];
+    if (!savedState) savedState = {} as any;
+    const episodes = (savedState as any).episodes || [];
 
     // 拼接所有集的描述作为剧本内容
     const scriptContent = episodes.map((ep: any) =>
@@ -205,7 +266,7 @@ const Scene: React.FC = () => {
       return;
     }
 
-    const title = savedState.generatedScriptTitle || '未命名剧本';
+    const title = (savedState as any).generatedScriptTitle || '未命名剧本';
 
     setShotGenerationStatus('generating');
     setShotGenerationProgress(0);
@@ -215,6 +276,7 @@ const Scene: React.FC = () => {
         title,
         script: scriptContent,
         episodeCount: episodes.length || 1,
+        episodeContents: episodes.map((ep: any) => ep.description || ep.content || ''),
         style: '写实风格',
         sceneRefs: scenes.map(s => s.name),
         characterNames: characters.map(c => c.name),
@@ -740,6 +802,21 @@ const Scene: React.FC = () => {
           >
             <Select mode="tags" placeholder="输入标签，按回车添加" />
           </Form.Item>
+          <Form.Item shouldUpdate noStyle>
+            {(form) => {
+              const desc = form.getFieldValue('description') || '';
+              const env = form.getFieldValue('environment') || '';
+              const tags = form.getFieldValue('tags') || [];
+              const name = form.getFieldValue('name') || '';
+              const type = form.getFieldValue('type') || '';
+              const prompt = `一个场景环境图，${name}${type ? '（' + type + '）' : ''}，${desc}，${env}。${tags.length ? '标签：' + tags.join('、') + '。' : ''}风格：写实，宽屏构图，高质量，适合短剧场景设定。`;
+              return (
+                <Form.Item label={<span style={{ color: '#0066cc' }}>🎬 生成提示词预览</span>}>
+                  <TextArea rows={4} value={prompt} readOnly style={{ background: '#f8f9fa', color: '#555', fontSize: 12, fontFamily: 'monospace' }} />
+                </Form.Item>
+              );
+            }}
+          </Form.Item>
           <div style={{ textAlign: 'right' }}>
             <Space>
               <Button onClick={() => {
@@ -834,6 +911,25 @@ const Scene: React.FC = () => {
           >
             <Select mode="tags" placeholder="输入标签，按回车添加" />
           </Form.Item>
+          <Form.Item shouldUpdate noStyle>
+            {(form) => {
+              const name = form.getFieldValue('name') || '';
+              const desc = form.getFieldValue('description') || '';
+              const gender = form.getFieldValue('gender') || '';
+              const age = form.getFieldValue('age') || '';
+              const occupation = form.getFieldValue('occupation') || '';
+              const appearance = form.getFieldValue('appearance') || '';
+              const personality = form.getFieldValue('personality') || '';
+              const tags = form.getFieldValue('tags') || [];
+              const charDesc = `${name}，${gender}，${age}岁${occupation ? '，' + occupation : ''}。${desc}。外貌：${appearance}。性格：${personality}`;
+              const prompt = `专业角色设计参考图，"${name}"，${charDesc}。${tags.length ? '标签：' + tags.join('、') + '。' : ''}三视图，表情设定，纯白背景，角色独立于白色背景上，电影级写实风格，超高清，高质量，细节丰富。`;
+              return (
+                <Form.Item label={<span style={{ color: '#0066cc' }}>🎬 生成提示词预览</span>}>
+                  <TextArea rows={5} value={prompt} readOnly style={{ background: '#f8f9fa', color: '#555', fontSize: 12, fontFamily: 'monospace' }} />
+                </Form.Item>
+              );
+            }}
+          </Form.Item>
           <div style={{ textAlign: 'right' }}>
             <Space>
               <Button onClick={() => {
@@ -920,6 +1016,22 @@ const Scene: React.FC = () => {
             name="tags"
           >
             <Select mode="tags" placeholder="输入标签，按回车添加" />
+          </Form.Item>
+          <Form.Item shouldUpdate noStyle>
+            {(form) => {
+              const name = form.getFieldValue('name') || '';
+              const desc = form.getFieldValue('description') || '';
+              const category = form.getFieldValue('category') || '';
+              const material = form.getFieldValue('material') || '';
+              const size = form.getFieldValue('size') || '';
+              const tags = form.getFieldValue('tags') || [];
+              const prompt = `一件道具的展示图，${name}${category ? '（' + category + '）' : ''}，${desc}。材质：${material || '未指定'}，大小：${size || '未指定'}。${tags.length ? '标签：' + tags.join('、') + '。' : ''}风格：写实，白底产品图，高质量，细节清晰。`;
+              return (
+                <Form.Item label={<span style={{ color: '#0066cc' }}>🎬 生成提示词预览</span>}>
+                  <TextArea rows={4} value={prompt} readOnly style={{ background: '#f8f9fa', color: '#555', fontSize: 12, fontFamily: 'monospace' }} />
+                </Form.Item>
+              );
+            }}
           </Form.Item>
           <div style={{ textAlign: 'right' }}>
             <Space>

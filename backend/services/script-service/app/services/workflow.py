@@ -339,6 +339,21 @@ class ScriptWorkflow:
             if not final_script:
                 raise ValueError("没有可用的剧本内容")
 
+            # 清理优化步骤可能产生的元注释
+            import re
+            # 去掉 "好的，作为剧本优化专家..." 这类开头
+            final_script = re.sub(r'^.*?(?:\n|。)作为.*?专家.*?(?:\n|。)', '', final_script, count=1)
+            # 去掉 "以下是优化后的" "以下是优化版" 等过渡
+            final_script = re.sub(r'^[^\n]*?优化[^\n]{0,20}(?:剧本|版本|内容)[^\n]*\n+', '', final_script)
+            # 去掉可能的 markdown 分隔线
+            final_script = re.sub(r'^---+[\s\n]+', '', final_script)
+            # 去掉可能的 "###" 前缀
+            final_script = re.sub(r'^###\s*', '', final_script)
+            final_script = final_script.strip()
+
+            if not final_script:
+                raise ValueError("没有可用的剧本内容")
+
             # 使用 GraphRag 分析最终剧本，确保上下文一致性
             if self.graphrag_service and final_script:
                 try:

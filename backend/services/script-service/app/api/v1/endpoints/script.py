@@ -10,7 +10,9 @@ from app.schemas.script import (
     ScriptGenerationRequest,
     ScriptFromNovelRequest,
     ScriptFromOutlineRequest,
-    GenerateResponse
+    GenerateResponse,
+    ScriptSplitRequest,
+    ScriptSplitResponse,
 )
 from app.services.script_service import ScriptService
 from app.services.novel2script_service import Novel2ScriptService
@@ -233,6 +235,21 @@ async def generate_script_from_outline(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/clear-cache")
+async def clear_cache():
+    """清除所有 Redis 缓存（删除作品时调用）"""
+    try:
+        from app.services.cache_service import get_cache_service
+        cache = await get_cache_service()
+        if cache and hasattr(cache, 'redis') and cache.redis:
+            await cache.redis.flushdb()
+        return {"message": "Cache cleared"}
+    except Exception as e:
+        return {"message": f"Clear cache failed: {e}"}
+
+
 @router.post("/extract-entities")
 async def extract_entities(
     request: dict,
@@ -251,6 +268,67 @@ async def extract_entities(
         )
         result = await n2s.extract_entities(content)
         return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/split", response_model=ScriptSplitResponse)
+async def upload_and_split_script(
+    request: ScriptSplitRequest,
+    script_service: ScriptService = Depends(get_script_service)
+):
+    """
+    上传完整剧本并自动拆分为分集
+
+    接收完整剧本内容，检测「第N集」标记，拆分为结构化分集列表，
+    持久化到数据库，并返回分集数据。
+    """
+    try:
+        if not request.content or not request.content.strip():
+            raise HTTPException(status_code=400, detail="剧本内容不能为空")
+        if not request.title or not request.title.strip():
+            raise HTTPException(status_code=400, detail="剧本标题不能为空")
+
+        result = await script_service.upload_and_split_script(request)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/generate/from-outline-sync", response_model=ScriptSplitResponse)
+async def generate_from_outline_sync(
+    request: ScriptFromOutlineRequest,
+    script_service: ScriptService = Depends(get_script_service)
+):
+    """从大纲/想法同步生成剧本 — 直接等待 AI 结果返回"""
+    import asyncio as _asyncio
+    try:
+        if not request.outline or not request.outline.strip():
+            raise HTTPException(status_code=400, detail="想法/大纲内容不能为空")
+        if not request.title or not request.title.strip():
+            raise HTTPException(status_code=400, detail="剧本标题不能为空")
+
+        if not script_service._initialized:
+            await script_service.initialize()
+
+        request_dict = request.dict() if hasattr(request, 'dict') else vars(request)
+        script_content = await _asyncio.wait_for(
+            script_service.ai_service.generate_script_from_outline(request_dict),
+            timeout=600
+        )
+        episodes = script_service._split_content_to_episodes(script_content)
+        return {
+            "script_id": 0, "title": request.title,
+            "episodes": episodes, "total_episodes": len(episodes),
+        }
+    except _asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="AI 生成超时（5分钟），请缩短输入内容后重试")
     except HTTPException:
         raise
     except Exception as e:

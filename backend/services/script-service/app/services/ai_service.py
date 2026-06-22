@@ -153,7 +153,7 @@ class AIService:
         setting = request.get('setting', '现代都市')
         theme = request.get('theme', '爱情')
 
-        return f'''第1集 - {title}
+        return f'''第一集 - {title}
 
 【场景一：{setting}的咖啡馆 - 白天】
 
@@ -178,7 +178,7 @@ class AIService:
 
 林小雨："我需要你的帮助。小言失踪前，留下了一个箱子。他说，如果出了什么事，就来找你。"
 
-第2集 - 箱子里的秘密
+第二集 - 箱子里的秘密
 
 【场景二：沈墨的公寓 - 夜晚】
 
@@ -208,7 +208,7 @@ class AIService:
 
 沈墨："我们要找出真相。不管代价是什么。"
 
-第3集 - 第一份线索
+第三集 - 第一份线索
 
 【场景三：沈氏集团总部 - 上午】
 
@@ -356,23 +356,23 @@ class AIService:
 
             logger.info("缓存未命中，调用AI优化剧本...")
 
-            prompt = f"""请根据以下反馈优化剧本:
+            prompt = f"""请根据以下反馈优化剧本，直接返回优化后的完整剧本内容，不要添加任何解释、前言或后记：
 
 反馈: {feedback}
 
 原剧本:
-{script_content[:2000]}...
+{script_content[:3000]}
 
-优化要求:
-1. 保持原故事主线
-2. 改进角色对话
-3. 增强情感表达
-4. 优化场景转换
+关键优化方向:
+1. 对白口语化、自然
+2. 情感层次丰富
+3. 场景转换流畅
+4. 视觉描写具体可执行
 
-请返回优化后的完整剧本。"""
+直接返回剧本正文："""
 
             messages = [
-                SystemMessage(content="你是一个剧本优化专家，擅长改进剧本的对话和情感表达。"),
+                SystemMessage(content="你是专业剧本编辑。直接返回优化后的剧本正文，禁止添加任何解释、评价或前言。"),
                 HumanMessage(content=prompt)
             ]
 
@@ -530,9 +530,9 @@ class AIService:
                 HumanMessage(content=human_prompt)
             ]
 
-            # 调用LLM
+            # 调用LLM（5分钟超时，复杂生成需要较长时间）
             logger.info("调用LLM生成剧本...")
-            response = await self.llm.ainvoke(messages)
+            response = await self.llm.ainvoke(messages, config={"timeout": 600})
 
             script_content = response.content
 
@@ -549,28 +549,72 @@ class AIService:
             raise
 
     def _build_outline_to_script_system_prompt(self, request: Dict[str, Any]) -> str:
-        """构建大纲生成剧本的系统提示"""
+        """构建大纲生成剧本的系统提示（移植自 moyin-creator 的专业格式规范）"""
         theme = request.get('theme', '爱情')
         length = request.get('length', '短篇')
         style = request.get('style', '浪漫喜剧')
         setting = request.get('setting', '现代都市')
 
-        return f"""你是一个专业的剧本作家，擅长根据大纲扩展成完整的剧本。
+        return f"""你是一位专业的短剧编剧，擅长根据创意想法扩展为完整的、可直接拍摄的短剧剧本。
 
-创作要求:
-1. 剧本类型: {length}剧本
-2. 故事背景: {setting}
-3. 剧本风格: {style}
-4. 目标观众: 短视频平台用户
+【剧本类型】
+- 类型：{length}短剧（短篇约5-8分钟 / 中篇约15-20分钟 / 长篇约30-40分钟）
+- 风格：{style}
+- 主题：{theme}
+- 背景：{setting}
+- 目标平台：短视频平台
 
-剧本结构要求:
-1. 严格遵循提供的大纲结构
-2. 丰富每个场景的细节和对话
-3. 保持情节连贯性和情感张力
-4. 结局要符合{theme}主题
+【输出格式 — 严格控制】
 
-输出格式:
-请按照标准的剧本格式输出，包括场景描述、角色对话和动作指示。
+《TITLE》
+
+**大纲：**
+[一句话概括故事主线]
+
+**人物小传：**
+角色A：[年龄]，[身份]，[性格特点]，[外貌特征]
+角色B：[年龄]，[身份]，[性格特点]，[外貌特征]
+（至少2-4个主要角色）
+
+**第一集**
+
+**1-1 日 内 地点名称**
+人物：角色A、角色B
+
+△场景环境、氛围、灯光的简要描述
+
+角色A：（表情/动作）对白内容
+
+角色B：（表情/动作）对白内容
+
+**1-2 夜 外 地点名称**
+人物：角色A
+
+△场景描述
+
+...
+
+**第二集**
+
+**2-1 日 外 地点名称**
+...
+
+【核心规则 — 必须遵守】
+1. 每集必须以 **第N集** 作为独立标题行
+2. 场景头格式：**N-N 昼/夜 内/外 地点名**
+3. 每个场景必须有 人物： 行
+4. 动作描述以 △ 开头
+5. 对白格式：角色名：（表情/动作）对白
+6. 根据大纲合理分配集数（短篇3-5集，中篇5-8集，长篇8-12集）
+7. 每集2-4个场景，每集有独立的起承转合
+8. **时代一致性**：服装、道具、建筑、语言必须严格符合{setting}的时代背景
+9. **风格一致性**：全片保持{style}的视觉和叙事风格
+
+【质量标准】
+- 对白自然口语化，贴合角色性格
+- 每集结尾留悬念或情感钩子
+- 视觉描写具体可执行（导演和摄影可直接理解）
+- 避免过度文学化描述，用画面语言写作
 """
 
     def _build_outline_to_script_human_prompt(self, request: Dict[str, Any]) -> str:
@@ -579,20 +623,20 @@ class AIService:
         outline = request.get('outline', '')
         characters = request.get('characters', [])
 
-        character_str = "\n".join([f"- {char}" for char in characters]) if characters else "请自行设计2-3个主要角色"
+        character_str = "\n".join([f"- {char}" for char in characters]) if characters else "请根据大纲自行设计适合的主要角色"
 
-        return f"""请根据以下大纲扩展成名为《{title}》的完整剧本。
+        return f"""请根据以下创意想法，创作完整的短剧剧本。
 
-大纲内容:
+【创意想法/大纲】
 {outline}
 
-角色设定:
+【角色参考】
 {character_str}
 
-扩展要求:
-1. 严格遵循大纲的结构和情节走向
-2. 丰富每个场景的细节、对话和动作描述
-3. 保持角色性格一致性
-4. 增加情感层次和戏剧冲突
+【创作指引】
+1. 如果想法比较简短，请充分发挥创意，构建完整的故事世界
+2. 设计有记忆点的角色，每个角色要有鲜明的性格和外貌特征
+3. 合理安排集数和场景，确保节奏紧凑适合短视频平台
+4. 每集要有独立的看点，同时推动整体剧情发展
 
-请输出完整的剧本内容。"""
+请输出完整剧本（含标题、大纲、人物小传、全部集数和场景）。"""

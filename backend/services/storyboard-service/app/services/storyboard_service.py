@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any, Optional, List
 import re
+import json
 import asyncio
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -136,52 +137,131 @@ class StoryboardAIService:
             raise
 
     async def generate_shots(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """使用DeepSeek生成镜头级分镜"""
+        """使用DeepSeek生成镜头级分镜 — 逐集生成避免 JSON 过大出错"""
         if not self._initialized:
             await self.initialize()
 
         try:
-            logger.info(f"开始生成镜头级分镜: {request.get('title', '未命名剧本')}")
+            title = request.get('title', '未命名剧本')
+            logger.info(f"开始生成镜头级分镜(逐集): {title}")
 
-            # 尝试从缓存获取
-            cache_key = f"shots:{request.get('title','')}:{hash(request.get('script','')[:200])}"
             if self.cache_service:
                 cached = await self.cache_service.get_cached_storyboard(request)
                 if cached and cached.get("episodes"):
-                    logger.info("缓存命中: 镜头分镜生成结果")
+                    logger.info("缓存命中")
                     return cached
 
-            logger.info("缓存未命中，调用AI生成镜头级分镜...")
+            # 优先使用前端传来的独立集内容，否则从剧本文本拆分
+            episode_texts = request.get('episodeContents', [])
+            if not episode_texts:
+                episode_texts = self._split_script_to_episodes(request.get('script', ''))
 
-            # 构建提示
-            system_prompt = self._build_shot_system_prompt(request)
-            human_prompt = self._build_shot_human_prompt(request)
+            all_episodes = []
+            global_shot_id = 0
 
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=human_prompt)
-            ]
+            for ep_idx, ep_text in enumerate(episode_texts):  # 全部集数
+                ep_num = ep_idx + 1
+                logger.info(f"生成第{ep_num}集分镜...")
 
-            # 调用LLM
-            logger.info("调用DeepSeek LLM生成镜头级分镜...")
-            response = await self.llm.ainvoke(messages)
-            shot_content = response.content
+                # 构建单集提示词
+                ep_request = {**request, 'script': ep_text, 'episodeCount': 1}
+                system_prompt = self._build_shot_system_prompt(ep_request)
+                human_prompt = self._build_shot_human_prompt(ep_request)
 
-            # 解析JSON格式的镜头分镜
-            shot_data = self._parse_shots(shot_content, request)
+                try:
+                    response = await self.llm.ainvoke([
+                        SystemMessage(content=system_prompt),
+                        HumanMessage(content=human_prompt)
+                    ])
+                    shot_data = self._parse_single_episode_shots(response.content, ep_num, global_shot_id, request)
+                except Exception as e:
+                    logger.warning(f"第{ep_num}集AI生成失败: {e}，使用程序化分镜")
+                    shot_data = self._programmatic_shots(ep_text, ep_num, global_shot_id)
 
-            # 缓存结果
-            if self.cache_service and shot_data.get("episodes"):
-                await self.cache_service.cache_storyboard_generation(request, shot_data)
-                logger.info("镜头分镜生成结果已缓存")
+                if shot_data.get("episodes"):
+                    ep = shot_data["episodes"][0]
+                    global_shot_id += len(ep.get("shots", []))
+                    all_episodes.append(ep)
 
-            total_shots = sum(len(ep.get("shots", [])) for ep in shot_data.get("episodes", []))
-            logger.info(f"镜头分镜生成完成，共 {len(shot_data.get('episodes', []))} 集，{total_shots} 个镜头")
-            return shot_data
+            result = {"episodes": all_episodes}
+            if self.cache_service and all_episodes:
+                await self.cache_service.cache_storyboard_generation(request, result)
+
+            total = sum(len(ep.get("shots", [])) for ep in all_episodes)
+            logger.info(f"镜头分镜完成: {len(all_episodes)}集, {total}镜头")
+            return result
 
         except Exception as e:
             logger.error(f"镜头分镜生成失败: {e}")
             raise
+
+    def _split_script_to_episodes(self, script: str) -> list:
+        """按第N集标记拆分剧本（仅精确匹配集标题）"""
+        markers = list(re.finditer(r'(?:\*\*)?第\s*([一二三四五六七八九十百千\d]+)\s*集', script))
+        if len(markers) <= 1:
+            return [script]
+        texts = []
+        for i, m in enumerate(markers):
+            start = m.end()
+            end = markers[i+1].start() if i+1 < len(markers) else len(script)
+            texts.append(script[start:end])
+        return texts
+
+    def _parse_single_episode_shots(self, content: str, ep_num: int, start_shot_id: int, request: Dict[str, Any]) -> Dict[str, Any]:
+        """解析单集镜头JSON（容错处理）"""
+        try:
+            json_str = content
+            if "```json" in content:
+                json_str = content.split("```json")[1].split("```")[0]
+            elif "```" in content:
+                json_str = content.split("```")[1].split("```")[0]
+            data = json.loads(json_str)
+            eps = data.get("episodes", [])
+            if eps:
+                ep = eps[0]
+                ep["number"] = ep_num
+                cn = ['', '一','二','三','四','五','六','七','八','九','十']
+                ep["title"] = f"第{cn[ep_num] if ep_num<=10 else ep_num}集"
+                ep["id"] = f"ep-{ep_num}"
+                for s in ep.get("shots", []):
+                    s["id"] = start_shot_id + s.get("number", 1)
+                return {"episodes": [ep]}
+        except json.JSONDecodeError:
+            logger.warning(f"第{ep_num}集JSON解析失败，使用程序化分镜")
+        except Exception as e:
+            logger.warning(f"第{ep_num}集解析异常: {e}")
+        return self._programmatic_shots(content, ep_num, start_shot_id)
+
+    def _programmatic_shots(self, text: str, ep_num: int, start_shot_id: int) -> Dict[str, Any]:
+        """程序化分镜：从剧本格式文本提取场景生成镜头"""
+        shots = []
+        shot_id = start_shot_id
+        # 按场景标记拆分
+        scenes = re.split(r'\n(?:\*\*)?\d+-\d+\s', text)
+        if len(scenes) <= 1:
+            scenes = [p.strip() for p in text.split('\n\n') if p.strip()][:8]
+        for scene_text in (scenes if len(scenes) > 1 else [text])[:8]:
+            shot_id += 1
+            chars = re.findall(r'人物[：:]\s*(.+)', scene_text)
+            char_list = [c.strip() for c in (chars[0].split('、') if chars else [])]
+            dialogue = re.findall(r'([^\s△（(]+)[：:].*?["""\n]', scene_text)
+            dialogue_str = '；'.join([f'{d.strip()}：…' for d in dialogue[:2]]) if dialogue else ''
+            desc = scene_text.strip()[:200]
+            shot_type = "中景"
+            if any(kw in scene_text[:100] for kw in ['特写', '近景', '细节', '眼神', '手指', '面部']): shot_type = "特写"
+            elif any(kw in scene_text[:100] for kw in ['全景', '远景', '环境', '俯瞰', '城市', '天空']): shot_type = "全景"
+            shots.append({
+                "id": shot_id, "number": shot_id, "shotType": shot_type, "duration": 5,
+                "cameraAngle": "正面平视", "sceneRef": "", "characters": char_list,
+                "description": desc, "dialogue": dialogue_str,
+                "soundEffects": [], "music": "", "notes": ""
+            })
+        cn = ['', '一','二','三','四','五','六','七','八','九','十']
+        return {"episodes": [{"id": f"ep-{ep_num}", "title": f"第{cn[ep_num] if ep_num<=10 else ep_num}集", "number": ep_num, "shots": shots}]}
+
+    def _fallback_parse_shots(self, content: str, request: Dict[str, Any]) -> Dict[str, Any]:
+        """备用：程序化分镜"""
+        return self._programmatic_shots(request.get('script', content), 1, 0)
 
     def _build_shot_system_prompt(self, request: Dict[str, Any]) -> str:
         """构建镜头级分镜系统提示词"""
@@ -199,7 +279,7 @@ class StoryboardAIService:
 1. 分镜风格: {style}
 2. 目标平台: 短视频平台
 3. 节奏: 快节奏、强冲突、视觉冲击力强
-4. 预计集数: {episode_count} 集
+4. 预计集数: {min(episode_count, 3)} 集（最多3集）
 
 ## 镜头类型说明
 你需要根据剧情需要，合理使用以下镜头类型（中文命名）:
@@ -276,8 +356,8 @@ class StoryboardAIService:
         script = request.get('script', '')
         episode_count = request.get('episodeCount', 1)
 
-        # 截断剧本避免超出token限制
-        max_script_chars = 4000
+        # 截断剧本避免超出token限制（长剧本取前2集+后1集）
+        max_script_chars = 3000
         script_truncated = script[:max_script_chars]
         if len(script) > max_script_chars:
             script_truncated += "\n\n...(剧本内容已截断)..."
@@ -372,65 +452,94 @@ class StoryboardAIService:
             return self._fallback_parse_shots(content, request)
 
     def _fallback_parse_shots(self, content: str, request: Dict[str, Any]) -> Dict[str, Any]:
-        """备用解析：当JSON解析失败时，从文本中提取镜头信息"""
-        logger.info("使用备用解析方式解析镜头分镜...")
+        """备用解析：从剧本内容的场景标记直接生成分镜（不依赖 AI JSON）"""
+        logger.info("使用备用解析方式从剧本生成镜头分镜...")
 
-        shots = []
-        shot_id = 0
+        script = request.get('script', '') or content
+        episodes = []
 
-        # 检测镜头标记：镜头 N、Shot N、N. 等
-        shot_pattern = re.compile(r'(?:镜头|Shot)\s*(\d+)[\s:：]*(.+?)(?=(?:镜头|Shot)\s*\d+|$)', re.IGNORECASE | re.DOTALL)
-        matches = shot_pattern.findall(content)
+        # 按剧集标记拆分：**第N集** 或 第N集
+        ep_markers = list(re.finditer(r'(?:\*\*)?第\s*([一二三四五六七八九十百千\d]+)\s*集(?:\*\*)?', script))
+        cn_nums = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
 
-        if not matches:
-            # 更宽泛的匹配：按行拆分，检测编号
-            lines = content.strip().split('\n')
-            current_shot = None
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                # 检测以数字开头的行
-                num_match = re.match(r'^(\d+)[\.\、\)）]\s*(.+)', line)
-                if num_match:
-                    if current_shot:
-                        shots.append(current_shot)
+        if len(ep_markers) <= 1:
+            # 只有一集或没有标记，整篇作为一集
+            ep_markers = [(0, '1', len(script))]
+            episode_texts = [script]
+        else:
+            episode_texts = []
+            for i, m in enumerate(ep_markers):
+                start = m.end()
+                end = ep_markers[i+1].start() if i+1 < len(ep_markers) else len(script)
+                episode_texts.append(script[start:end])
+
+        # 为每集生成镜头
+        for ep_idx, ep_text in enumerate(episode_texts[:5]):  # 最多5集
+            ep_num = ep_idx + 1
+            num_str = cn_nums[ep_num] if ep_num <= 10 else str(ep_num)
+
+            # 按场景标记拆分：**N-N ...** 或 N-N ...
+            scene_pattern = re.compile(r'(?:\*\*)?(\d+-\d+)\s*(?:日|夜|昼).*?(?:\*\*)?\s*(.+?)(?=\n\s*(?:\*\*)?\d+-\d+\s*(?:日|夜|昼)|\Z)', re.DOTALL)
+            scenes = scene_pattern.findall(ep_text)
+
+            shots = []
+            shot_id = 0
+            if scenes:
+                for scene_num, scene_text in scenes[:12]:  # 每集最多12个镜头
                     shot_id += 1
-                    current_shot = self._create_default_shot(shot_id, shot_id, line)
-                elif current_shot:
-                    # 追加到当前镜头的描述
-                    if len(current_shot.get("description", "")) < 200:
-                        current_shot["description"] += " " + line
-            if current_shot:
-                shots.append(current_shot)
+                    # 从场景中提取角色和对话
+                    chars = re.findall(r'人物[：:]\s*(.+)', scene_text)
+                    char_list = [c.strip() for c in (chars[0].split('、') if chars else [])]
+                    dialogue = re.findall(r'([^\s△]+)[：:].*?["""](.+?)[""」]', scene_text)
+                    dialogue_str = '；'.join([f'{d[0]}：{d[1]}' for d in dialogue[:2]]) if dialogue else ''
 
-        if matches:
-            for match in matches:
-                shot_id += 1
-                num = int(match[0]) if match[0].isdigit() else shot_id
-                detail = match[1].strip()
-                shots.append(self._create_default_shot(shot_id, num, detail))
+                    # 推断镜头类型
+                    shot_type = "中景"
+                    desc = scene_text.strip()[:150]
+                    if any(kw in scene_text for kw in ['特写', '近景', '细节', '眼神']):
+                        shot_type = "特写"
+                    elif any(kw in scene_text for kw in ['全景', '远景', '环境', '俯瞰']):
+                        shot_type = "全景"
 
-        # 如果还是没有，返回一个默认镜头
-        if not shots:
-            shot_id = 1
-            shots.append({
-                "id": 1, "number": 1, "shotType": "中景", "duration": 5,
-                "cameraAngle": "正面平视", "sceneRef": "", "characters": [],
-                "description": content[:200].strip() or "无法解析的镜头内容",
-                "dialogue": "", "soundEffects": [], "music": "", "notes": "AI生成结果解析失败，请手动编辑"
+                    shots.append({
+                        "id": shot_id, "number": shot_id,
+                        "shotType": shot_type, "duration": 5,
+                        "cameraAngle": "正面平视",
+                        "sceneRef": f"场景{scene_num}",
+                        "characters": char_list,
+                        "description": desc,
+                        "dialogue": dialogue_str,
+                        "soundEffects": [], "music": "", "notes": ""
+                    })
+
+            if not shots:
+                # 如果没有场景标记，按段落拆分
+                paragraphs = [p.strip() for p in ep_text.split('\n\n') if p.strip()]
+                for p_idx, para in enumerate(paragraphs[:12]):
+                    shot_id += 1
+                    shots.append({
+                        "id": shot_id, "number": shot_id,
+                        "shotType": "中景", "duration": 5,
+                        "cameraAngle": "正面平视", "sceneRef": "",
+                        "characters": [], "description": para[:150],
+                        "dialogue": "", "soundEffects": [], "music": "", "notes": ""
+                    })
+
+            episodes.append({
+                "id": f"ep-{ep_num}",
+                "title": f"第{num_str}集",
+                "number": ep_num,
+                "shots": shots,
+                "description": "",
             })
 
+        total_shots = sum(len(ep.get("shots", [])) for ep in episodes)
+        logger.info(f"从剧本拆分为 {len(episodes)} 集，共 {total_shots} 个镜头")
+
         return {
-            "episodes": [{
-                "id": "ep-1",
-                "title": request.get('title', '第1集'),
-                "number": 1,
-                "shots": shots,
-                "description": "自动生成的分镜",
-            }],
+            "episodes": episodes,
             "metadata": {
-                "generated_by": "fallback-parser",
+                "generated_by": "script-parser",
                 "style": request.get('style', '写实风格'),
             }
         }

@@ -467,9 +467,15 @@ func (l *ContentLogic) SavePipelineState(ctx context.Context, req *types.SavePip
 	if err := l.repo.SavePipelineData(ctx, req.WorkID, string(dataBytes)); err != nil {
 		return nil, fmt.Errorf("save pipeline state: %w", err)
 	}
+
+	// 将 map 转换为 PipelineState 用于响应
+	respData := &types.PipelineState{}
+	if raw, err := json.Marshal(req.Data); err == nil {
+		json.Unmarshal(raw, respData)
+	}
 	return &types.PipelineStateResponse{
 		WorkID: req.WorkID,
-		Data:   &req.Data,
+		Data:   respData,
 	}, nil
 }
 

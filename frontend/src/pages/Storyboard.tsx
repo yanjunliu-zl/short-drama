@@ -175,79 +175,10 @@ const Storyboard: React.FC = () => {
   }, [episodes, navigate]);
 
   // 预览单个镜头 — 生成该镜头的视频，完成后跳转 Video 页面
-  const handlePreviewShot = useCallback(async (shot: Shot, episode: Episode) => {
-    if (previewingShotId) return; // 已有生成中的镜头
-    setPreviewingShotId(shot.id);
-    setVideoGenerationProgress(10);
-
-    try {
-      const singleEpisode = { ...episode, shots: [shot] };
-      const response = await scriptService.generateShotsVideo({
-        episodes: [singleEpisode],
-        style: '写实风格',
-        fps: 24,
-      });
-
-      if (!response?.task_id) throw new Error('未获取到任务ID');
-      message.info(`镜头${shot.number} 视频生成中...`);
-
-      const poll = setInterval(async () => {
-        try {
-          const status = await scriptService.getShotsVideoStatus(response.task_id);
-          setVideoGenerationProgress(status?.progress || 10);
-
-          if (status?.status === 'completed') {
-            clearInterval(poll);
-            setPreviewingShotId(null);
-            message.success(`镜头${shot.number} 视频生成完成`);
-
-            const result = await scriptService.getShotsVideoResult(response.task_id);
-            const firstResult = result.results?.[0];
-            const videoUrl = firstResult?.video_url;
-            const imageUrl = firstResult?.image_url;
-
-            if (!videoUrl && !imageUrl) {
-              message.warning('镜头视频生成失败，请稍后重试');
-              return;
-            }
-
-            // 构建单镜头视频/图像数据
-            const videoData = {
-              episodes: [{
-                id: episode.id,
-                title: episode.title,
-                number: episode.number,
-                description: episode.description,
-                shots: [{ ...shot, videoUrl: videoUrl || imageUrl, imageUrl }],
-                videoResults: result.results || [],
-              }],
-              taskId: response.task_id,
-              totalShots: 1,
-              completedShots: videoUrl ? 1 : 0,
-              generatedAt: new Date().toISOString(),
-            };
-
-            localStorage.setItem('shot_video_results', JSON.stringify(videoData));
-            saveState('videoResults', videoData, getWorkId() || undefined);
-            message.success(videoUrl ? `镜头${shot.number} 视频生成完成` : `镜头${shot.number} 视频生成失败，已保存预览图`);
-            navigate('/video');
-          } else if (status?.status === 'failed') {
-            clearInterval(poll);
-            setPreviewingShotId(null);
-            message.error(status.error || '视频生成失败');
-          }
-        } catch (err: any) {
-          if (err?.response?.status === 404) {
-            clearInterval(poll);
-            setPreviewingShotId(null);
-          }
-        }
-      }, 3000);
-    } catch (err: any) {
-      setPreviewingShotId(null);
-      message.error(err?.response?.data?.detail || err?.message || '视频生成请求失败');
-    }
-  }, [navigate, saveState, getWorkId, previewingShotId]);
+  const handlePreviewShot = useCallback((shot: Shot, episode: Episode) => {
+    const wId = getWorkId();
+    navigate(`/video?workId=${wId || ''}&episodeId=${episode.id}&shotNumber=${shot.number}`);
+  }, [navigate, getWorkId]);
 
   // 生成故事板 — 为每个分镜头生成视频
   const handleGenerateStoryboard = useCallback(async () => {

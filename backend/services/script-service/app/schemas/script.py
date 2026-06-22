@@ -84,3 +84,27 @@ class GenerateResponse(BaseModel):
     status: str = Field(..., description="状态: processing, completed, failed")
     message: str = Field(..., description="消息")
     script_id: Optional[str] = Field(default=None, description="剧本ID")
+
+
+# ========== 上传剧本并分集 ==========
+
+class EpisodeItem(BaseModel):
+    """单集剧本"""
+    episode_number: int = Field(..., description="集号，从1开始")
+    title: str = Field(..., description="集标题，如 '第一集'")
+    content: str = Field(..., description="该集完整剧本内容")
+
+
+class ScriptSplitRequest(BaseModel):
+    """上传完整剧本并自动分集请求"""
+    title: str = Field(..., description="剧本标题")
+    content: str = Field(..., description="完整剧本内容")
+    user_id: Optional[str] = Field(default=None, description="用户ID")
+
+
+class ScriptSplitResponse(BaseModel):
+    """剧本分集响应"""
+    script_id: int = Field(..., description="持久化后的剧本ID")
+    title: str = Field(..., description="剧本标题")
+    episodes: List[EpisodeItem] = Field(default_factory=list, description="分集列表")
+    total_episodes: int = Field(default=0, description="总集数")

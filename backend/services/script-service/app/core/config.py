@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     OPENAI_API_BASE: Optional[str] = os.getenv("OPENAI_API_BASE", None)
     OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", 2000))
     OPENAI_TEMPERATURE: float = float(os.getenv("OPENAI_TEMPERATURE", 0.7))
-    OPENAI_TIMEOUT: int = int(os.getenv("OPENAI_TIMEOUT", 30))
+    OPENAI_TIMEOUT: int = int(os.getenv("OPENAI_TIMEOUT", 600))
     # DeepSeek配置
     DEEPSEEK_API_KEY: Optional[str] = os.getenv("DEEPSEEK_API_KEY", None)
     DEEPSEEK_API_BASE: str = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")

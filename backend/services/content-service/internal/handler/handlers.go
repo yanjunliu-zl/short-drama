@@ -172,12 +172,12 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 				},
 				{
 					Method:  http.MethodPut,
-					Path:    "/api/v1/works/:id/pipeline-state",
+					Path:    "/api/v1/works/:id/pipeline",
 					Handler: SavePipelineStateHandler(serverCtx),
 				},
 				{
 					Method:  http.MethodGet,
-					Path:    "/api/v1/works/:id/pipeline-state",
+					Path:    "/api/v1/works/:id/pipeline",
 					Handler: GetPipelineStateHandler(serverCtx),
 			},
 		},

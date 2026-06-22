@@ -171,7 +171,7 @@ class Novel2ScriptService:
             )),
         ]
         try:
-            response = await self.llm.ainvoke(messages, config={"timeout": 120})
+            response = await self.llm.ainvoke(messages, config={"timeout": 300})
         except Exception:
             logger.warning("develop_story 超时，跳过此阶段")
             return compressed_novel
@@ -195,12 +195,48 @@ class Novel2ScriptService:
                     user_requirement=requirement,
                 )),
             ]
-            response: WriteScriptResponse = await structured_model.ainvoke(messages, config={"timeout": 120})
+            response: WriteScriptResponse = await structured_model.ainvoke(messages, config={"timeout": 300})
             return response.script
         except Exception as e:
             logger.warning(f"write_script 失败: {e}，使用备用方案")
-            # Fallback: return story as a single scene
-            return [story_text]
+            # Fallback: AI 超时时，按章节（第X回/第X章）拆分原文，封装为剧集格式
+            return self._fallback_split_to_episodes(story_text, user_requirement)
+
+    @staticmethod
+    def _fallback_split_to_episodes(text: str, user_requirement: str = "") -> List[str]:
+        """AI 失败时的备用方案：按章节标记将原文拆分为剧集（去重处理）"""
+        # 匹配所有第X回/第X章，记录位置和编号
+        marker_pattern = re.compile(r'第\s*([一二三四五六七八九十百千\d]+)\s*[回章节]')
+        markers = [(m.start(), m.group(1)) for m in marker_pattern.finditer(text)]
+
+        if len(markers) < 2:
+            return [f"第一集\n\n{text.strip()}"]
+
+        # 去重：同一编号只保留第一次出现
+        seen_nums = set()
+        unique_markers = []
+        for pos, num in markers:
+            if num not in seen_nums:
+                seen_nums.add(num)
+                unique_markers.append((pos, num))
+
+        episodes = []
+        cn_nums = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
+        for i in range(len(unique_markers)):
+            if i >= 10:
+                break
+            start_pos = unique_markers[i][0]
+            end_pos = unique_markers[i + 1][0] if i + 1 < len(unique_markers) else len(text)
+            chapter_text = text[start_pos:end_pos].strip()
+
+            ep_num = i + 1
+            num_str = cn_nums[ep_num] if ep_num <= 10 else str(ep_num)
+            # 用集替换章/回
+            episode_content = marker_pattern.sub(f'第{num_str}集', chapter_text, count=1)
+            episodes.append(f"第{num_str}集\n\n{episode_content}")
+
+        logger.info(f"备用方案：从原文去重拆分为 {len(episodes)} 集")
+        return episodes
 
     # ================================================================
     # 阶段5: 剧本增强
@@ -221,7 +257,8 @@ class Novel2ScriptService:
 原剧本：
 {scene[:3000]}
 
-返回增强后的完整剧本场景，不要添加任何解释。"""
+返回增强后的完整剧本场景，不要添加任何解释。
+注意：如果原剧本以"第X集"（如第一集、第二集）开头的剧集标记行，必须完整保留该行不变。"""
             try:
                 response = await self.llm.ainvoke(prompt)
                 enhanced.append(response.content)
@@ -241,18 +278,19 @@ class Novel2ScriptService:
 
     @staticmethod
     def detect_chapter_count(novel_text: str) -> int:
-        """检测小说的章节/回数"""
-        # 中文章回体: 第X回, 第X章, 第X节
-        patterns = [
-            r'第\s*([一二三四五六七八九十百千\d]+)\s*[回章节]',
-            r'Chapter\s+(\d+)',
-            r'CHAPTER\s+(\d+)',
-        ]
-        for pattern in patterns:
-            matches = re.findall(pattern, novel_text)
-            if matches and len(matches) >= 2:
-                logger.info(f"检测到 {len(matches)} 个章节标记 (pattern: {pattern})")
-                return len(matches)
+        """检测小说的章节/回数（去重计数，避免正文中重复引用干扰）"""
+        pattern = r'第\s*([一二三四五六七八九十百千\d]+)\s*[回章节]'
+        matches = re.findall(pattern, novel_text)
+        if matches and len(matches) >= 2:
+            # 去重：同一个章节编号（如"一"）可能被多次引用，只算一次
+            unique = list(dict.fromkeys(matches))  # 保持出现顺序的去重
+            logger.info(f"检测到 {len(unique)} 个不重复章节 (原始匹配 {len(matches)} 次): {unique[:10]}")
+            return min(len(unique), 10)
+        # 尝试英文章节
+        eng = re.findall(r'Chapter\s+(\d+)', novel_text, re.IGNORECASE)
+        if eng and len(eng) >= 2:
+            unique_eng = list(dict.fromkeys(eng))
+            return min(len(unique_eng), 10)
         return 0
 
     @staticmethod

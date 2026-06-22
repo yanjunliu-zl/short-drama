@@ -39,4 +39,9 @@ export const workService = {
     const response = await api.post<WorkItem>('/v1/works', data)
     return response.data
   },
+
+  /** 删除作品 */
+  deleteWork: async (workId: string): Promise<void> => {
+    await api.delete(`/v1/works/${workId}`)
+  },
 }

@@ -36,10 +36,23 @@ export function usePipelinePersistence() {
         }
         debounceTimers.current[timerKey] = setTimeout(async () => {
           try {
-            const fullState = buildFullState(userId)
-            fullState[key] = value
-            fullState.updatedAt = new Date().toISOString()
-            await pipelineService.savePipelineState(workId, fullState)
+            // 串行化：同一 workId 的多次保存排队执行，避免竞态覆盖
+            const saveKey = `_save_lock_${workId}`
+            const prev = (window as any)[saveKey] || Promise.resolve()
+            const next = prev.then(async () => {
+              let existing: any = {}
+              try {
+                const resp = await pipelineService.getPipelineState(workId)
+                existing = resp.data || {}
+              } catch {}
+              existing[key] = value
+              existing.updatedAt = new Date().toISOString()
+              await pipelineService.savePipelineState(workId, existing)
+            }).catch(err => {
+              console.error('Auto-save pipeline state failed:', err)
+            })
+            ;(window as any)[saveKey] = next
+            await next
           } catch (err) {
             console.error('Auto-save pipeline state failed:', err)
           }
@@ -69,6 +82,8 @@ export function usePipelinePersistence() {
   const restoreFromBackend = useCallback(
     async (workId: string): Promise<boolean> => {
       try {
+        // 先清除当前用户所有 pipeline 旧数据，防止切换作品时残留
+        clearPipelineStorage(userId)
         const response = await pipelineService.getPipelineState(workId)
         if (response.data) {
           for (const key of SLICE_KEYS) {
@@ -80,6 +95,8 @@ export function usePipelinePersistence() {
           localStorage.setItem(storageKey(userId, 'workId'), workId)
           return true
         }
+        // 即使没有数据也记住 workId，防止 auto-save 创建重复作品
+        localStorage.setItem(storageKey(userId, 'workId'), workId)
         return false
       } catch (err) {
         console.error('Restore pipeline state from backend failed:', err)
@@ -102,7 +119,35 @@ export function usePipelinePersistence() {
     [userId],
   )
 
-  return { saveState, loadState, restoreFromBackend, getWorkId, setWorkId, userId }
+  /**
+   * 一次性保存所有 key 到后端（原子操作，防止分 key 保存的竞态覆盖）
+   */
+  const saveAllToBackend = useCallback(
+    async (workId: string, updates?: Record<string, any>) => {
+      const fullState = buildFullState(userId)
+      if (updates) {
+        for (const [k, v] of Object.entries(updates)) {
+          fullState[k as keyof PipelineState] = v
+          // 同步写 localStorage
+          try { localStorage.setItem(storageKey(userId, k), JSON.stringify(v)) } catch {}
+        }
+      }
+      fullState.updatedAt = new Date().toISOString()
+      // 串行化：同一 workId 的多次保存排队执行
+      const saveKey = `_save_lock_${workId}`
+      const prev = (window as any)[saveKey] || Promise.resolve()
+      const next = prev.then(async () => {
+        await pipelineService.savePipelineState(workId, fullState)
+      }).catch(err => {
+        console.error('saveAllToBackend failed:', err)
+      })
+      ;(window as any)[saveKey] = next
+      return next
+    },
+    [userId],
+  )
+
+  return { saveState, loadState, loadPersisted: loadState, restoreFromBackend, getWorkId, setWorkId, userId, saveAllToBackend }
 }
 
 /** Build full PipelineState from all localStorage keys for a user */

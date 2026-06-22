@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Tabs, Card, Typography, Row, Col, Button, Space, List, Avatar, Spin, Alert, Empty, Pagination, message } from 'antd';
+import { useNavigate } from 'react-router-dom';
+import { Tabs, Card, Typography, Row, Col, Button, Space, List, Avatar, Spin, Alert, Empty, Pagination, message, Modal } from 'antd';
 import {
   AppstoreOutlined,
   FolderOutlined,
@@ -8,17 +9,22 @@ import {
   EyeOutlined,
   DownloadOutlined,
   LikeOutlined,
-  ShareAltOutlined
+  ShareAltOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
 import { caseService } from '@/services/caseService';
 import type { CaseItem } from '@/types/case';
 import { workService, WorkItem } from '@/services/workService';
+import { useSelector } from 'react-redux';
+import type { RootState } from '@/store';
 import { assetService, AssetItem } from '@/services/assetService';
+import { clearPipelineStorage } from '@/hooks/usePipelinePersistence';
 
 const { Title, Text } = Typography;
-const { TabPane } = Tabs;
 
 const Home: React.FC = () => {
+  const navigate = useNavigate();
+  const reduxUserId = useSelector((s: RootState) => (s.auth.user as any)?.id);
   const [activeTab, setActiveTab] = useState('case_square');
 
   // 案例广场数据状态
@@ -165,6 +171,42 @@ const Home: React.FC = () => {
     }
   };
 
+  // 处理删除作品
+  const handleDeleteWork = (item: WorkItem) => {
+    Modal.confirm({
+      title: '确认删除',
+      content: `确定要删除作品「${item.title}」吗？此操作不可恢复。`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await workService.deleteWork(item.id);
+          // 全系统清除：localStorage + 后端缓存
+          const uid = reduxUserId || (window as any).__USER_ID__ || 'anonymous';
+          // 清除 pipeline 所有 key（script/scenes/characters/props/storyboard/videoResults/finalCut/workId）
+          clearPipelineStorage(uid);
+          // 清除直接 localStorage key
+          const keysToRemove = [
+            `script_page_state_${uid}`,
+            'extracted_entities', 'scene_preview_images',
+            'shot_generation_result', 'shot_video_results', 'final_cut_result',
+            'storyboard_cache', 'video_tasks_cache',
+          ];
+          keysToRemove.forEach(k => localStorage.removeItem(k));
+          // 清除后端 Redis 缓存
+          try {
+            await fetch('/api/v1/scripts/clear-cache', { method: 'POST' });
+          } catch {}
+          message.success(`已删除「${item.title}」`);
+          fetchWorks();
+        } catch {
+          message.error('删除失败，请重试');
+        }
+      },
+    });
+  };
+
   // 渲染案例广场内容
   const renderCaseSquare = () => (
     <div>
@@ -199,7 +241,7 @@ const Home: React.FC = () => {
       {/* 加载状态 */}
       {loading && (
         <div style={{ textAlign: 'center', padding: 80 }}>
-          <Spin size="large" tip="加载案例中..." />
+          <Spin size="large"><div style={{ padding: 50 }}>加载案例中...</div></Spin>
         </div>
       )}
 
@@ -368,10 +410,14 @@ const Home: React.FC = () => {
               const st = statusMap[item.status] || { text: item.status, color: '#86868b' };
               return (
                 <List.Item
+                  key={item.id}
+                  onClick={() => navigate(`/script?workId=${item.id}`)}
+                  style={{ cursor: 'pointer' }}
                   actions={[
-                    <Button key="edit" type="link">编辑</Button>,
-                    <Button key="preview" type="link">预览</Button>,
-                    <Button key="export" type="link" icon={<DownloadOutlined />}>导出</Button>
+                    <Button key="edit" type="link" onClick={(e) => { e.stopPropagation(); navigate(`/script?workId=${item.id}`); }}>编辑</Button>,
+                    <Button key="preview" type="link" onClick={(e) => e.stopPropagation()}>预览</Button>,
+                    <Button key="export" type="link" icon={<DownloadOutlined />} onClick={(e) => e.stopPropagation()}>导出</Button>,
+                    <Button key="delete" type="link" danger icon={<DeleteOutlined />} onClick={(e) => { e.stopPropagation(); handleDeleteWork(item); }}>删除</Button>,
                   ]}
                 >
                   <List.Item.Meta
@@ -422,7 +468,12 @@ const Home: React.FC = () => {
       )}
 
       <div style={{ marginTop: 24 }}>
-        <Button type="primary" icon={<AppstoreOutlined />}>创建新作品</Button>
+        <Button type="primary" icon={<AppstoreOutlined />} onClick={() => {
+          const uid = reduxUserId || (window as any).__USER_ID__ || 'anonymous';
+          clearPipelineStorage(uid);
+          localStorage.removeItem(`script_page_state_${uid}`);
+          navigate('/script');
+        }}>创建新作品</Button>
         <Button style={{ marginLeft: 12 }}>导入作品</Button>
         <Button style={{ marginLeft: 12 }} type="dashed">查看全部作品</Button>
       </div>
@@ -572,44 +623,13 @@ const Home: React.FC = () => {
           onChange={handleTabChange}
           type="card"
           size="large"
-        >
-          <TabPane
-            tab={
-              <span>
-                <AppstoreOutlined />
-                案例广场
-              </span>
-            }
-            key="case_square"
-          />
-          <TabPane
-            tab={
-              <span>
-                <FolderOutlined />
-                我的作品
-              </span>
-            }
-            key="my_works"
-          />
-          <TabPane
-            tab={
-              <span>
-                <UserOutlined />
-                个人资产库
-              </span>
-            }
-            key="personal_assets"
-          />
-          <TabPane
-            tab={
-              <span>
-                <BankOutlined />
-                公司资产库
-              </span>
-            }
-            key="company_assets"
-          />
-        </Tabs>
+          items={[
+            { key: 'case_square', label: <span><AppstoreOutlined /> 案例广场</span> },
+            { key: 'my_works', label: <span><FolderOutlined /> 我的作品</span> },
+            { key: 'personal_assets', label: <span><UserOutlined /> 个人资产库</span> },
+            { key: 'company_assets', label: <span><BankOutlined /> 公司资产库</span> },
+          ]}
+        />
       </Card>
 
       <Card style={{ border: 'none', background: 'transparent' }}>

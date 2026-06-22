@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"short-drama-platform/content-service/model"
 	"time"
@@ -380,7 +379,7 @@ func (r *mysqlContentRepository) CreateWork(ctx context.Context, w *model.Work) 
 	return err
 }
 
-var findWorkByIDSQL = `SELECT id, case_id, user_id, title, description, status, progress, created_at, updated_at
+var findWorkByIDSQL = `SELECT id, case_id, user_id, title, description, status, progress, COALESCE(pipeline_data, '') AS pipeline_data, created_at, updated_at
 	FROM works WHERE id = ?`
 
 func (r *mysqlContentRepository) FindWorkByID(ctx context.Context, id string) (*model.Work, error) {
@@ -392,7 +391,7 @@ func (r *mysqlContentRepository) FindWorkByID(ctx context.Context, id string) (*
 	return &w, nil
 }
 
-var findWorksSQL = `SELECT id, case_id, user_id, title, description, status, progress, created_at, updated_at
+var findWorksSQL = `SELECT id, case_id, user_id, title, description, status, progress, COALESCE(pipeline_data, '') AS pipeline_data, created_at, updated_at
 	FROM works WHERE 1=1`
 
 func (r *mysqlContentRepository) FindWorks(ctx context.Context, userID, status string, page, pageSize int) ([]*model.Work, error) {
@@ -451,8 +450,12 @@ func (r *mysqlContentRepository) UpdateWork(ctx context.Context, w *model.Work) 
 }
 
 var deleteWorkSQL = `DELETE FROM works WHERE id = ?`
+var deleteWorkPipelineSQL = `UPDATE works SET pipeline_data = NULL WHERE id = ?`
 
 func (r *mysqlContentRepository) DeleteWork(ctx context.Context, id string) error {
+	// 先清除 pipeline 数据
+	r.conn.ExecCtx(ctx, deleteWorkPipelineSQL, id)
+	// 再删除作品
 	_, err := r.conn.ExecCtx(ctx, deleteWorkSQL, id)
 	return err
 }
@@ -468,16 +471,13 @@ func (r *mysqlContentRepository) SavePipelineData(ctx context.Context, workID st
 	return err
 }
 
-var getPipelineDataSQL = `SELECT pipeline_data FROM works WHERE id = ?`
+var getPipelineDataSQL = `SELECT COALESCE(pipeline_data, '') AS pipeline_data FROM works WHERE id = ?`
 
 func (r *mysqlContentRepository) GetPipelineData(ctx context.Context, workID string) (string, error) {
-	var data sql.NullString
+	var data string
 	err := r.conn.QueryRowCtx(ctx, &data, getPipelineDataSQL, workID)
 	if err != nil {
 		return "", fmt.Errorf("get pipeline data for work %s: %w", workID, err)
 	}
-	if !data.Valid {
-		return "", nil
-	}
-	return data.String, nil
+	return data, nil
 }

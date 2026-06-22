@@ -2,7 +2,6 @@ package types
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 )
 
@@ -374,19 +373,19 @@ type ContentService interface {
 
 // PipelineState 管道状态 JSON 快照
 type PipelineState struct {
-	Script       json.RawMessage `json:"script,omitempty"`
-	Scenes       json.RawMessage `json:"scenes,omitempty"`
-	Characters   json.RawMessage `json:"characters,omitempty"`
-	Props        json.RawMessage `json:"props,omitempty"`
-	Storyboard   json.RawMessage `json:"storyboard,omitempty"`
-	VideoResults json.RawMessage `json:"videoResults,omitempty"`
-	FinalCut     json.RawMessage `json:"finalCut,omitempty"`
-	UpdatedAt    string          `json:"updatedAt"`
+	Script       interface{} `json:"script,omitempty"`
+	Scenes       interface{} `json:"scenes,omitempty"`
+	Characters   interface{} `json:"characters,omitempty"`
+	Props        interface{} `json:"props,omitempty"`
+	Storyboard   interface{} `json:"storyboard,omitempty"`
+	VideoResults interface{} `json:"videoResults,omitempty"`
+	FinalCut     interface{} `json:"finalCut,omitempty"`
+	UpdatedAt    string      `json:"updatedAt"`
 }
 
 type SavePipelineStateRequest struct {
-	WorkID string        `path:"id"`
-	Data   PipelineState `json:"data"`
+	WorkID string                 `path:"id"`
+	Data   map[string]interface{} `json:"data"`
 }
 
 type GetPipelineStateRequest struct {

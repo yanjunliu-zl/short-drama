@@ -36,6 +36,7 @@ class Script(Base):
     style = Column(String(100), nullable=True, comment="风格")
     setting = Column(String(255), nullable=True, comment="故事背景")
     characters = Column(JSON, nullable=True, comment="角色列表")
+    episodes = Column(JSON, nullable=True, comment="分集内容 [{episode_number, title, content}]")
     source_type = Column(String(20), nullable=False, default=ScriptSourceType.MANUAL.value, comment="来源类型")
     source_content = Column(Text, nullable=True, comment="原始来源内容（如小说原文）")
     status = Column(String(20), nullable=False, default=ScriptStatus.DRAFT.value, index=True, comment="状态")
@@ -63,6 +64,7 @@ class Script(Base):
             "style": self.style,
             "setting": self.setting,
             "characters": self.characters,
+            "episodes": self.episodes,
             "source_type": self.source_type,
             "source_content": self.source_content,
             "status": self.status,

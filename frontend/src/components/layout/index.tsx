@@ -1,5 +1,7 @@
 import React, { ReactNode } from 'react';
-import { Layout as AntLayout, Menu, Button, Space, Dropdown, Avatar } from 'antd';
+import { useSelector } from 'react-redux';
+import type { RootState } from '@/store';
+import { Layout as AntLayout, Menu, Button, Dropdown, Avatar } from 'antd';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import {
   FileTextOutlined,
@@ -15,7 +17,7 @@ import {
 } from '@ant-design/icons';
 import { useAuth } from '@/hooks/useAuth';
 
-const { Sider, Content, Header } = AntLayout;
+const { Sider, Content } = AntLayout;
 
 interface LayoutProps {
   children: ReactNode;
@@ -26,9 +28,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, isAuthenticated, logout } = useAuth();
+  const reduxUserId = useSelector((s: RootState) => (s.auth.user as any)?.id) || 'anonymous';
 
   // 路由到菜单key的映射
   const routeMap: Record<string, string> = {
+    '/': 'overview',
     '/overview': 'overview',
     '/script': 'story_script',
     '/scene': 'scene_character_props',
@@ -36,12 +40,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     '/video': 'storyboard_video',
     '/final-cut': 'final_video',
     '/payment': 'payment_center',
-    // 首页 '/' 没有对应的菜单项
   };
 
   // 菜单key到路由的映射
   const menuKeyToRoute: Record<string, string> = {
-    'overview': '/overview',
+    'overview': '/',
     'story_script': '/script',
     'scene_character_props': '/scene',
     'storyboard_script': '/storyboard',
@@ -58,7 +61,14 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   // 菜单项点击处理
   const handleMenuClick = ({ key }: { key: string }) => {
     const route = menuKeyToRoute[key] || '/';
-    navigate(route);
+    // 为故事剧本/场景/分镜/视频/成片页面携带当前 workId
+    const pipelinePages = ['story_script', 'scene_character_props', 'storyboard_script', 'storyboard_video', 'final_video'];
+    if (pipelinePages.includes(key)) {
+      const workId = localStorage.getItem(`pipeline_${reduxUserId}_workId`);
+      navigate(workId ? `${route}?workId=${workId}` : route);
+    } else {
+      navigate(route);
+    }
   };
 
   // 导航菜单项
@@ -101,7 +111,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       key: 'profile',
       icon: <UserOutlined />,
       label: '个人中心',
-      onClick: () => navigate('/overview'),
+      onClick: () => navigate('/'),
     },
     {
       key: 'payment',
@@ -130,9 +140,18 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         style={{
           background: '#f5f5f7',
           borderRight: '1px solid #e5e5ea',
+          height: '100vh',
+          overflow: 'auto',
         }}
       >
-        <Link to="/" style={{ textDecoration: 'none' }}>
+        <style>{`
+          .ant-layout-sider-children {
+            display: flex !important;
+            flex-direction: column !important;
+            height: 100% !important;
+          }
+        `}</style>
+        <Link to="/" style={{ textDecoration: 'none', flexShrink: 0 }}>
           <div style={{
             height: '64px',
             display: 'flex',
@@ -158,18 +177,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           selectedKeys={[getSelectedKey()]}
           items={menuItems}
           onClick={handleMenuClick}
-          style={{ borderRight: 'none', background: 'transparent', marginTop: '16px' }}
+          style={{ borderRight: 'none', background: 'transparent', marginTop: '16px', flex: 1 }}
         />
 
         {/* 侧边栏底部用户区域 */}
         <div
           style={{
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
             padding: '16px',
             borderTop: '1px solid #e5e5ea',
+            flexShrink: 0,
           }}
         >
           {isAuthenticated ? (
@@ -218,27 +234,24 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               </div>
             </Dropdown>
           ) : (
-            <Space direction={collapsed ? 'vertical' : 'horizontal'} size={4}>
+            <div style={{ display: 'flex', flexDirection: collapsed ? 'column' : 'row', gap: 8, alignItems: 'center' }}>
               <Button
-                type="text"
+                type="primary"
                 icon={<LoginOutlined />}
                 onClick={() => navigate('/login')}
-                block={collapsed}
-                style={{ color: '#86868b' }}
+                block
               >
                 {!collapsed && '登录'}
               </Button>
               {!collapsed && (
                 <Button
-                  type="primary"
-                  size="small"
                   onClick={() => navigate('/register')}
-                  style={{ fontSize: 13 }}
+                  block
                 >
                   注册
                 </Button>
               )}
-            </Space>
+            </div>
           )}
         </div>
       </Sider>

@@ -15,7 +15,7 @@ const AppRoutes: React.FC = () => {
   return (
     <Routes>
       <Route path="/" element={<Home />} />
-      <Route path="/overview" element={<Settings />} />
+      <Route path="/overview" element={<Home />} />
       <Route path="/script" element={<Script />} />
       <Route path="/scene" element={<Scene />} />
       <Route path="/storyboard" element={<Storyboard />} />

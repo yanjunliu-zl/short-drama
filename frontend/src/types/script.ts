@@ -153,6 +153,38 @@ export interface Shot {
   soundEffects: string[]
   music: string
   notes: string
+  // 三层提示词
+  imagePrompt?: string
+  imagePromptZh?: string
+  videoPrompt?: string
+  videoPromptZh?: string
+  endFramePrompt?: string
+  endFramePromptZh?: string
+  needsEndFrame?: boolean
+  // 灯光
+  lightingStyle?: string
+  lightingDirection?: string
+  colorTemperature?: string
+  lightingNotes?: string
+  // 焦点
+  depthOfField?: string
+  focusTarget?: string
+  focusTransition?: string
+  // 设备
+  cameraRig?: string
+  movementSpeed?: string
+  cameraMovement?: string
+  focalLength?: string
+  photographyTechnique?: string
+  // 情绪与叙事
+  emotionTags?: string[]
+  narrativeFunction?: string
+  // 氛围
+  atmosphericEffects?: string
+  effectIntensity?: string
+  // 连续性
+  continuityRef?: string
+  playbackSpeed?: string
 }
 
 export interface ShotEpisode {
@@ -180,4 +212,21 @@ export interface ShotVideoResultItem {
   image_url?: string
   file_size?: number
   error?: string
+}
+
+// ========== 上传剧本并分集 类型 ==========
+
+/** 后端返回的单集剧本 */
+export interface EpisodeItem {
+  episode_number: number
+  title: string
+  content: string
+}
+
+/** POST /scripts/split 返回 */
+export interface ScriptSplitResponse {
+  script_id: number
+  title: string
+  episodes: EpisodeItem[]
+  total_episodes: number
 }

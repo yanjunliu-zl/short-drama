@@ -2,6 +2,7 @@ import logging
 from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from pydantic import BaseModel, Field
 import uuid
 import time
 
@@ -165,12 +166,119 @@ async def get_image_generation_status(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ==================== 角色形象设计端点 ====================
+
+class CharacterDesignAPIRequest(BaseModel):
+    name: str = Field(..., description="角色姓名")
+    role: str = Field(default="supporting")
+    gender: str = Field(default="男")
+    age: int = Field(default=25)
+    description: str = Field(default="")
+    personality: str = Field(default="")
+    appearance: str = Field(default="")
+    era: str = Field(default="现代")
+    genre: str = Field(default="")
+    storyOutline: str = Field(default="")
+    characterBios: str = Field(default="")
+    episodeCount: int = Field(default=1)
+    promptLanguage: str = Field(default="zh")
+    style: str = Field(default="写实")
+    generateImage: bool = Field(default=False, description="是否同时生成角色设定图")
+    imageWidth: int = Field(default=1024)
+    imageHeight: int = Field(default=1024)
+
+
+@router.post("/character/design")
+async def design_character(
+    request: CharacterDesignAPIRequest,
+    background_tasks: BackgroundTasks,
+    seedance_service=Depends(get_seedance_service)
+):
+    """
+    角色形象设计 — AI 生成 6 层身份锚点 + 可选角色设定图。
+
+    返回角色设计结果（含 identityAnchors、visualPrompt、negativePrompt），
+    若 generateImage=True 则同时提交图像生成任务。
+    """
+    try:
+        from app.services.character_design_service import (
+            CharacterDesignRequest,
+            enrich_character_with_anchors,
+            create_llm_client,
+        )
+
+        llm = create_llm_client()
+        if not llm:
+            raise HTTPException(status_code=503, detail="AI 服务未初始化（需配置 API Key）")
+
+        design_req = CharacterDesignRequest(
+            name=request.name,
+            role=request.role,
+            gender=request.gender,
+            age=request.age,
+            description=request.description,
+            personality=request.personality,
+            appearance=request.appearance,
+            era=request.era,
+            genre=request.genre,
+            storyOutline=request.storyOutline,
+            characterBios=request.characterBios,
+            episodeCount=request.episodeCount,
+            promptLanguage=request.promptLanguage,
+        )
+
+        result = await enrich_character_with_anchors(llm, design_req)
+
+        response: Dict[str, Any] = {
+            "name": result.name,
+            "detailedDescription": result.detailedDescription,
+            "visualPromptEn": result.visualPromptEn,
+            "visualPromptZh": result.visualPromptZh,
+            "clothingStyle": result.clothingStyle,
+            "negativePrompt": result.negativePrompt,
+        }
+
+        if result.identityAnchors:
+            response["identityAnchors"] = result.identityAnchors.model_dump()
+
+        # 可选：同时生成图像
+        image_task_id = None
+        if request.generateImage and result.visualPromptZh:
+            image_task_id = str(uuid.uuid4())
+            prompt = result.visualPromptZh
+            background_tasks.add_task(
+                _generate_preview_image_task,
+                task_id=image_task_id,
+                prompt=prompt,
+                style=request.style,
+                width=request.imageWidth,
+                height=request.imageHeight,
+                seedance_service=seedance_service
+            )
+            response["imageTaskId"] = image_task_id
+            response["message"] = "角色设计完成，图像生成已提交"
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ==================== 预览图像生成端点（场景/角色/道具） ====================
 
 def _build_preview_prompt(description: str, category: str, style: str) -> str:
     """根据类型构建预览图像提示词"""
     if category == "character":
-        return f"一个角色的全身肖像，{description}。风格：{style}，高质量，细节丰富，适合短剧角色设计。"
+        # 使用专业角色设计提示词
+        from app.services.character_design_service import CharacterDesignService
+        return CharacterDesignService.build_character_sheet_prompt(
+            name=description[:30] if description else "角色",
+            description=description,
+            style=style,
+            language="zh",
+        )
     elif category == "prop":
         return f"一件道具的展示图，{description}。风格：{style}，白底产品图，高质量，细节清晰。"
     else:  # scene
@@ -566,50 +674,103 @@ async def get_complete_storyboard_result(task_id: str):
 
 def _build_shot_video_prompt(shot: dict, style: str = "") -> str:
     """
-    从分镜头结构化字段构建视频生成提示词。
+    从分镜头结构化字段构建视频生成提示词 — 5层语义结构（移植自 moyin-creator）
 
-    将 shotType、cameraAngle、description、dialogue、characters、
-    sceneRef、soundEffects、music 组合为 Seedance 的中文提示词。
+    Layer 1: 镜头设计（景别、机位、运动、角度、景深、设备）
+    Layer 1.5: 灯光（风格、方向、色温）
+    Layer 2: 主体与焦点（角色、画面描述、对白、焦点变换）
+    Layer 3: 情绪与氛围（情绪标签、氛围特效）
+    Layer 4: 场景与音频（场景名称、音效、背景音乐）
+    Layer 5: 视觉风格
     """
     parts = []
 
+    # ---- Layer 5: 风格 ----
     if style:
-        parts.append(f"风格：{style}")
+        parts.append(f"视觉风格：{style}")
 
-    shot_type = shot.get('shotType', '中景')
-    parts.append(f"镜头类型：{shot_type}")
+    # ---- Layer 1: 镜头设计 ----
+    layer1 = []
+    if shot.get('shotType'):
+        layer1.append(f"景别{shot['shotType']}")
+    if shot.get('cameraAngle'):
+        layer1.append(f"角度{shot['cameraAngle']}")
+    if shot.get('cameraMovement'):
+        layer1.append(f"运动{shot['cameraMovement']}")
+    if shot.get('cameraRig'):
+        rig_map = {"三脚架": "固定机位", "手持": "手持摄影", "斯坦尼康": "斯坦尼康稳定", "滑轨": "滑轨平移", "摇臂": "摇臂升降", "无人机": "空中俯拍"}
+        layer1.append(rig_map.get(shot['cameraRig'], shot['cameraRig']))
+    if shot.get('movementSpeed'):
+        layer1.append(f"速度{shot['movementSpeed']}")
+    if shot.get('depthOfField'):
+        layer1.append(f"景深{shot['depthOfField']}")
+    if shot.get('focusTarget'):
+        layer1.append(f"对焦{shot['focusTarget']}")
+    if shot.get('focusTransition'):
+        layer1.append(f"焦点转移{shot['focusTransition']}")
+    if shot.get('focalLength'):
+        layer1.append(f"焦距{shot['focalLength']}")
+    if shot.get('photographyTechnique'):
+        layer1.append(f"技法{shot['photographyTechnique']}")
+    if layer1:
+        parts.append("，".join(layer1))
 
-    camera_angle = shot.get('cameraAngle', '正面平视')
-    parts.append(f"摄像机角度：{camera_angle}")
+    # ---- Layer 1.5: 灯光 ----
+    layer1_5 = []
+    if shot.get('lightingStyle'):
+        layer1_5.append(f"灯光{shot['lightingStyle']}")
+    if shot.get('lightingDirection'):
+        layer1_5.append(f"方向{shot['lightingDirection']}")
+    if shot.get('colorTemperature'):
+        layer1_5.append(f"色温{shot['colorTemperature']}")
+    if shot.get('lightingNotes'):
+        layer1_5.append(shot['lightingNotes'])
+    if layer1_5:
+        parts.append("，".join(layer1_5))
 
-    if shot.get('sceneRef'):
-        parts.append(f"场景：{shot['sceneRef']}")
-
+    # ---- Layer 2: 主体与焦点 ----
+    layer2 = []
     characters = shot.get('characters', [])
     if characters:
-        parts.append(f"角色：{'、'.join(characters)}")
+        layer2.append(f"角色：{'、'.join(characters)}")
+    if shot.get('description'):
+        layer2.append(f"画面：{shot['description'][:300]}")
+    if shot.get('dialogue'):
+        layer2.append(f"对白：{shot['dialogue'][:200]}")
+    if layer2:
+        parts.append("，".join(layer2))
 
-    description = shot.get('description', '')
-    if description:
-        parts.append(f"画面描述：{description}")
+    # ---- Layer 3: 情绪与氛围 ----
+    layer3 = []
+    emotion_tags = shot.get('emotionTags', [])
+    if emotion_tags:
+        layer3.append(f"情绪：{'→'.join(emotion_tags)}")
+    if shot.get('narrativeFunction'):
+        layer3.append(f"叙事：{shot['narrativeFunction']}")
+    if shot.get('atmosphericEffects'):
+        intensity = shot.get('effectIntensity', '适中')
+        layer3.append(f"氛围特效：{shot['atmosphericEffects']}（{intensity}）")
+    if layer3:
+        parts.append("，".join(layer3))
 
-    dialogue = shot.get('dialogue', '')
-    if dialogue:
-        parts.append(f"对白/旁白：{dialogue}")
-
+    # ---- Layer 4: 场景与音频 ----
+    layer4 = []
+    if shot.get('sceneRef'):
+        layer4.append(f"场景：{shot['sceneRef']}")
     sound_effects = shot.get('soundEffects', [])
     if sound_effects:
-        parts.append(f"音效：{'、'.join(sound_effects)}")
+        layer4.append(f"音效：{'、'.join(sound_effects)}")
+    if shot.get('music'):
+        layer4.append(f"背景音乐：{shot['music']}")
+    if layer4:
+        parts.append("，".join(layer4))
 
-    music = shot.get('music', '')
-    if music:
-        parts.append(f"背景音乐：{music}")
+    # ---- 三层提示词优先级 ----
+    # 如果已有完整的 videoPrompt（AI生成），直接使用
+    if shot.get('videoPromptZh'):
+        return shot['videoPromptZh']
 
-    notes = shot.get('notes', '')
-    if notes:
-        parts.append(f"备注：{notes}")
-
-    return "，".join(parts) + "。"
+    return "。".join(parts) + "。流畅动画，电影级质量。"
 
 
 @router.post("/shots-to-video", response_model=ShotsToVideoResponse)
@@ -673,12 +834,21 @@ async def _generate_shots_to_video_task(
                 shot_dict = shot.model_dump() if hasattr(shot, 'model_dump') else shot
 
                 try:
-                    # 构建视频提示词
-                    prompt = _build_shot_video_prompt(shot_dict, request.style or "")
+                    # 三层提示词：优先使用 AI 生成的 imagePrompt/videoPrompt
+                    image_prompt = shot_dict.get('imagePromptZh') or shot_dict.get('imagePrompt')
+                    video_prompt = shot_dict.get('videoPromptZh') or shot_dict.get('videoPrompt')
+                    end_frame_prompt = shot_dict.get('endFramePromptZh') or shot_dict.get('endFramePrompt')
+                    needs_end_frame = shot_dict.get('needsEndFrame', False)
 
-                    # 第一步：生成图像
+                    # 如果没有 AI 生成的提示词，回退到 5 层构建
+                    if not image_prompt:
+                        image_prompt = _build_shot_video_prompt(shot_dict, request.style or "")
+                    if not video_prompt:
+                        video_prompt = image_prompt  # 回退：用图像提示词驱动视频
+
+                    # 第一步：生成首帧图像
                     image_result = await seedance_service.generate_image_from_scene(
-                        scene_description=prompt,
+                        scene_description=image_prompt,
                         style=request.style,
                         width=request.width or 1920,
                         height=request.height or 1920,
@@ -696,9 +866,10 @@ async def _generate_shots_to_video_task(
 
                         # 第二步：从图像生成视频 (Seedance 2.0 via Ark API)
                         # 必须用原始公网 URL，Ark 云端无法访问 MinIO 内部地址
+                        # 使用 video_prompt（三层提示词的动作层）而非图像提示词
                         video_result = await seedance_service.generate_video_from_image(
                             image_url=original_url or image_url,
-                            prompt=prompt,
+                            prompt=video_prompt,
                             duration=float(shot_dict.get('duration', 5)),
                         )
 

@@ -1,5 +1,11 @@
 import { Suspense, useEffect } from 'react'
 import { BrowserRouter as Router } from 'react-router-dom'
+
+// React Router v7 兼容
+const routerFuture = {
+  v7_startTransition: true,
+  v7_relativeSplatPath: true,
+}
 import { Spin, notification } from 'antd'
 import { LoadingOutlined } from '@ant-design/icons'
 
@@ -52,7 +58,7 @@ function AuthInitializer() {
 
 function AppContent() {
   return (
-    <Router>
+    <Router future={routerFuture}>
       <AuthInitializer />
       <Layout>
         <Suspense

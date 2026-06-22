@@ -133,6 +133,28 @@ export const scriptService = {
     return response.data
   },
 
+  /** 上传完整剧本并自动分集 */
+  uploadAndSplitScript: async (data: {
+    title: string
+    content: string
+  }): Promise<import('@/types').ScriptSplitResponse> => {
+    const response = await api.post<import('@/types').ScriptSplitResponse>('/v1/scripts/split', data)
+    return response.data
+  },
+
+  /** 从大纲/想法同步生成剧本（直接等待结果，不走异步轮询） */
+  generateScriptFromOutlineSync: async (data: {
+    title: string
+    outline: string
+    theme: string
+    length: string
+    style?: string
+    setting?: string
+  }): Promise<import('@/types').ScriptSplitResponse> => {
+    const response = await api.post<import('@/types').ScriptSplitResponse>('/v1/scripts/generate/from-outline-sync', data, { timeout: 600000 })
+    return response.data
+  },
+
   // 从大纲/想法生成剧本
   generateScriptFromOutline: async (data: {
     title: string
@@ -155,6 +177,7 @@ export const scriptService = {
     title: string
     script: string
     episodeCount?: number
+    episodeContents?: string[]
     style?: string
     sceneRefs?: string[]
     characterNames?: string[]
