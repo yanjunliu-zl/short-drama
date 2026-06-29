@@ -6,6 +6,7 @@ ViMax 风格小说转剧本多阶段流水线
 import asyncio
 import logging
 import re
+import time
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
@@ -109,7 +110,8 @@ class Novel2ScriptService:
 
     async def extract_characters(self, story: str) -> List[Dict[str, Any]]:
         """从故事中提取角色"""
-        logger.info("提取角色...")
+        logger.info(f"提取角色... 输入长度={len(story)}")
+        t0 = time.time()
         if self.mock_mode:
             return [
                 {"name": "主角", "role": "主角", "description": "故事中的主要角色"},
@@ -122,7 +124,9 @@ class Novel2ScriptService:
             HumanMessage(content=HUMAN_EXTRACT_CHARACTERS.format(script=story)),
         ]
         response: ExtractCharactersResponse = await structured_model.ainvoke(messages)
-        return [c.model_dump() for c in response.characters]
+        result = [c.model_dump() for c in response.characters]
+        logger.info(f"提取角色完成: {len(result)}个 耗时={time.time()-t0:.1f}s")
+        return result
 
     # ================================================================
     # 阶段3: 事件提取
@@ -130,7 +134,8 @@ class Novel2ScriptService:
 
     async def extract_events(self, story: str) -> List[Dict[str, Any]]:
         """从故事中提取关键事件"""
-        logger.info("提取事件...")
+        logger.info(f"提取事件... 输入长度={len(story)}")
+        t0 = time.time()
         if self.mock_mode:
             return [
                 {"index": 0, "title": "开场", "description": "故事的开始",
@@ -145,7 +150,9 @@ class Novel2ScriptService:
             HumanMessage(content=HUMAN_EXTRACT_EVENTS.format(story=story)),
         ]
         response: ExtractEventsResponse = await structured_model.ainvoke(messages)
-        return [e.model_dump() for e in response.events]
+        result = [e.model_dump() for e in response.events]
+        logger.info(f"提取事件完成: {len(result)}个 耗时={time.time()-t0:.1f}s")
+        return result
 
     # ================================================================
     # 阶段4: 编剧生成（故事+剧本）
@@ -153,7 +160,8 @@ class Novel2ScriptService:
 
     async def develop_story(self, compressed_novel: str, user_requirement: str = "") -> str:
         """基于压缩小说发展完整故事"""
-        logger.info("发展故事...")
+        logger.info(f"发展故事... 输入长度={len(compressed_novel)}")
+        t0 = time.time()
         if self.mock_mode:
             return compressed_novel
 
@@ -172,14 +180,16 @@ class Novel2ScriptService:
         ]
         try:
             response = await self.llm.ainvoke(messages, config={"timeout": 300})
+            logger.info(f"发展故事完成: 输出长度={len(response.content)} 耗时={time.time()-t0:.1f}s")
+            return response.content
         except Exception:
-            logger.warning("develop_story 超时，跳过此阶段")
+            logger.warning(f"develop_story 超时 (300s)，跳过此阶段")
             return compressed_novel
-        return response.content
 
     async def write_script(self, story: str, user_requirement: str = "") -> List[str]:
         """将故事转为分场剧本"""
-        logger.info("编写剧本...")
+        logger.info(f"编写剧本... 输入长度={len(story)}")
+        t0 = time.time()
         if self.mock_mode:
             return [story] if isinstance(story, str) else story
 
@@ -196,9 +206,10 @@ class Novel2ScriptService:
                 )),
             ]
             response: WriteScriptResponse = await structured_model.ainvoke(messages, config={"timeout": 300})
+            logger.info(f"编写剧本完成: {len(response.script)}场 耗时={time.time()-t0:.1f}s")
             return response.script
         except Exception as e:
-            logger.warning(f"write_script 失败: {e}，使用备用方案")
+            logger.warning(f"write_script 失败 (耗时={time.time()-t0:.1f}s): {e}，使用备用方案")
             # Fallback: AI 超时时，按章节（第X回/第X章）拆分原文，封装为剧集格式
             return self._fallback_split_to_episodes(story_text, user_requirement)
 
@@ -206,7 +217,7 @@ class Novel2ScriptService:
     def _fallback_split_to_episodes(text: str, user_requirement: str = "") -> List[str]:
         """AI 失败时的备用方案：按章节标记将原文拆分为剧集（去重处理）"""
         # 匹配所有第X回/第X章，记录位置和编号
-        marker_pattern = re.compile(r'第\s*([一二三四五六七八九十百千\d]+)\s*[回章节]')
+        marker_pattern = re.compile(r'(?:^|\n)\s*(?:#{1,6}\s*)?第\s*([一二三四五六七八九十百千\d]+)\s*[回章节]', re.MULTILINE)
         markers = [(m.start(), m.group(1)) for m in marker_pattern.finditer(text)]
 
         if len(markers) < 2:
@@ -244,14 +255,16 @@ class Novel2ScriptService:
 
     async def enhance_script(self, scenes: List[str]) -> List[str]:
         """增强剧本（对话优化、节奏调整）"""
-        logger.info("增强剧本...")
+        logger.info(f"增强剧本... {len(scenes)}场")
+        t0 = time.time()
         if self.mock_mode or not scenes:
             return scenes
 
         # DeepSeek structured output 不稳定，使用纯文本增强
         enhanced = []
+        failed = 0
         for i, scene in enumerate(scenes):  # 增强所有场景
-            logger.info(f"增强第{i+1}场...")
+            logger.info(f"增强第{i+1}/{len(scenes)}场... 长度={len(scene)}")
             prompt = f"""请对以下剧本场景进行优化增强，改进对话的自然度和画面的可视化描述，保持剧情不变。
 
 原剧本：
@@ -265,11 +278,13 @@ class Novel2ScriptService:
             except Exception as e:
                 logger.warning(f"增强第{i+1}场失败: {e}，保留原文")
                 enhanced.append(scene)
+                failed += 1
 
         # 补充未增强的场景
         if len(enhanced) < len(scenes):
             enhanced.extend(scenes[len(enhanced):])
 
+        logger.info(f"增强剧本完成: {len(enhanced)}场 失败={failed} 耗时={time.time()-t0:.1f}s")
         return enhanced
 
     # ================================================================
@@ -278,19 +293,26 @@ class Novel2ScriptService:
 
     @staticmethod
     def detect_chapter_count(novel_text: str) -> int:
-        """检测小说的章节/回数（去重计数，避免正文中重复引用干扰）"""
-        pattern = r'第\s*([一二三四五六七八九十百千\d]+)\s*[回章节]'
-        matches = re.findall(pattern, novel_text)
+        """检测小说的章节/回数（去重计数，支持多种格式）"""
+        # 格式1: 第X回/章/节（行首，可能有 ## 等 markdown 标记）
+        pattern = r'(?:^|\n)\s*(?:#{1,6}\s*)?第\s*([一二三四五六七八九十百千\d]+)\s*[回章节]'
+        matches = re.findall(pattern, novel_text, re.MULTILINE)
         if matches and len(matches) >= 2:
-            # 去重：同一个章节编号（如"一"）可能被多次引用，只算一次
-            unique = list(dict.fromkeys(matches))  # 保持出现顺序的去重
-            logger.info(f"检测到 {len(unique)} 个不重复章节 (原始匹配 {len(matches)} 次): {unique[:10]}")
-            return min(len(unique), 10)
-        # 尝试英文章节
+            unique = list(dict.fromkeys(matches))
+            logger.info(f"检测到 {len(unique)} 个不重复章节 (行首): {unique[:10]}")
+            return min(len(unique), 50)
+        # 格式2: 任意位置的第X回/章（放宽限制）
+        pattern2 = r'第\s*([一二三四五六七八九十百千\d]+)\s*[回章节]'
+        matches2 = re.findall(pattern2, novel_text)
+        if matches2 and len(matches2) >= 2:
+            unique = list(dict.fromkeys(matches2))
+            logger.info(f"检测到 {len(unique)} 个不重复章节 (全文): {unique[:10]}")
+            return min(len(unique), 50)
+        # 格式3: 英文 Chapter
         eng = re.findall(r'Chapter\s+(\d+)', novel_text, re.IGNORECASE)
         if eng and len(eng) >= 2:
-            unique_eng = list(dict.fromkeys(eng))
-            return min(len(unique_eng), 10)
+            unique = list(dict.fromkeys(eng))
+            return min(len(unique), 50)
         return 0
 
     @staticmethod
@@ -384,7 +406,8 @@ class Novel2ScriptService:
 
     async def extract_entities(self, script_content: str) -> Dict[str, Any]:
         """从剧本中提取角色、地点和道具"""
-        logger.info("提取主体实体...")
+        logger.info(f"提取主体实体... 输入长度={len(script_content)}")
+        t0 = time.time()
         if self.mock_mode:
             return {
                 "characters": [
@@ -401,20 +424,23 @@ class Novel2ScriptService:
 
         try:
             structured_model = self.llm.with_structured_output(ExtractEntitiesResponse, method="json_mode")
-            # Truncate if too long
-            text = script_content[:8000] if len(script_content) > 8000 else script_content
+            # Truncate if too long (increased from 8000 for better coverage)
+            text = script_content[:32000] if len(script_content) > 32000 else script_content
             messages = [
                 SystemMessage(content=SYSTEM_EXTRACT_ENTITIES),
                 HumanMessage(content=HUMAN_EXTRACT_ENTITIES.format(script=text)),
             ]
             response: ExtractEntitiesResponse = await structured_model.ainvoke(messages, config={"timeout": 60})
-            return {
+            result = {
                 "characters": [c.model_dump() for c in response.characters],
                 "locations": [l.model_dump() for l in response.locations],
                 "props": [p.model_dump() for p in response.props],
             }
+            logger.info(f"实体提取完成: {len(result['characters'])}角色 {len(result['locations'])}地点 "
+                        f"{len(result['props'])}道具 耗时={time.time()-t0:.1f}s")
+            return result
         except Exception as e:
-            logger.warning(f"实体提取失败: {e}，使用备用方案")
+            logger.warning(f"实体提取失败 (耗时={time.time()-t0:.1f}s): {e}，使用备用方案")
             # Fallback: basic regex extraction
             return self._fallback_extract_entities(script_content)
 

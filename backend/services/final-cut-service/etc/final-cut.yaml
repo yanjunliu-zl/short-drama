@@ -31,8 +31,8 @@ Database:
   User: admin
   Password: admin123
   DBName: shortdrama
-  MaxOpenConns: 200
-  MaxIdleConns: 50
+  MaxOpenConns: 100
+  MaxIdleConns: 25
   ConnMaxLifetime: 3600
   MaxLifetime: 7200
 

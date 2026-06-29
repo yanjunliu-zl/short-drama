@@ -50,7 +50,7 @@ http:
 
     # 内容服务路由 (案例广场 + 我的作品)
     content-service:
-      rule: "PathPrefix(`/api/v1/cases`) || PathPrefix(`/api/v1/works`) || PathPrefix(`/api/v1/scenes`) || PathPrefix(`/api/v1/characters`) || PathPrefix(`/api/v1/assets`) || PathPrefix(`/api/v1/payments`)"
+      rule: "PathPrefix(`/api/v1/cases`) || PathPrefix(`/api/v1/works`) || PathPrefix(`/api/v1/scenes`) || PathPrefix(`/api/v1/characters`) || PathPrefix(`/api/v1/assets`) || PathPrefix(`/api/v1/payments`) || PathPrefix(`/api/v1/usage`)"
       entryPoints:
         - web
       middlewares:

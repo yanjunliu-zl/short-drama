@@ -10,6 +10,7 @@ export interface CaseItem {
   views: number
   tags: string[]
   coverColor: string
+  videoUrl?: string
   createdAt: string
   updatedAt: string
 }

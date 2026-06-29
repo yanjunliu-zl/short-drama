@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     MODEL_NAME: str = os.getenv("MODEL_NAME", "deepseek-chat")
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY", None)
     OPENAI_API_BASE: Optional[str] = os.getenv("OPENAI_API_BASE", None)
-    OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", 2000))
+    OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", 16000))
     OPENAI_TEMPERATURE: float = float(os.getenv("OPENAI_TEMPERATURE", 0.7))
     OPENAI_TIMEOUT: int = int(os.getenv("OPENAI_TIMEOUT", 600))
     # DeepSeek配置

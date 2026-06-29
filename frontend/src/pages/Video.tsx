@@ -64,7 +64,6 @@ const Video: React.FC = () => {
       if (!storyData) { const o = localStorage.getItem('shot_generation_result'); if (o) try { storyData = JSON.parse(o); } catch {} }
       // 加载已有的视频结果
       let videoData = loadState('videoResults');
-      if (!videoData) { const o = localStorage.getItem('shot_video_results'); if (o) try { videoData = JSON.parse(o); } catch {} }
 
       // 合并分镜数据中的剧集和视频结果
       const allEps = (storyData?.episodes || videoData?.episodes || []);

@@ -50,6 +50,7 @@ type Case struct {
 	Views       int64     `json:"views"`
 	Tags        []string  `json:"tags"`
 	CoverColor  string    `json:"coverColor"`
+	VideoUrl    string    `json:"videoUrl,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
@@ -367,6 +368,11 @@ type ContentService interface {
 	// 管道状态持久化
 	SavePipelineState(ctx context.Context, req *SavePipelineStateRequest) (*PipelineStateResponse, error)
 	GetPipelineState(ctx context.Context, req *GetPipelineStateRequest) (*PipelineStateResponse, error)
+
+	// AI 用量统计
+	RecordUsage(ctx context.Context, req *RecordUsageRequest) error
+	GetUsageSummary(ctx context.Context, req *GetUsageSummaryRequest) (*UsageSummaryResponse, error)
+	GetUsageHistory(ctx context.Context, req *GetUsageHistoryRequest) (*UsageHistoryResponse, error)
 }
 
 // ========== 管道状态持久化类型 ==========

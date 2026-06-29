@@ -187,12 +187,19 @@ export interface Shot {
   playbackSpeed?: string
 }
 
+export interface ReferenceImages {
+  characters: Record<string, string>   // name → image_url
+  scenes: Record<string, string>       // name → image_url
+  props: Record<string, string>        // name → image_url
+}
+
 export interface ShotEpisode {
   id: string
   title: string
   number: number
   shots: Shot[]
   description?: string
+  referenceImages?: ReferenceImages
 }
 
 export interface ShotGenerationResponse {

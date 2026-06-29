@@ -3,12 +3,14 @@ from typing import Dict, Any, Optional, List
 import re
 import json
 import asyncio
+import time
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.callbacks.base import BaseCallbackHandler
 
 from app.core.config import settings
 from app.services.cache_service import get_storyboard_cache_service
+from app.services.usage_tracker import track_llm_usage
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +95,7 @@ class StoryboardAIService:
         if not self._initialized:
             await self.initialize()
 
+        t0 = time.time()
         try:
             logger.info(f"开始生成分镜: {request.get('title', '未命名剧本')}")
 
@@ -129,21 +132,26 @@ class StoryboardAIService:
                 await self.cache_service.cache_storyboard_generation(request, storyboard_data)
                 logger.info("分镜生成结果已缓存")
 
-            logger.info(f"分镜生成完成，场景数量: {len(storyboard_data.get('scenes', []))}")
+            elapsed = time.time() - t0
+            logger.info(f"分镜生成完成: {len(storyboard_data.get('scenes', []))}场景 耗时={elapsed:.1f}s")
             return storyboard_data
 
         except Exception as e:
-            logger.error(f"分镜生成失败: {e}")
+            elapsed = time.time() - t0
+            logger.error(f"分镜生成失败 (耗时={elapsed:.1f}s): {e}")
             raise
 
     async def generate_shots(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """使用DeepSeek生成镜头级分镜 — 逐集生成避免 JSON 过大出错"""
+        """使用DeepSeek生成镜头级分镜 — 逐集生成，超长集自动按场景分段"""
         if not self._initialized:
             await self.initialize()
 
+        t0 = time.time()
         try:
             title = request.get('title', '未命名剧本')
-            logger.info(f"开始生成镜头级分镜(逐集): {title}")
+            episode_count = len(request.get('episodeContents', []))
+            script_len = len(request.get('script', ''))
+            logger.info(f"开始生成镜头级分镜(逐集): {title} episodes={episode_count} script_len={script_len}")
 
             if self.cache_service:
                 cached = await self.cache_service.get_cached_storyboard(request)
@@ -158,41 +166,93 @@ class StoryboardAIService:
 
             all_episodes = []
             global_shot_id = 0
+            max_chars = settings.STORYBOARD_MAX_SCRIPT_CHARS
 
-            for ep_idx, ep_text in enumerate(episode_texts):  # 全部集数
+            for ep_idx, ep_text in enumerate(episode_texts):
                 ep_num = ep_idx + 1
-                logger.info(f"生成第{ep_num}集分镜...")
 
-                # 构建单集提示词
-                ep_request = {**request, 'script': ep_text, 'episodeCount': 1}
-                system_prompt = self._build_shot_system_prompt(ep_request)
-                human_prompt = self._build_shot_human_prompt(ep_request)
+                # 超长集：按场景拆分为多段，逐段生成后合并
+                if len(ep_text) > max_chars:
+                    chunks = self._split_episode_to_scene_chunks(ep_text, max_chars)
+                    logger.info(f"生成第{ep_num}集分镜... ({len(chunks)}段, 总{len(ep_text)}字)")
+                    ep_shots = []
+                    chunk_start_shot_id = global_shot_id
 
-                try:
-                    response = await self.llm.ainvoke([
-                        SystemMessage(content=system_prompt),
-                        HumanMessage(content=human_prompt)
-                    ])
-                    shot_data = self._parse_single_episode_shots(response.content, ep_num, global_shot_id, request)
-                except Exception as e:
-                    logger.warning(f"第{ep_num}集AI生成失败: {e}，使用程序化分镜")
-                    shot_data = self._programmatic_shots(ep_text, ep_num, global_shot_id)
+                    for chunk_idx, chunk_text in enumerate(chunks):
+                        chunk_ep_request = {**request, 'script': chunk_text, 'episodeCount': 1,
+                                            'maxScriptChars': max_chars}
+                        system_prompt = self._build_shot_system_prompt(chunk_ep_request)
+                        human_prompt = self._build_shot_human_prompt(chunk_ep_request)
 
-                if shot_data.get("episodes"):
-                    ep = shot_data["episodes"][0]
-                    global_shot_id += len(ep.get("shots", []))
-                    all_episodes.append(ep)
+                        try:
+                            response = await self.llm.ainvoke([
+                                SystemMessage(content=system_prompt),
+                                HumanMessage(content=human_prompt)
+                            ])
+                            shot_data = self._parse_single_episode_shots(
+                                response.content, ep_num, chunk_start_shot_id, request
+                            )
+                        except Exception as e:
+                            logger.warning(f"第{ep_num}集第{chunk_idx+1}段AI生成失败: {e}，使用程序化分镜")
+                            shot_data = self._programmatic_shots(chunk_text, ep_num, chunk_start_shot_id)
+
+                        if shot_data.get("episodes"):
+                            ep = shot_data["episodes"][0]
+                            chunk_shots = ep.get("shots", [])
+                            chunk_start_shot_id += len(chunk_shots)
+                            ep_shots.append(ep)
+
+                    # 合并本集所有分段
+                    merged = self._merge_episode_shots(ep_shots, ep_num)
+                    if merged.get("episodes"):
+                        merged_ep = merged["episodes"][0]
+                        global_shot_id += len(merged_ep.get("shots", []))
+                        all_episodes.append(merged_ep)
+                        logger.info(f"第{ep_num}集完成: {len(merged_ep.get('shots', []))}镜头 (合并{len(chunks)}段)")
+                else:
+                    logger.info(f"生成第{ep_num}集分镜... ({len(ep_text)}字)")
+                    ep_request = {**request, 'script': ep_text, 'episodeCount': 1,
+                                  'maxScriptChars': max_chars}
+                    system_prompt = self._build_shot_system_prompt(ep_request)
+                    human_prompt = self._build_shot_human_prompt(ep_request)
+
+                    try:
+                        response = await self.llm.ainvoke([
+                            SystemMessage(content=system_prompt),
+                            HumanMessage(content=human_prompt)
+                        ])
+                        shot_data = self._parse_single_episode_shots(response.content, ep_num, global_shot_id, request)
+                    except Exception as e:
+                        logger.warning(f"第{ep_num}集AI生成失败: {e}，使用程序化分镜")
+                        shot_data = self._programmatic_shots(ep_text, ep_num, global_shot_id)
+
+                    if shot_data.get("episodes"):
+                        ep = shot_data["episodes"][0]
+                        global_shot_id += len(ep.get("shots", []))
+                        all_episodes.append(ep)
 
             result = {"episodes": all_episodes}
             if self.cache_service and all_episodes:
                 await self.cache_service.cache_storyboard_generation(request, result)
 
             total = sum(len(ep.get("shots", [])) for ep in all_episodes)
-            logger.info(f"镜头分镜完成: {len(all_episodes)}集, {total}镜头")
+            elapsed = time.time() - t0
+            logger.info(f"镜头分镜完成: {len(all_episodes)}集, {total}镜头 耗时={elapsed:.1f}s")
+            # 记录 LLM 用量
+            await track_llm_usage(
+                user_id=request.get('user_id', ''),
+                model_name="deepseek-chat",
+                tokens_in=script_len,
+                tokens_out=total * 200,  # 估计每个镜头 ~200 tokens 输出
+                duration_ms=int(elapsed * 1000),
+                endpoint="/shots/generate",
+                service_name="storyboard-service",
+            )
             return result
 
         except Exception as e:
-            logger.error(f"镜头分镜生成失败: {e}")
+            elapsed = time.time() - t0
+            logger.error(f"镜头分镜生成失败 (耗时={elapsed:.1f}s): {e}")
             raise
 
     def _split_script_to_episodes(self, script: str) -> list:
@@ -206,6 +266,80 @@ class StoryboardAIService:
             end = markers[i+1].start() if i+1 < len(markers) else len(script)
             texts.append(script[start:end])
         return texts
+
+    def _split_episode_to_scene_chunks(self, ep_text: str, max_chars: int) -> List[str]:
+        """将长集剧本按场景标记拆分为多个块，每块不超过 max_chars"""
+        # 按【场景N：...】或【场景N:...】标记拆分
+        scene_pattern = r'(?:^|\n)(【场景[^】]*】)'
+        parts = re.split(scene_pattern, ep_text)
+
+        if len(parts) <= 1:
+            # 没有场景标记，按段落拆分
+            paragraphs = [p.strip() for p in ep_text.split('\n\n') if p.strip()]
+            chunks = []
+            current = ""
+            for p in paragraphs:
+                if len(current) + len(p) + 2 > max_chars and current:
+                    chunks.append(current)
+                    current = p
+                else:
+                    current = current + "\n\n" + p if current else p
+            if current:
+                chunks.append(current)
+            return chunks if chunks else [ep_text]
+
+        # 有场景标记：重新组装，将相邻场景合并到同一块
+        chunks = []
+        current = ""
+        i = 0
+        while i < len(parts):
+            segment = parts[i]
+            # 检查下一个是否是场景标记
+            if i + 1 < len(parts) and re.match(r'【场景[^】]*】', parts[i+1]):
+                # 这是场景标题 + 场景内容
+                scene_header = parts[i+1]
+                scene_body = parts[i+2] if i + 2 < len(parts) else ""
+                full_scene = segment + scene_header + scene_body
+                if len(current) + len(full_scene) > max_chars and current:
+                    chunks.append(current)
+                    current = full_scene
+                else:
+                    current = current + full_scene if current else full_scene
+                i += 3
+            else:
+                if len(current) + len(segment) > max_chars and current:
+                    chunks.append(current)
+                    current = segment
+                else:
+                    current = current + segment if current else segment
+                i += 1
+        if current:
+            chunks.append(current)
+        return chunks if chunks else [ep_text]
+
+    def _merge_episode_shots(self, episodes: List[Dict[str, Any]], ep_num: int) -> Dict[str, Any]:
+        """合并同一集多个分段的分镜结果"""
+        if not episodes:
+            return {"episodes": []}
+        if len(episodes) == 1:
+            return {"episodes": episodes}
+        # 合并所有shots，重新编号
+        merged_shots = []
+        shot_counter = 1
+        for ep in episodes:
+            for shot in ep.get("shots", []):
+                shot["number"] = shot_counter
+                shot["id"] = shot_counter
+                shot_counter += 1
+                merged_shots.append(shot)
+        cn = ['', '一','二','三','四','五','六','七','八','九','十']
+        return {"episodes": [{
+            "id": f"ep-{ep_num}",
+            "title": f"第{cn[ep_num] if ep_num<=10 else ep_num}集",
+            "number": ep_num,
+            "description": episodes[0].get("description", ""),
+            "shots": merged_shots,
+        }]}
 
     def _parse_single_episode_shots(self, content: str, ep_num: int, start_shot_id: int, request: Dict[str, Any]) -> Dict[str, Any]:
         """解析单集镜头JSON（容错处理）"""
@@ -356,8 +490,8 @@ class StoryboardAIService:
         script = request.get('script', '')
         episode_count = request.get('episodeCount', 1)
 
-        # 截断剧本避免超出token限制（长剧本取前2集+后1集）
-        max_script_chars = 3000
+        # 截断剧本避免超出token限制（可配置上限）
+        max_script_chars = request.get('maxScriptChars', settings.STORYBOARD_MAX_SCRIPT_CHARS)
         script_truncated = script[:max_script_chars]
         if len(script) > max_script_chars:
             script_truncated += "\n\n...(剧本内容已截断)..."
@@ -578,7 +712,7 @@ class StoryboardAIService:
         try:
             prompt = f"""请分析以下剧本的分镜节点:
 
-{script_content[:2000]}
+{script_content[:settings.STORYBOARD_MAX_SCRIPT_CHARS]}
 
 请分析:
 1. 场景切换点
@@ -634,12 +768,17 @@ class StoryboardAIService:
         title = request.get('title', '未命名剧本')
         script = request.get('script', '')
 
+        max_chars = settings.STORYBOARD_MAX_SCRIPT_CHARS
+        script_truncated = script[:max_chars]
+        if len(script) > max_chars:
+            script_truncated += "\n\n...(剧本内容已截断)..."
+
         return f"""请将以下剧本转换成分镜脚本。
 
 剧本标题: {title}
 
 剧本内容:
-{script[:3000]}
+{script_truncated}
 
 请根据剧本内容，创建详细的分镜脚本，包括每个场景的视觉描述、角色位置、对话、镜头运动等元素。
 

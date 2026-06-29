@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: llmhua-service
+  namespace: shortdrama
+spec:
+  ports:
+    - port: 8002
+  selector:
+    app: llmhua-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmhua-service
+  namespace: shortdrama
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: llmhua-service
+  template:
+    metadata:
+      labels:
+        app: llmhua-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8002"
+    spec:
+      containers:
+        - name: llmhua-service
+          image: shortdrama/llmhua-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8002
+          envFrom:
+            - configMapRef:
+                name: shortdrama-config
+          env:
+            - name: SEEDANCE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: SEEDANCE_API_KEY
+            - name: STORAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: STORAGE_ACCESS_KEY
+            - name: STORAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: STORAGE_SECRET_KEY
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://jaeger:4318"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 15
+            periodSeconds: 15
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: llmhua-service-hpa
+  namespace: shortdrama
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llmhua-service
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

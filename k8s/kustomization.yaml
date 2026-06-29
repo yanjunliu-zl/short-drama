@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: shortdrama
+
+resources:
+  - base/namespace.yaml
+  - base/configmap.yaml
+  - base/secrets.yaml
+  - infra/mysql.yaml
+  - infra/redis.yaml
+  - infra/rabbitmq.yaml
+  - infra/minio.yaml
+  - services/user-service.yaml
+  - services/content-service.yaml
+  - services/script-service.yaml
+  - services/storyboard-service.yaml
+  - services/llmhua-service.yaml
+  - services/video-service.yaml
+  - ingress/traefik-ingressroute.yaml
+  - monitoring/servicemonitor.yaml
+
+images:
+  - name: shortdrama/script-service
+    newTag: latest
+  - name: shortdrama/storyboard-service
+    newTag: latest
+  - name: shortdrama/content-service
+    newTag: latest
+  - name: shortdrama/user-service
+    newTag: latest
+  - name: shortdrama/llmhua-service
+    newTag: latest
+  - name: shortdrama/video-service
+    newTag: latest
+  - name: shortdrama/video-worker
+    newTag: latest

@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons'
 import { useAuth } from '@/hooks/useAuth'
 import { paymentService, type PaymentOrder, type CreatePaymentParams } from '@/services/paymentService'
+import { UsageCard } from '@/components/UsageCard'
 
 const { Title, Text } = Typography
 
@@ -192,15 +193,25 @@ const Payment: React.FC = () => {
   return (
     <div style={{ padding: 24 }}>
       <Title level={2}><WalletOutlined style={{ marginRight: 12 }} />支付中心</Title>
+
+      {/* AI 用量卡片 */}
+      <UsageCard userId={String(user.id)} />
+
       <Text type="secondary" style={{ marginBottom: 24, display: 'block' }}>
         选择订阅计划或购买积分，解锁更多创作功能
       </Text>
 
-      <Tabs activeKey={activeTab} onChange={setActiveTab} size="large" style={{ marginBottom: 24 }}>
-        <Tabs.TabPane tab="订阅计划" key="subscription" />
-        <Tabs.TabPane tab="积分充值" key="credits" />
-        <Tabs.TabPane tab="支付记录" key="history" />
-      </Tabs>
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        size="large"
+        style={{ marginBottom: 24 }}
+        items={[
+          { label: '订阅计划', key: 'subscription' },
+          { label: '积分充值', key: 'credits' },
+          { label: '支付记录', key: 'history' },
+        ]}
+      />
 
       {activeTab === 'subscription' && (
         <Row gutter={[24, 24]}>

@@ -128,10 +128,18 @@ class ShotEpisodeRequest(BaseModel):
     description: Optional[str] = Field(default=None, description="集描述")
 
 
+class ReferenceImagesInput(BaseModel):
+    """参考图像：name → image_url 映射，用于保持角色/场景视觉一致性"""
+    characters: Dict[str, str] = Field(default={}, description="角色名→图像URL")
+    scenes: Dict[str, str] = Field(default={}, description="场景名→图像URL")
+    props: Dict[str, str] = Field(default={}, description="道具名→图像URL")
+
+
 class ShotsToVideoRequest(BaseModel):
     """批量分镜头生成视频请求"""
     storyboard_id: Optional[str] = Field(default=None, description="分镜ID")
     episodes: List[ShotEpisodeRequest] = Field(..., description="分集镜头数据")
+    referenceImages: Optional[ReferenceImagesInput] = Field(default=None, description="参考图像（角色/场景/道具预览图，用于保持一致性）")
     style: Optional[str] = Field(default="写实风格", description="整体风格")
     width: Optional[int] = Field(default=1920, description="视频宽度")
     height: Optional[int] = Field(default=1920, description="视频高度")

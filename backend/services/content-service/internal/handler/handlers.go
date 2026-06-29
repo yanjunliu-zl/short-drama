@@ -194,6 +194,27 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 		},
 	)
 
+	// AI 用量统计路由
+	server.AddRoutes(
+		[]rest.Route{
+			{
+				Method:  http.MethodPost,
+				Path:    "/api/v1/usage/record",
+				Handler: RecordUsageHandler(serverCtx),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/api/v1/usage/summary",
+				Handler: GetUsageSummaryHandler(serverCtx),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/api/v1/usage/history",
+				Handler: GetUsageHistoryHandler(serverCtx),
+			},
+		},
+	)
+
 	// 资产库路由
 	server.AddRoutes(
 		[]rest.Route{

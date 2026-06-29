@@ -6,11 +6,17 @@ import time
 import os
 
 from app.core.config import settings
+from app.core.logging import setup_logging
+from app.core.tracing import init_tracing, instrument_fastapi
+from app.middleware.prometheus import setup_metrics
 from app.services.storage_service import get_storage_service, close_storage_service
 
-# 设置日志
-logging.basicConfig(level=logging.INFO)
+# 设置 JSON 日志
+setup_logging()
 logger = logging.getLogger(__name__)
+
+# 初始化链路追踪
+init_tracing("scene-extractor")
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -20,6 +26,10 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# 注册 Prometheus 指标（替换原有的手动计时中间件）
+setup_metrics(app, app_name="scene-extractor")
+instrument_fastapi(app)
 
 # 添加中间件
 @app.middleware("http")

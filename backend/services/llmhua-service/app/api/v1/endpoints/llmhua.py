@@ -3,6 +3,8 @@ from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel, Field
+
+from app.services.usage_tracker import track_image_usage, track_video_usage
 import uuid
 import time
 
@@ -846,13 +848,37 @@ async def _generate_shots_to_video_task(
                     if not video_prompt:
                         video_prompt = image_prompt  # 回退：用图像提示词驱动视频
 
-                    # 第一步：生成首帧图像
-                    image_result = await seedance_service.generate_image_from_scene(
-                        scene_description=image_prompt,
-                        style=request.style,
-                        width=request.width or 1920,
-                        height=request.height or 1920,
-                    )
+                    # 第一步：查找参考图像（角色/场景预览图），保持视觉一致性
+                    reference_image_url = None
+                    if request.referenceImages:
+                        # 优先使用第一个角色的参考图作为角色一致性锚点
+                        chars = shot_dict.get('characters', []) or []
+                        ref_chars = request.referenceImages.characters or {}
+                        for ch in chars:
+                            if ch in ref_chars and ref_chars[ch]:
+                                reference_image_url = ref_chars[ch]
+                                logger.info(f"镜头 {shot_dict.get('number','?')} 使用角色参考图: {ch}")
+                                break
+                        # 如果没有角色参考图，尝试场景参考图
+                        if not reference_image_url:
+                            scene_ref = shot_dict.get('sceneRef', '')
+                            ref_scenes = request.referenceImages.scenes or {}
+                            if scene_ref and scene_ref in ref_scenes and ref_scenes[scene_ref]:
+                                reference_image_url = ref_scenes[scene_ref]
+                                logger.info(f"镜头 {shot_dict.get('number','?')} 使用场景参考图: {scene_ref}")
+
+                    # 生成首帧图像：有参考图则跳过生成直接用参考图
+                    if reference_image_url:
+                        image_result = {"status": "completed", "image_url": reference_image_url,
+                                       "original_url": reference_image_url}
+                        logger.info(f"镜头 {shot_dict.get('number','?')} 复用参考图像，跳过文生图")
+                    else:
+                        image_result = await seedance_service.generate_image_from_scene(
+                            scene_description=image_prompt,
+                            style=request.style,
+                            width=request.width or 1920,
+                            height=request.height or 1920,
+                        )
 
                     video_url = None
                     image_url = None
@@ -929,6 +955,21 @@ async def _generate_shots_to_video_task(
         }
 
         logger.info(f"批量镜头视频生成完成: {completed_count}/{total_shots} 成功")
+        # 记录用量：图像生成数 + 视频生成数
+        await track_image_usage(
+            user_id=request.user_id or '',
+            model_name="seedream-4.5",
+            count=completed_count,
+            endpoint="/shots-to-video",
+            service_name="llmhua-service",
+        )
+        await track_video_usage(
+            user_id=request.user_id or '',
+            model_name="seedance-2.0",
+            count=completed_count,
+            endpoint="/shots-to-video",
+            service_name="llmhua-service",
+        )
 
     except Exception as e:
         logger.error(f"批量镜头视频生成失败，任务ID: {task_id}, 错误: {e}")

@@ -1,0 +1,97 @@
+# ============================================================
+# 生产环境覆盖配置 — Swarm 模式多副本 + 资源限制
+# 使用: docker stack deploy -c docker-compose.yml -c docker-compose.prod.yml shortdrama
+# ============================================================
+
+services:
+  # API 网关
+  traefik:
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 256M
+      restart_policy:
+        condition: any
+
+  # 用户服务
+  user-service:
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # 剧本生成服务（CPU 密集型 LLM 调用）
+  script-service:
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+
+  # 内容服务
+  content-service:
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # 分镜生成服务
+  storyboard-service:
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+
+  # LLM 图像视频生成服务（GPU/CPU 密集型）
+  llmhua-service:
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+
+  # 场景提取服务
+  scene-extractor:
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  # 视频服务
+  video-service:
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  # 最终剪辑服务
+  final-cut-service:
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  # Celery Worker
+  video-worker:
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M

@@ -35,8 +35,9 @@ type Case struct {
 	Title       string    `db:"title" json:"title"`
 	Description string    `db:"description" json:"description"`
 	Author      string    `db:"author" json:"author"`
-	CoverURL    string    `db:"cover_url" json:"coverUrl"`
-	Genre       string    `db:"genre" json:"genre"`
+	CoverURL      string    `db:"cover_url" json:"coverUrl"`
+	DemoVideoURL  string    `db:"demo_video_url" json:"demoVideoUrl"`
+	Genre         string    `db:"genre" json:"genre"`
 	Tags        string    `db:"tags" json:"tags"` // comma-separated
 	Status      string    `db:"status" json:"status"`
 	ViewCount   int64     `db:"view_count" json:"views"`

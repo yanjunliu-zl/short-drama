@@ -1,0 +1,98 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: storyboard-service
+  namespace: shortdrama
+  labels:
+    app: storyboard-service
+spec:
+  ports:
+    - port: 8001
+  selector:
+    app: storyboard-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: storyboard-service
+  namespace: shortdrama
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: storyboard-service
+  template:
+    metadata:
+      labels:
+        app: storyboard-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: storyboard-service
+          image: shortdrama/storyboard-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: shortdrama-config
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: DB_PASSWORD
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: DEEPSEEK_API_KEY
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://jaeger:4318"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: storyboard-service-hpa
+  namespace: shortdrama
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: storyboard-service
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

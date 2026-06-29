@@ -15,9 +15,14 @@ from app.schemas.storyboard import (
     ShotGenerationResponse,
 )
 from app.services.storyboard_service import StoryboardAIService
+from app.services.task_store import get_task_store, TaskStore
 from app.core.deps import get_storyboard_service
 
 router = APIRouter()
+
+
+async def _get_task_store() -> TaskStore:
+    return await get_task_store()
 
 
 @router.post("/generate", response_model=StoryboardResponse)
@@ -31,16 +36,17 @@ async def generate_storyboard(
 
     使用AI模型根据剧本生成分镜脚本
     """
+    task_id = str(uuid.uuid4())
+    script_len = len(request.script) if request.script else 0
+    logger.info(f"[API] POST /generate task_id={task_id} title={request.title} script_len={script_len}")
     try:
-        task_id = str(uuid.uuid4())
-
         background_tasks.add_task(
             _generate_storyboard_task,
             task_id=task_id,
             request=request,
             storyboard_service=storyboard_service
         )
-
+        logger.info(f"[API] 分镜生成任务已提交 task_id={task_id}")
         return StoryboardResponse(
             task_id=task_id,
             status="processing",
@@ -48,6 +54,7 @@ async def generate_storyboard(
             storyboard=None
         )
     except Exception as e:
+        logger.error(f"[API] POST /generate 失败 task_id={task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -57,40 +64,40 @@ async def _generate_storyboard_task(
     storyboard_service: StoryboardAIService
 ):
     """后台分镜生成任务"""
+    t0 = time.time()
+    store = await get_task_store()
+    logger.info(f"[Task] 分镜生成开始 task_id={task_id} title={request.title}")
     try:
-        # 更新任务状态为进行中
-        _storyboard_tasks[task_id] = {
+        await store.set(task_id, {
             "status": "processing",
             "progress": 10,
             "result": None,
             "start_time": time.time(),
             "request": request.dict()
-        }
+        })
 
-        # 生成分镜
         storyboard_data = await storyboard_service.generate_storyboard(request.dict())
 
-        # 更新任务状态为完成
-        _storyboard_tasks[task_id] = {
+        elapsed = time.time() - t0
+        scene_count = len(storyboard_data.get("scenes", []))
+        await store.set(task_id, {
             "status": "completed",
             "progress": 100,
             "result": storyboard_data,
             "end_time": time.time(),
             "task_id": task_id
-        }
+        })
+        logger.info(f"[Task] 分镜生成完成 task_id={task_id} scenes={scene_count} 耗时={elapsed:.1f}s")
 
     except Exception as e:
-        logger.error(f"分镜生成失败，任务ID: {task_id}, 错误: {e}")
-        _storyboard_tasks[task_id] = {
+        elapsed = time.time() - t0
+        logger.error(f"[Task] 分镜生成失败 task_id={task_id} 耗时={elapsed:.1f}s: {e}")
+        await store.set(task_id, {
             "status": "failed",
             "progress": 0,
             "error": str(e),
             "end_time": time.time()
-        }
-
-
-# 全局任务存储
-_storyboard_tasks: dict = {}
+        })
 
 
 @router.get("/{storyboard_id}", response_model=StoryboardResponse)
@@ -101,12 +108,16 @@ async def get_storyboard(
     """
     获取分镜详情
     """
+    logger.info(f"[API] GET /{storyboard_id}")
     try:
-        task_info = _storyboard_tasks.get(storyboard_id)
+        store = await _get_task_store()
+        task_info = await store.get(storyboard_id)
         if not task_info:
+            logger.warning(f"[API] GET /{storyboard_id} 分镜未找到")
             raise HTTPException(status_code=404, detail="Storyboard not found")
 
         if task_info["status"] != "completed":
+            logger.warning(f"[API] GET /{storyboard_id} 分镜未就绪 status={task_info['status']}")
             raise HTTPException(status_code=404, detail="Storyboard not ready")
 
         return StoryboardResponse(
@@ -118,6 +129,7 @@ async def get_storyboard(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"[API] GET /{storyboard_id} 异常: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -129,9 +141,10 @@ async def list_storyboards(
     """
     获取分镜列表
     """
+    logger.info(f"[API] GET / page={page} page_size={page_size}")
     try:
-        all_tasks = list(_storyboard_tasks.values())
-        completed_tasks = [t for t in all_tasks if t.get("status") == "completed"]
+        store = await _get_task_store()
+        completed_tasks = await store.list_completed(limit=100)
 
         # 按完成时间倒序排序
         completed_tasks.sort(key=lambda x: x.get("end_time", 0), reverse=True)
@@ -142,6 +155,7 @@ async def list_storyboards(
         end = start + page_size
         paginated = completed_tasks[start:end]
 
+        logger.info(f"[API] GET / 返回 {len(paginated)}/{total} 条记录")
         return StoryboardListResponse(
             storyboards=paginated,
             total=total,
@@ -149,6 +163,7 @@ async def list_storyboards(
             page_size=page_size
         )
     except Exception as e:
+        logger.error(f"[API] GET / 列表查询异常: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -159,9 +174,12 @@ async def get_storyboard_status(
     """
     获取分镜生成状态
     """
+    logger.info(f"[API] GET /{storyboard_id}/status")
     try:
-        task_info = _storyboard_tasks.get(storyboard_id)
+        store = await _get_task_store()
+        task_info = await store.get(storyboard_id)
         if not task_info:
+            logger.warning(f"[API] GET /{storyboard_id}/status 分镜未找到")
             raise HTTPException(status_code=404, detail="Storyboard not found")
 
         status_info = {
@@ -175,10 +193,12 @@ async def get_storyboard_status(
             status_info["start_time"] = task_info["start_time"]
             status_info["duration"] = (task_info.get("end_time", time.time()) - task_info["start_time"])
 
+        logger.info(f"[API] GET /{storyboard_id}/status status={status_info['status']} progress={status_info['progress']}")
         return status_info
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"[API] GET /{storyboard_id}/status 异常: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -195,16 +215,19 @@ async def generate_shots(
 
     根据剧本内容自动分析并划分每个镜头，包括镜头类型、时长、摄像机角度等
     """
+    task_id = str(uuid.uuid4())
+    script_len = len(request.script) if request.script else 0
+    ep_count = request.episodeCount or 0
+    logger.info(f"[API] POST /shots/generate task_id={task_id} title={request.title} "
+                f"script_len={script_len} episodes={ep_count}")
     try:
-        task_id = str(uuid.uuid4())
-
         background_tasks.add_task(
             _generate_shots_task,
             task_id=task_id,
             request=request,
             storyboard_service=storyboard_service
         )
-
+        logger.info(f"[API] 智能分镜任务已提交 task_id={task_id}")
         return ShotGenerationResponse(
             task_id=task_id,
             status="processing",
@@ -212,6 +235,7 @@ async def generate_shots(
             episodes=None
         )
     except Exception as e:
+        logger.error(f"[API] POST /shots/generate 失败 task_id={task_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -221,37 +245,44 @@ async def _generate_shots_task(
     storyboard_service: StoryboardAIService
 ):
     """后台镜头级分镜生成任务"""
+    t0 = time.time()
+    store = await get_task_store()
+    logger.info(f"[Task] 智能分镜开始 task_id={task_id} title={request.title}")
     try:
-        _storyboard_tasks[task_id] = {
+        await store.set(task_id, {
             "status": "processing",
             "progress": 10,
             "result": None,
             "start_time": time.time(),
             "request": request.dict(),
             "task_type": "shots",
-        }
+        })
 
-        # 生成镜头级分镜
         shot_data = await storyboard_service.generate_shots(request.dict())
 
-        _storyboard_tasks[task_id] = {
+        elapsed = time.time() - t0
+        ep_count = len(shot_data.get("episodes", []))
+        total_shots = sum(len(ep.get("shots", [])) for ep in shot_data.get("episodes", []))
+        await store.set(task_id, {
             "status": "completed",
             "progress": 100,
             "result": shot_data,
             "end_time": time.time(),
             "task_id": task_id,
             "task_type": "shots",
-        }
+        })
+        logger.info(f"[Task] 智能分镜完成 task_id={task_id} episodes={ep_count} shots={total_shots} 耗时={elapsed:.1f}s")
 
     except Exception as e:
-        logger.error(f"镜头分镜生成失败，任务ID: {task_id}, 错误: {e}")
-        _storyboard_tasks[task_id] = {
+        elapsed = time.time() - t0
+        logger.error(f"[Task] 智能分镜失败 task_id={task_id} 耗时={elapsed:.1f}s: {e}")
+        await store.set(task_id, {
             "status": "failed",
             "progress": 0,
             "error": str(e),
             "end_time": time.time(),
             "task_type": "shots",
-        }
+        })
 
 
 @router.get("/shots/{task_id}/status")
@@ -259,9 +290,12 @@ async def get_shot_generation_status(task_id: str):
     """
     获取镜头分镜生成状态
     """
+    logger.info(f"[API] GET /shots/{task_id}/status")
     try:
-        task_info = _storyboard_tasks.get(task_id)
+        store = await _get_task_store()
+        task_info = await store.get(task_id)
         if not task_info:
+            logger.warning(f"[API] GET /shots/{task_id}/status 任务未找到")
             raise HTTPException(status_code=404, detail="Shot generation task not found")
 
         status_info = {
@@ -275,10 +309,12 @@ async def get_shot_generation_status(task_id: str):
             status_info["start_time"] = task_info["start_time"]
             status_info["duration"] = (task_info.get("end_time", time.time()) - task_info["start_time"])
 
+        logger.info(f"[API] GET /shots/{task_id}/status status={status_info['status']} progress={status_info['progress']}")
         return status_info
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"[API] GET /shots/{task_id}/status 异常: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -290,16 +326,21 @@ async def get_shot_generation_result(
     """
     获取镜头分镜生成结果
     """
+    logger.info(f"[API] GET /shots/{task_id}")
     try:
-        task_info = _storyboard_tasks.get(task_id)
+        store = await _get_task_store()
+        task_info = await store.get(task_id)
         if not task_info:
+            logger.warning(f"[API] GET /shots/{task_id} 任务未找到")
             raise HTTPException(status_code=404, detail="Shot generation task not found")
 
         if task_info["status"] != "completed":
+            logger.warning(f"[API] GET /shots/{task_id} 任务未就绪 status={task_info['status']}")
             raise HTTPException(status_code=404, detail="Shot generation not ready")
 
         result = task_info.get("result", {})
-
+        ep_count = len(result.get("episodes", []))
+        logger.info(f"[API] GET /shots/{task_id} 返回 {ep_count} 集")
         return ShotGenerationResponse(
             task_id=task_id,
             status="completed",
@@ -309,4 +350,5 @@ async def get_shot_generation_result(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"[API] GET /shots/{task_id} 异常: {e}")
         raise HTTPException(status_code=500, detail=str(e))

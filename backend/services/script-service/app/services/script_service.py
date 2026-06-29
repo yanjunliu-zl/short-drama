@@ -19,9 +19,11 @@ from app.schemas.script import (
 from app.services.ai_service import AIService
 from app.services.workflow import ScriptWorkflow
 from app.services.novel2script_service import Novel2ScriptService
+from langchain_core.messages import HumanMessage
 from app.client.service_clients import VideoServiceClient, LLMServiceClient
 from app.models import Script, GenerationTask, ScriptStatus, TaskStatus, ScriptSourceType
 from app.core.database import AsyncSessionLocal
+from app.services.usage_tracker import track_llm_usage
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +127,9 @@ class ScriptService:
             episode_number = ScriptService._parse_chinese_numeral(episode_num_str)
 
             episode_content = content[start:end].strip()
+            # 过滤无效内容（太短的视为误匹配，跳过）
+            if len(episode_content) < 50:
+                continue
             episodes.append({
                 "episode_number": episode_number,
                 "title": f"第{episode_num_str}集",
@@ -155,6 +160,7 @@ class ScriptService:
 
     async def generate_script_async(self, task_id: str, request: ScriptGenerationRequest):
         """异步生成剧本 - 使用LangGraph工作流 + SQLAlchemy持久化"""
+        t0 = time.time()
         async with self._get_db() as db:
             try:
                 if not self._initialized:
@@ -209,7 +215,7 @@ class ScriptService:
                     task.result_data = {"script_id": script.id}
                     await db.commit()
 
-                    logger.info(f"剧本生成完成，任务ID: {task_id}, 剧本ID: {script.id}")
+                    logger.info(f"剧本生成完成，任务ID: {task_id}, 剧本ID: {script.id}, 耗时={time.time()-t0:.1f}s")
                 else:
                     error_msg = workflow_result.get("error", "未知错误")
                     task.status = TaskStatus.FAILED.value
@@ -217,10 +223,10 @@ class ScriptService:
                     task.error = error_msg
                     task.end_time = time.time()
                     await db.commit()
-                    logger.error(f"剧本生成失败，任务ID: {task_id}, 错误: {error_msg}")
+                    logger.error(f"剧本生成失败，任务ID: {task_id}, 耗时={time.time()-t0:.1f}s, 错误: {error_msg}")
 
             except Exception as e:
-                logger.error(f"剧本生成异常: {e}")
+                logger.error(f"剧本生成异常 task={task_id} 耗时={time.time()-t0:.1f}s: {e}")
                 await db.rollback()
                 # 尝试更新任务状态
                 try:
@@ -237,7 +243,10 @@ class ScriptService:
         """获取剧本详情"""
         async with self._get_db() as db:
             script = await db.get(Script, script_id)
-            return script.to_dict() if script else None
+            if script:
+                return script.to_dict()
+            logger.warning(f"剧本未找到 script_id={script_id}")
+            return None
 
     async def list_scripts(self, page: int = 1, page_size: int = 10,
                           user_id: Optional[str] = None,
@@ -272,6 +281,7 @@ class ScriptService:
         async with self._get_db() as db:
             script = await db.get(Script, script_id)
             if not script:
+                logger.warning(f"剧本未找到，无法更新 script_id={script_id}")
                 return None
 
             request_dict = request.dict(exclude_unset=True) if hasattr(request, 'dict') else vars(request)
@@ -282,6 +292,7 @@ class ScriptService:
             script.updated_at = datetime.now(timezone.utc)
             await db.commit()
             await db.refresh(script)
+            logger.info(f"剧本已更新 script_id={script_id} title={script.title}")
             return script.to_dict()
 
     async def delete_script(self, script_id: int) -> bool:
@@ -289,6 +300,7 @@ class ScriptService:
         async with self._get_db() as db:
             script = await db.get(Script, script_id)
             if not script:
+                logger.warning(f"剧本未找到，无法删除 script_id={script_id}")
                 return False
 
             # 清理关联任务
@@ -297,6 +309,7 @@ class ScriptService:
 
             await db.delete(script)
             await db.commit()
+            logger.info(f"剧本已删除 script_id={script_id} title={script.title}")
             return True
 
     async def get_generation_status(self, task_id: str) -> Optional[Dict]:
@@ -317,6 +330,9 @@ class ScriptService:
                 script_result = await db.execute(script_stmt)
                 script = script_result.scalar_one_or_none()
                 if script:
+                    # 从 analysis_result（events）中提取地点
+                    events = script.analysis_result or []
+                    locations = self._derive_locations_from_events(events) if events else []
                     status["result"] = {
                         "title": script.title,
                         "content": script.content,
@@ -326,6 +342,8 @@ class ScriptService:
                         "length": script.length,
                         "setting": script.setting,
                         "characters": script.characters,
+                        "locations": locations,
+                        "events": events,
                     }
 
             return status
@@ -386,14 +404,154 @@ class ScriptService:
                     "workflow_result": workflow_result
                 }
 
+    @staticmethod
+    def _num_to_cn(n: int) -> str:
+        """数字转中文（1-99）"""
+        if n <= 0: return str(n)
+        digits = ['', '一','二','三','四','五','六','七','八','九']
+        if n <= 10: return digits[n] if n <= 9 else '十'
+        if n < 20: return '十' + digits[n-10]
+        if n < 100: return digits[n//10] + '十' + (digits[n%10] if n%10 else '')
+        return str(n)
+
+    def _merge_characters(self, all_chars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """合并去重角色：按 name 去重，保留最详细的 description，合并 role"""
+        merged = {}
+        for c in all_chars:
+            name = c.get("name", "").strip()
+            if not name:
+                continue
+            if name in merged:
+                existing = merged[name]
+                # 保留更详细的描述
+                if len(c.get("description", "")) > len(existing.get("description", "")):
+                    existing["description"] = c["description"]
+                # 主角 > 反派 > 配角 > 群众
+                role_priority = {"主角": 0, "反派": 1, "配角": 2, "群众": 3}
+                if role_priority.get(c.get("role", ""), 3) < role_priority.get(existing.get("role", ""), 3):
+                    existing["role"] = c["role"]
+            else:
+                merged[name] = dict(c)
+        return list(merged.values())
+
+    def _derive_locations_from_events(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """从事件列表中提取并去重地点"""
+        locations = {}
+        for e in events:
+            loc = e.get("location", "").strip()
+            if loc and loc not in locations:
+                locations[loc] = {"name": loc, "description": ""}
+        return list(locations.values())
+
+    async def _generate_long_novel_script(
+        self, novel_content: str, n2s: Novel2ScriptService,
+        request: ScriptFromNovelRequest, task, task_id: str, db, chapter_count: int
+    ) -> Dict[str, Any]:
+        """长篇小说分批 ViMax 处理：每批6章，批内走完整流水线保证质量。
+        返回 {"script": str, "characters": list, "events": list}"""
+        import re
+        # 用去重拆分：只按每个章节编号的首次出现切分（避免子章节/引用干扰）
+        pattern = r'(?:^|\n)\s*(?:#{1,6}\s*)?第\s*([一二三四五六七八九十百千\d]+)\s*[回章节]'
+        markers = [(m.start(), m.group(1)) for m in re.finditer(pattern, novel_content, re.MULTILINE)]
+        # 去重：同一编号只保留第一次出现的位置
+        seen = set()
+        unique_positions = []
+        for pos, num in markers:
+            if num not in seen:
+                seen.add(num)
+                unique_positions.append(pos)
+
+        if len(unique_positions) <= 1:
+            chapters = [novel_content]
+        else:
+            chapters = []
+            for i, pos in enumerate(unique_positions):
+                end = unique_positions[i+1] if i+1 < len(unique_positions) else len(novel_content)
+                chapters.append(novel_content[pos:end])
+
+        logger.info(f"[分批ViMax] 拆分完成: {len(chapters)}章(去重), 原始匹配{len(markers)}标记, 共{(len(chapters)+5)//6}批")
+        batch_size = 6
+        all_results = []
+        all_characters: List[Dict[str, Any]] = []
+        all_events: List[Dict[str, Any]] = []
+        base_style = getattr(request, 'style', '古风历史')
+        base_theme = getattr(request, 'theme', '战争')
+        base_setting = getattr(request, 'setting', '三国')
+
+        total_batches = (len(chapters) + batch_size - 1) // batch_size
+        for batch_idx in range(total_batches):
+            start = batch_idx * batch_size
+            end = min(start + batch_size, len(chapters))
+            batch_text = "\n\n".join(chapters[start:end])
+            ep_start = start + 1
+            batch_count = end - start
+
+            progress = 50 + int((batch_idx / max(total_batches, 1)) * 40)
+            task.progress = progress; await db.commit()
+            logger.info(f"[分批ViMax] 第{batch_idx+1}/{total_batches}批开始: 章{ep_start}-{end}, 目标{batch_count}集, 进度{progress}%")
+
+            # 带重试的 ViMax 流水线（最多重试2次，全部失败用原文兜底）
+            batch_success = False
+            for retry in range(3):
+                try:
+                    compressed = await n2s.compress_novel(batch_text)
+                    chars = await n2s.extract_characters(compressed)
+                    events = await n2s.extract_events(compressed)
+
+                    # 收集每批的角色和事件（用于最终合并去重）
+                    all_characters.extend(chars)
+                    all_events.extend(events)
+
+                    batch_req = f"主题:{base_theme}; 风格:{base_style}; 长度:长篇; 背景:{base_setting}"
+                    effective = n2s.build_user_requirement(batch_text, batch_req)
+                    ep_start_cn = self._num_to_cn(ep_start)
+                    ep_end_cn = self._num_to_cn(end)
+                    effective += f" 必须输出恰好{batch_count}集！编号从第{ep_start_cn}集到第{ep_end_cn}集，用中文数字，连续递增。"
+
+                    story = await n2s.develop_story(compressed, effective)
+                    scenes = await n2s.write_script(story, effective)
+                    enhanced = await n2s.enhance_script(scenes)
+                    all_results.append("\n\n".join(enhanced))
+                    batch_success = True
+                    logger.info(f"[分批ViMax] 第{batch_idx+1}/{total_batches}批成功, 输出{len(enhanced)}场, {len(chars)}角色, {len(events)}事件")
+                    break
+                except Exception as e:
+                    logger.warning(f"批次{batch_idx+1}第{retry+1}次失败: {e}")
+                    if retry < 2:
+                        await asyncio.sleep(5)
+
+            if not batch_success:
+                logger.warning(f"批次{batch_idx+1}全部重试失败，使用原文片段兜底")
+                fallback_parts = []
+                for j in range(start, end):
+                    n = j + 1
+                    num_str = self._num_to_cn(n)
+                    fallback_parts.append(f"**第{num_str}集**\n\n{chapters[j][:600]}")
+                all_results.append("\n\n".join(fallback_parts))
+
+        final_script = "\n\n".join(all_results)
+        merged_characters = self._merge_characters(all_characters)
+        logger.info(f"[分批ViMax] 角色合并: {len(all_characters)}条原始 → {len(merged_characters)}个唯一角色, "
+                     f"{len(all_events)}个事件")
+        return {
+            "script": final_script,
+            "characters": merged_characters,
+            "events": all_events,
+        }
+
     async def generate_script_from_novel_async(self, task_id: str, request: ScriptFromNovelRequest):
         """异步从小说生成剧本 — ViMax 多阶段流水线"""
+        t_total = time.time()
         async with self._get_db() as db:
             try:
                 if not self._initialized:
                     await self.initialize()
 
-                logger.info(f"开始从小说生成剧本(ViMax流水线)，任务ID: {task_id}")
+                novel_content = getattr(request, 'novel_content', '') or ''
+                logger.info(f"[小说→剧本] 开始 task={task_id} title={request.title} novel_len={len(novel_content)} style={request.style}")
+
+                mock_mode = getattr(self.ai_service, '_mock_mode', False)
+                n2s = Novel2ScriptService(self.ai_service.llm, mock_mode)
 
                 task = await db.get(GenerationTask, task_id)
                 if not task:
@@ -409,34 +567,89 @@ class ScriptService:
                     task.progress = 5
                 await db.commit()
 
-                novel_content = getattr(request, 'novel_content', '') or ''
-                user_req = f"主题:{getattr(request, 'theme', '')}; 风格:{getattr(request, 'style', '')}; 长度:{getattr(request, 'length', '短篇')}; 背景:{getattr(request, 'setting', '')}"
-
-                # 使用 Novel2ScriptService 多阶段流水线
-                mock_mode = getattr(self.ai_service, '_mock_mode', False)
-                n2s = Novel2ScriptService(self.ai_service.llm, mock_mode)
-
-                # 阶段1: 压缩 (5% → 25%)
-                task.progress = 15; await db.commit()
-                compressed = await n2s.compress_novel(novel_content)
-
-                # 阶段2: 角色提取 (25% → 40%)
-                task.progress = 30; await db.commit()
-                characters = await n2s.extract_characters(compressed)
-
-                # 阶段3: 事件提取 (40% → 55%)
-                task.progress = 50; await db.commit()
-                events = await n2s.extract_events(compressed)
-
-                # 检测小说章节数，构建包含集数要求的用户需求
+                # 先检测章节数（纯文本，不调AI），长篇小说直接分批处理
                 chapter_count = n2s.detect_chapter_count(novel_content)
-                effective_req = n2s.build_user_requirement(novel_content, user_req)
-                logger.info(f"检测到小说 {chapter_count} 章/回，生成需求: {effective_req[:200]}")
+                logger.info(f"[小说→剧本] 章节检测: {chapter_count}章, 小说长度={len(novel_content)}字")
 
-                # 阶段4: 编剧生成 (55% → 80%)
+                if chapter_count > 15:
+                    logger.info(f"[小说→剧本] 长篇小说模式: 启用分批ViMax, 预计{ (chapter_count+5)//6 }批, 每批6章")
+                    result = await self._generate_long_novel_script(
+                        novel_content, n2s, request, task, task_id, db, chapter_count
+                    )
+                    if result and result.get("script"):
+                        final_script = result["script"]
+                        episodes = self._split_content_to_episodes(final_script)
+                        merged_characters = result.get("characters", [])
+                        all_events = result.get("events", [])
+                        script = Script(
+                            task_id=task_id, title=request.title, content=final_script,
+                            episodes=episodes, theme=getattr(request, 'theme', ''),
+                            length=getattr(request, 'length', '短篇'), style=getattr(request, 'style', ''),
+                            setting=getattr(request, 'setting', ''),
+                            characters=json.dumps(merged_characters, ensure_ascii=False) if merged_characters else None,
+                            source_type="novel", source_content=novel_content[:500],
+                            status=ScriptStatus.COMPLETED.value,
+                            user_id=str(getattr(request, 'user_id', '')),
+                            workflow_metadata={
+                                "pipeline": "long_novel_batch_vimax",
+                                "chapter_count": chapter_count,
+                                "character_count": len(merged_characters),
+                                "event_count": len(all_events),
+                            },
+                            analysis_result=all_events if all_events else None,
+                        )
+                        db.add(script); await db.flush()
+                        task.status = TaskStatus.COMPLETED.value; task.progress = 100
+                        task.script_id = script.id; task.end_time = time.time()
+                        await db.commit()
+                        logger.info(f"[分批ViMax] 完成: script_id={script.id}, {len(episodes)}集, "
+                                     f"{len(merged_characters)}角色, {len(all_events)}事件, "
+                                     f"总长度={len(final_script)} 总耗时={time.time()-t_total:.1f}s")
+                        # 记录 LLM 用量
+                        await track_llm_usage(
+                            user_id=str(getattr(request, 'user_id', '')),
+                            model_name="deepseek-chat",
+                            tokens_in=len(novel_content),
+                            tokens_out=len(final_script),
+                            duration_ms=int((time.time() - t_total) * 1000),
+                            endpoint="/generate/from-novel",
+                            service_name="script-service",
+                        )
+                        return
+
+                # 短篇/中篇：完整 ViMax 流水线
+                logger.info(f"[短篇ViMax] 开始5阶段流水线")
+                user_req = f"主题:{getattr(request, 'theme', '')}; 风格:{getattr(request, 'style', '')}; 长度:{getattr(request, 'length', '短篇')}; 背景:{getattr(request, 'setting', '')}"
+                task.progress = 15; await db.commit()
+                logger.info(f"[短篇ViMax] 阶段1/5: 压缩小说...")
+                compressed = await n2s.compress_novel(novel_content)
+                logger.info(f"[短篇ViMax] 阶段1完成: 压缩后{len(compressed)}字")
+                task.progress = 30; await db.commit()
+                logger.info(f"[短篇ViMax] 阶段2/5: 提取角色...")
+                characters = await n2s.extract_characters(compressed)
+                logger.info(f"[短篇ViMax] 阶段2完成: {len(characters)}个角色")
+                task.progress = 50; await db.commit()
+                logger.info(f"[短篇ViMax] 阶段3/5: 提取事件...")
+                events = await n2s.extract_events(compressed)
+                logger.info(f"[短篇ViMax] 阶段3完成: {len(events)}个事件")
+                effective_req = n2s.build_user_requirement(novel_content, user_req)
+
+                # 阶段4: 编剧生成 — 短篇小说 ViMax 流水线（带重试）
                 task.progress = 65; await db.commit()
-                story = await n2s.develop_story(compressed, effective_req)
-                scenes = await n2s.write_script(story, effective_req)
+                logger.info(f"[短篇ViMax] 阶段4/5: 编剧生成...")
+                scenes = None
+                for retry in range(3):
+                    try:
+                        story = await n2s.develop_story(compressed, effective_req)
+                        scenes = await n2s.write_script(story, effective_req)
+                        logger.info(f"[短篇ViMax] 阶段4完成: {len(scenes)}场")
+                        break
+                    except Exception as e:
+                        logger.warning(f"ViMax编剧第{retry+1}次失败: {e}")
+                        if retry < 2: await asyncio.sleep(3)
+                if scenes is None:
+                    logger.warning("ViMax编剧全部重试失败，使用原文分集")
+                    scenes = n2s._fallback_split_to_episodes(novel_content, effective_req)
 
                 # 如果AI超时导致只返回1场，用原文分集做回退
                 if len(scenes) <= 1 and chapter_count >= 2:
@@ -445,7 +658,13 @@ class ScriptService:
 
                 # 阶段5: 增强 (80% → 95%)
                 task.progress = 85; await db.commit()
-                enhanced = await n2s.enhance_script(scenes)
+                logger.info(f"[短篇ViMax] 阶段5/5: 增强剧本...")
+                try:
+                    enhanced = await n2s.enhance_script(scenes)
+                    logger.info(f"[短篇ViMax] 阶段5完成: {len(enhanced)}场增强")
+                except Exception as e:
+                    logger.warning(f"[短篇ViMax] 增强失败: {e}，使用未增强版本")
+                    enhanced = scenes
                 final_script = "\n\n".join(enhanced)
 
                 # 保存结果
@@ -458,7 +677,7 @@ class ScriptService:
                         length=getattr(request, 'length', '短篇'),
                         style=getattr(request, 'style', ''),
                         setting=getattr(request, 'setting', ''),
-                        characters=json.dumps([c.get('name', '') for c in characters], ensure_ascii=False) if characters else None,
+                        characters=json.dumps(characters, ensure_ascii=False) if characters else None,
                         source_type="novel",
                         source_content=novel_content[:500],
                         status=ScriptStatus.COMPLETED.value,
@@ -482,8 +701,8 @@ class ScriptService:
                     task.end_time = time.time()
                     await db.commit()
 
-                    logger.info(f"剧本(ViMax流水线)生成完成，剧本ID: {script.id}, "
-                                f"{len(characters)}角色, {len(events)}事件, {len(enhanced)}场")
+                    logger.info(f"[短篇ViMax] 生成完成 script_id={script.id}, {len(characters)}角色, {len(events)}事件, "
+                                f"{len(enhanced)}场 总耗时={time.time()-t_total:.1f}s")
                 else:
                     raise ValueError("生成的剧本内容为空")
                     task.error = error_msg
@@ -491,7 +710,7 @@ class ScriptService:
                     await db.commit()
 
             except Exception as e:
-                logger.error(f"剧本（小说转）生成异常: {e}")
+                logger.error(f"[小说→剧本] 异常失败 task={task_id} 耗时={time.time()-t_total:.1f}s: {e}")
                 await db.rollback()
 
     def _sync_generate_from_outline(self, request_dict: dict) -> Optional[str]:

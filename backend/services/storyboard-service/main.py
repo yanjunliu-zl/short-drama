@@ -8,12 +8,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.api import api_router
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.core.tracing import init_tracing, instrument_fastapi
 from app.core.deps import initialize_storyboard_service, close_storyboard_service
 from app.core.database import init_db, close_db
+from app.middleware.prometheus import setup_metrics
 
 # 设置日志
 setup_logging()
 logger = logging.getLogger(__name__)
+
+# 初始化链路追踪
+init_tracing("storyboard-service")
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -23,6 +28,10 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# 注册 Prometheus 指标
+setup_metrics(app, app_name="storyboard-service")
+instrument_fastapi(app)
 
 # CORS中间件
 app.add_middleware(

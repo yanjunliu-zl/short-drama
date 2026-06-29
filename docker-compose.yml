@@ -20,6 +20,8 @@ volumes:
     driver: local
   minio_data:
     driver: local
+  es_data:
+    driver: local
 
 services:
   # 数据库
@@ -75,8 +77,10 @@ services:
     ports:
       - "5672:5672"   # AMQP协议端口
       - "15672:15672" # 管理界面端口
+      - "15692:15692" # Prometheus 指标端口
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      - ./backend/config/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
     networks:
       - shortdrama-network
     healthcheck:
@@ -512,6 +516,100 @@ services:
       - redis
     command: celery -A app.workers.celery_app worker --loglevel=info
 
+  # ============================================================
+  # 链路追踪 — Jaeger
+  # ============================================================
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: shortdrama-jaeger
+    restart: unless-stopped
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - MEMORY_MAX_TRACES=50000
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+      - "14268:14268"  # Jaeger Thrift (兼容 Go 服务 go-zero)
+    networks:
+      - shortdrama-network
+
+  # ============================================================
+  # 基础设施监控导出器
+  # ============================================================
+
+  # Node Exporter — 主机 CPU/内存/磁盘/网络
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: shortdrama-node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "9100:9100"
+    networks:
+      - shortdrama-network
+
+  # cAdvisor — 容器 CPU/内存/IO 监控
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: shortdrama-cadvisor
+    restart: unless-stopped
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "8083:8080"
+    networks:
+      - shortdrama-network
+    privileged: true
+    devices:
+      - /dev/kmsg
+
+  # Redis Exporter
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: shortdrama-redis-exporter
+    restart: unless-stopped
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    ports:
+      - "9121:9121"
+    networks:
+      - shortdrama-network
+    depends_on:
+      - redis
+
+  # MySQL Exporter
+  mysqld-exporter:
+    image: prom/mysqld-exporter:latest
+    container_name: shortdrama-mysqld-exporter
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_NAME=admin:admin123@(mysql:3306)/
+    ports:
+      - "9104:9104"
+    networks:
+      - shortdrama-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # RabbitMQ Exporter (已内置于 RabbitMQ 管理插件)
+  # RabbitMQ 3-management 自带 Prometheus 指标，需启用插件
+  # 通过 rabbitmq:15692 访问
+
   # 监控 - Prometheus
   prometheus:
     image: prom/prometheus:latest
@@ -550,4 +648,71 @@ services:
       - shortdrama-network
     depends_on:
       - prometheus
+
+  # ============================================================
+  # 日志中心: Elasticsearch + Kibana + Filebeat
+  # ============================================================
+
+  # Elasticsearch — 日志存储和全文搜索
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.4
+    container_name: shortdrama-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - cluster.routing.allocation.disk.threshold_enabled=false
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks:
+      - shortdrama-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -qE 'green|yellow'"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+
+  # Kibana — 日志可视化界面
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.17.4
+    container_name: shortdrama-kibana
+    restart: unless-stopped
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
+      - xpack.encryptedSavedObjects.encryptionKey=shortdrama-dev-encryption-key-min-32
+    ports:
+      - "5601:5601"
+    networks:
+      - shortdrama-network
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:5601/api/status | grep -q 'available'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  # Filebeat — 日志采集器（读取 Docker 日志 → 写入 ES）
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.17.4
+    container_name: shortdrama-filebeat
+    restart: unless-stopped
+    user: root  # 需要访问 Docker socket 和容器日志
+    volumes:
+      - ./backend/monitoring/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/lib/docker/containers:/hostfs/var/lib/docker/containers:ro
+    networks:
+      - shortdrama-network
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    command: filebeat -e -strict.perms=false
 

@@ -103,6 +103,7 @@ const Script: React.FC = () => {
   const [generatedScriptTitle, setGeneratedScriptTitle] = useState<string>('');
   const [scriptId, setScriptId] = useState<number | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const workCreatedRef = useRef(false); // 防止 StrictMode 重复创建作品
 
   // 表单值
   const [formTitle, setFormTitle] = useState('');
@@ -192,17 +193,18 @@ const Script: React.FC = () => {
       }
 
       if (saved) {
-        if (saved.generationStatus === 'completed' && saved.episodes?.length > 0) {
-          setEpisodes(saved.episodes || []);
+        if (saved.generationStatus === 'completed' && (saved.episodes?.length > 0 || saved.content)) {
+          if (saved.episodes?.length > 0) {
+            setEpisodes(saved.episodes || []);
+            setActiveEpisodeId(saved.episodes[0].id);
+          } else if (saved.content) {
+            // 有原始内容但无 episodes，重新解析
+            parseScriptToEpisodes(saved.content, saved.generatedScriptTitle || '');
+          }
           setGeneratedScriptTitle(saved.generatedScriptTitle || '');
           setGenerationStatus('completed');
           setGenerationProgress(100);
-          if (saved.scriptId) {
-            setScriptId(saved.scriptId);
-          }
-          if (saved.episodes?.length > 0) {
-            setActiveEpisodeId(saved.episodes[0].id);
-          }
+          if (saved.scriptId) setScriptId(saved.scriptId);
         } else if (saved.generationStatus === 'generating' && saved.taskId) {
           scriptService.getGenerationStatus(saved.taskId).then((status) => {
             if (status && status.status !== 'failed') {
@@ -245,20 +247,23 @@ const Script: React.FC = () => {
             setGenerationProgress(100);
             message.success('剧本生成完成！');
 
+            const resultEpisodes: any[] = [];
+            const title = status.result?.title || generatedScriptTitle || formTitle;
+            const content = status.result?.content || '';
+
             if (status.result) {
               const script = status.result;
               setGeneratedScriptTitle(script.title || formTitle);
-              // 优先使用后端预拆分的分集数据
-              if (script.episodes && script.uniqueEpisodes.length > 0) {
+              if (script.episodes && script.episodes.length > 0) {
                 const backendEpisodes: Episode[] = script.episodes.map((ep: any) => ({
                   id: `ep-${ep.episode_number || ep.episodeNumber || 1}-${Date.now().toString(36)}`,
                   title: ep.title || `第${ep.episode_number || 1}集`,
                   number: ep.episode_number || ep.episodeNumber || 1,
-                  scenes: [],
-                  characters: [],
+                  scenes: [], characters: [],
                   description: ep.content || '',
                 }));
                 setEpisodes(backendEpisodes);
+                resultEpisodes.push(...JSON.parse(JSON.stringify(backendEpisodes)));
                 if (backendEpisodes.length > 0) setActiveEpisodeId(backendEpisodes[0].id);
               } else {
                 parseScriptToEpisodes(script.content || '', script.title || formTitle);
@@ -267,6 +272,38 @@ const Script: React.FC = () => {
               setGeneratedScriptTitle(formTitle);
               createDefaultEpisodes(formTitle);
             }
+
+            // 自动保存（使用捕获的 episodes + content 双保险）
+            const epsForSave = resultEpisodes;
+            const contentForSave = content;
+            setTimeout(async () => {
+              let workId = getWorkId();
+              if (!workId && !workCreatedRef.current) {
+                workCreatedRef.current = true;
+                try {
+                  const resp = await fetch('/api/v1/works', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, type: '短剧', description: '', userId: 'anonymous' }),
+                  });
+                  if (resp.ok) { const w = await resp.json(); if (w?.id) { setWorkId(w.id); workId = w.id; } }
+                } catch {}
+              }
+              if (workId) {
+                try {
+                  const r = await pipelineService.getPipelineState(workId);
+                  const existing = (r as any)?.data || {};
+                  existing.script = {
+                    episodes: epsForSave.length > 0 ? epsForSave : [],
+                    content: contentForSave,
+                    generatedScriptTitle: title,
+                    generationStatus: 'completed',
+                    generationProgress: 100,
+                  };
+                  existing.updatedAt = new Date().toISOString();
+                  await pipelineService.savePipelineState(workId, existing);
+                } catch {}
+              }
+            }, 100);
           } else if (status.status === 'failed') {
             clearInterval(pollingRef.current!);
             pollingRef.current = null;
@@ -359,7 +396,7 @@ const Script: React.FC = () => {
     }
 
     setEpisodes(episodes);
-    if (uniqueEpisodes.length > 0) {
+    if (episodes.length > 0) {
       setActiveEpisodeId(episodes[0].id);
     }
   };
@@ -391,6 +428,7 @@ const Script: React.FC = () => {
     setGenerationStatus('generating');
     setGenerationProgress(0);
     setGenerationError(null);
+    workCreatedRef.current = false;  // 重置防止重复创建的标记
 
     try {
       let response;
@@ -442,29 +480,36 @@ const Script: React.FC = () => {
           generatedScriptTitle: result.title,
           generationStatus: 'completed', generationProgress: 100,
         };
-        // 先确保有作品
+        // 创建作品并直接保存到后端
         let wId = getWorkId();
         if (!wId) {
           try {
-            const work = await workService.createWork({
-              title: result.title, type: '短剧', description: '', userId: userId,
+            // 绕过 axios，直接 fetch（避免可能的 interceptor/序列化问题）
+            const resp = await fetch('/api/v1/works', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ title: result.title, type: '短剧', description: '', userId: 'anonymous' }),
             });
-            if (work?.id) { setWorkId(work.id); wId = work.id; }
+            if (resp.ok) {
+              const work = await resp.json();
+              if (work?.id) { setWorkId(work.id); wId = work.id; }
+            } else {
+              console.error('Create work returned:', resp.status, await resp.text());
+            }
           } catch (e) { console.error('Create work failed:', e); }
         }
-        // 确保 wId 存在
-        if (!wId) {
-          try {
-            const work = await workService.createWork({
-              title: result.title, type: '短剧', description: '', userId: userId,
-            });
-            if (work?.id) { setWorkId(work.id); wId = work.id; }
-          } catch (e) { console.error('Create work failed:', e); }
-        }
-
-        // 使用 saveAllToBackend（带序列化锁，不会丢失其他 key）
         if (wId) {
-          await saveAllToBackend(wId, { script: scriptData });
+          try {
+            const resp = await pipelineService.getPipelineState(wId);
+            const existing = (resp as any)?.data || {};
+            existing.script = scriptData;
+            existing.updatedAt = new Date().toISOString();
+            await pipelineService.savePipelineState(wId, existing);
+            // 同时写 localStorage 供当前页面使用
+            localStorage.setItem(`pipeline_${userId}_script`, JSON.stringify(scriptData));
+          } catch (e) { console.error('Pipeline save failed:', e); message.warning('剧本保存失败，请勿刷新页面'); }
+        } else {
+          message.warning('作品创建失败，请重试');
         }
 
         message.success(`剧本生成完成，共 ${result.total_episodes} 集`);
@@ -800,18 +845,41 @@ const Script: React.FC = () => {
   };
 
   // ============ 文件上传处理 ============
-  const handleFileUpload = (file: File): boolean => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = e.target?.result as string;
-      setFormContent(text);
-      message.success(`已加载文件: ${file.name}`);
-    };
-    reader.onerror = () => {
-      message.error('文件读取失败');
-    };
-    reader.readAsText(file);
-    return false; // 阻止自动上传
+  const handleFileUpload = async (file: File): Promise<boolean> => {
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    try {
+      if (ext === 'docx' || ext === 'doc') {
+        const mammoth = await import('mammoth');
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        setFormContent(result.value);
+        message.success(`已加载Word文件: ${file.name}`);
+      } else if (ext === 'pdf') {
+        const pdfjsLib = await import('pdfjs-dist');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const texts: string[] = [];
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          texts.push(content.items.map((item: any) => item.str).join(' '));
+        }
+        setFormContent(texts.join('\n\n'));
+        message.success(`已加载PDF文件: ${file.name}`);
+      } else {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          setFormContent(e.target?.result as string);
+          message.success(`已加载文件: ${file.name}`);
+        };
+        reader.onerror = () => message.error('文件读取失败');
+        reader.readAsText(file);
+      }
+    } catch {
+      message.error('文件解析失败，请确认文件格式正确');
+    }
+    return false;
   };
 
   // ============ 渲染：上传视图 ============
@@ -857,7 +925,7 @@ const Script: React.FC = () => {
         {(inputTab === 'novel' || inputTab === 'script') && (
           <Form.Item label={inputTab === 'novel' ? '上传小说文件' : '上传剧本文件'}>
             <Dragger
-              accept={inputTab === 'novel' ? '.txt,.md,.docx' : '.txt,.md,.doc,.docx'}
+              accept={inputTab === 'novel' ? '.txt,.md,.doc,.docx,.pdf' : '.txt,.md,.doc,.docx'}
               multiple={false}
               beforeUpload={handleFileUpload}
               maxCount={1}
@@ -867,7 +935,7 @@ const Script: React.FC = () => {
               </p>
               <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
               <p className="ant-upload-hint">
-                {inputTab === 'novel' ? '支持 .txt, .md 文件' : '支持 .txt, .md, .doc 文件'}
+                {inputTab === 'novel' ? '支持 .txt, .md, .doc, .docx, .pdf 文件' : '支持 .txt, .md, .doc, .docx 文件'}
               </p>
             </Dragger>
           </Form.Item>
@@ -1270,7 +1338,7 @@ const Script: React.FC = () => {
         return;
       }
       message.loading({ content: '正在提取角色、场景、道具...', key: 'extract', duration: 0 });
-      const data = await scriptService.extractEntities(fullText);
+      const data = await scriptService.extractEntities(fullText, scriptId);
       message.destroy('extract');
 
       // 构建场景数据（从地点列表）

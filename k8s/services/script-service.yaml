@@ -1,0 +1,114 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: script-service
+  namespace: shortdrama
+  labels:
+    app: script-service
+spec:
+  ports:
+    - port: 8000
+  selector:
+    app: script-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: script-service
+  namespace: shortdrama
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: script-service
+  template:
+    metadata:
+      labels:
+        app: script-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: script-service
+          image: shortdrama/script-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: shortdrama-config
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: DB_PASSWORD
+            - name: RABBITMQ_USER
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: RABBITMQ_USER
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: RABBITMQ_PASSWORD
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: DEEPSEEK_API_KEY
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://jaeger:4318"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: script-service-hpa
+  namespace: shortdrama
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: script-service
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

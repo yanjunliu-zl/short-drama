@@ -15,6 +15,7 @@ import {
 import { caseService } from '@/services/caseService';
 import type { CaseItem } from '@/types/case';
 import { workService, WorkItem } from '@/services/workService';
+import { pipelineService } from '@/services/pipelineService';
 import { useSelector } from 'react-redux';
 import type { RootState } from '@/store';
 import { assetService, AssetItem } from '@/services/assetService';
@@ -156,9 +157,7 @@ const Home: React.FC = () => {
   const handleView = async (id: string) => {
     try {
       await caseService.recordView(id);
-    } catch {
-      // 静默处理浏览记录错误
-    }
+    } catch { /* silent */ }
   };
 
   // 处理分享
@@ -169,6 +168,30 @@ const Home: React.FC = () => {
     } catch {
       message.error('分享失败');
     }
+  };
+
+  // 导出作品
+  const handleExportWork = async (item: WorkItem) => {
+    try {
+      const resp = await pipelineService.getPipelineState(item.id);
+      const data = (resp as any)?.data;
+      const script = data?.script;
+      if (!script) { message.warning('该作品暂无剧本内容可导出'); return; }
+      const s = typeof script === 'string' ? JSON.parse(script) : script;
+      const episodes = s.episodes || [];
+      let text = `《${item.title}》\n\n`;
+      episodes.forEach((ep: any, i: number) => {
+        text += `第${ep.episode_number || i + 1}集 ${ep.title || ''}\n`;
+        text += (ep.content || ep.description || '') + '\n\n';
+      });
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${item.title}.txt`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      message.success('导出成功');
+    } catch { message.error('导出失败'); }
   };
 
   // 处理删除作品
@@ -219,7 +242,7 @@ const Home: React.FC = () => {
       {!loading && !error && (
         <div style={{ marginBottom: 16 }}>
           <Space wrap>
-            {['科幻', '古风', '悬疑', '奇幻', '职场', '家庭'].map(tag => (
+            {['穿越', '虐恋', '逆袭', '甜宠', '搞笑', '修仙'].map(tag => (
               <Button
                 key={tag}
                 type={tagFilter === tag ? 'primary' : 'default'}
@@ -269,62 +292,62 @@ const Home: React.FC = () => {
       {/* 案例卡片列表 */}
       {!loading && !error && cases.length > 0 && (
         <>
-          <Row gutter={[24, 24]}>
+          <Row gutter={[16, 16]}>
             {cases.map((item) => (
-              <Col xs={24} sm={12} lg={8} key={item.id}>
+              <Col xs={12} sm={8} lg={4} key={item.id}>
                 <Card
                   hoverable
+                  bodyStyle={{ padding: 12 }}
+                  onClick={() => navigate(`/case/${item.id}`)}
+                  style={{ cursor: 'pointer' }}
                   cover={
-                    <div
-                      style={{
-                        height: 160,
-                        backgroundColor: item.coverColor ? `#${item.coverColor}` : '#0066cc',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: 'white',
-                        fontSize: 20,
-                        fontWeight: 'bold'
-                      }}
-                    >
-                      {item.title.substring(0, 4)}
-                    </div>
+                    item.coverColor?.startsWith('http') ? (
+                      <img
+                        src={item.coverColor}
+                        alt={item.title}
+                        style={{ height: 300, width: '100%', objectFit: 'cover' }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          height: 300,
+                          backgroundColor: item.coverColor ? `#${item.coverColor}` : '#0066cc',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: 'white',
+                          fontSize: 28,
+                          fontWeight: 'bold',
+                          letterSpacing: 4,
+                        }}
+                      >
+                        {item.title.substring(0, 4)}
+                      </div>
+                    )
                   }
                   actions={[
-                    <Space
-                      key="view"
-                      onClick={() => handleView(item.id)}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <EyeOutlined />
-                      <span>{item.views}</span>
+                    <Space key="view" onClick={(e) => { e.stopPropagation(); handleView(item.id); }} style={{ cursor: 'pointer' }}>
+                      <EyeOutlined style={{ fontSize: 12 }} />
+                      <span style={{ fontSize: 12 }}>{item.views}</span>
                     </Space>,
-                    <Space
-                      key="like"
-                      onClick={() => handleLike(item.id)}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <LikeOutlined />
-                      <span>{item.likes}</span>
+                    <Space key="like" onClick={(e) => { e.stopPropagation(); handleLike(item.id); }} style={{ cursor: 'pointer' }}>
+                      <LikeOutlined style={{ fontSize: 12 }} />
+                      <span style={{ fontSize: 12 }}>{item.likes}</span>
                     </Space>,
-                    <div
-                      key="share"
-                      onClick={() => handleShare(item.id)}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <ShareAltOutlined />
-                    </div>
+                    <div key="share" onClick={(e) => { e.stopPropagation(); handleShare(item.id); }} style={{ cursor: 'pointer' }}>
+                      <ShareAltOutlined style={{ fontSize: 12 }} />
+                    </div>,
                   ]}
                 >
                   <Card.Meta
-                    title={item.title}
+                    title={<span style={{ fontSize: 13 }}>{item.title}</span>}
                     description={
                       <div>
-                        <Text type="secondary" style={{ fontSize: 12 }}>
+                        <Text type="secondary" style={{ fontSize: 11 }} ellipsis={{ rows: 2 }}>
                           {item.description}
                         </Text>
-                        <div style={{ marginTop: 8 }}>
-                          <Space size={[0, 8]} wrap>
+                        <div style={{ marginTop: 6 }}>
+                          <Space size={[0, 4]} wrap>
                             {item.tags.map((tag, index) => (
                               <span
                                 key={index}
@@ -336,7 +359,7 @@ const Home: React.FC = () => {
                                   fontSize: 12,
                                   cursor: 'pointer'
                                 }}
-                                onClick={() => handleTagClick(tag)}
+                                onClick={(e) => { e.stopPropagation(); handleTagClick(tag); }}
                               >
                                 {tag}
                               </span>
@@ -416,7 +439,7 @@ const Home: React.FC = () => {
                   actions={[
                     <Button key="edit" type="link" onClick={(e) => { e.stopPropagation(); navigate(`/script?workId=${item.id}`); }}>编辑</Button>,
                     <Button key="preview" type="link" onClick={(e) => e.stopPropagation()}>预览</Button>,
-                    <Button key="export" type="link" icon={<DownloadOutlined />} onClick={(e) => e.stopPropagation()}>导出</Button>,
+                    <Button key="export" type="link" icon={<DownloadOutlined />} onClick={(e) => { e.stopPropagation(); handleExportWork(item); }}>导出</Button>,
                     <Button key="delete" type="link" danger icon={<DeleteOutlined />} onClick={(e) => { e.stopPropagation(); handleDeleteWork(item); }}>删除</Button>,
                   ]}
                 >

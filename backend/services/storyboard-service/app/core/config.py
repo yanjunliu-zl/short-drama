@@ -60,9 +60,10 @@ class Settings(BaseSettings):
     DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
     # 分镜生成参数
-    STORYBOARD_MAX_TOKENS: int = int(os.getenv("STORYBOARD_MAX_TOKENS", 4000))
+    STORYBOARD_MAX_TOKENS: int = int(os.getenv("STORYBOARD_MAX_TOKENS", 8000))
     STORYBOARD_TEMPERATURE: float = float(os.getenv("STORYBOARD_TEMPERATURE", 0.7))
     STORYBOARD_TIMEOUT: int = int(os.getenv("STORYBOARD_TIMEOUT", 60))
+    STORYBOARD_MAX_SCRIPT_CHARS: int = int(os.getenv("STORYBOARD_MAX_SCRIPT_CHARS", 12000))
 
     # LangChain配置
     LANGCHAIN_TRACING: bool = os.getenv("LANGCHAIN_TRACING", "False").lower() == "true"

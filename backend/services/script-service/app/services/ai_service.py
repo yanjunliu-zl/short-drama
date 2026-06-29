@@ -53,11 +53,13 @@ class AIService:
             self.callback_handler = ScriptAICallbackHandler()
 
             # 配置AI模型 - 优先使用DeepSeek，其次OpenAI
+            import httpx
             llm_kwargs = {
                 "model_name": settings.MODEL_NAME,
                 "temperature": settings.OPENAI_TEMPERATURE,
                 "max_tokens": settings.OPENAI_MAX_TOKENS,
-                "timeout": settings.OPENAI_TIMEOUT,
+                "timeout": httpx.Timeout(180.0, connect=30.0),
+                "max_retries": 0,
                 "streaming": False,
             }
 

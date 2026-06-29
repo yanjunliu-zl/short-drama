@@ -9,6 +9,7 @@ import (
 	"short-drama-platform/content-service/model"
 	"strings"
 
+	"github.com/zeromicro/go-zero/core/logx"
 	"github.com/zeromicro/go-zero/core/stores/redis"
 )
 
@@ -28,6 +29,7 @@ func NewContentLogic(repo repository.ContentRepository, redisClient *redis.Redis
 // ==============================
 
 func (l *ContentLogic) CreateScene(ctx context.Context, req *types.CreateSceneRequest) (*types.Scene, error) {
+	logx.WithContext(ctx).Infof("[ContentLogic] CreateScene title=%s", req.Title)
 	scene := &model.Scene{
 		Title:       req.Title,
 		Description: req.Description,
@@ -36,6 +38,7 @@ func (l *ContentLogic) CreateScene(ctx context.Context, req *types.CreateSceneRe
 		SortOrder:   req.Order,
 	}
 	if err := l.repo.CreateScene(ctx, scene); err != nil {
+		logx.WithContext(ctx).Errorf("[ContentLogic] CreateScene failed: %v", err)
 		return nil, fmt.Errorf("create scene: %w", err)
 	}
 	return l.sceneToType(scene), nil
@@ -315,14 +318,17 @@ func (l *ContentLogic) GetWork(ctx context.Context, req *types.GetWorkRequest) (
 }
 
 func (l *ContentLogic) CreateWork(ctx context.Context, req *types.CreateWorkRequest) (*types.Work, error) {
+	logx.WithContext(ctx).Infof("[ContentLogic] CreateWork title=%s userID=%s", req.Title, req.UserID)
 	w := &model.Work{
 		UserID:      req.UserID,
 		Title:       req.Title,
 		Description: req.Description,
 	}
 	if err := l.repo.CreateWork(ctx, w); err != nil {
+		logx.WithContext(ctx).Errorf("[ContentLogic] CreateWork failed title=%s: %v", req.Title, err)
 		return nil, fmt.Errorf("create work: %w", err)
 	}
+	logx.WithContext(ctx).Infof("[ContentLogic] CreateWork success id=%s title=%s", w.ID, req.Title)
 	return l.workToType(w), nil
 }
 
@@ -344,8 +350,10 @@ func (l *ContentLogic) UpdateWork(ctx context.Context, req *types.UpdateWorkRequ
 }
 
 func (l *ContentLogic) UpdateWorkProgress(ctx context.Context, req *types.UpdateWorkProgressRequest) (*types.Work, error) {
+	logx.WithContext(ctx).Infof("[ContentLogic] UpdateWorkProgress id=%s progress=%d", req.ID, req.Progress)
 	w, err := l.repo.FindWorkByID(ctx, req.ID)
 	if err != nil {
+		logx.WithContext(ctx).Errorf("[ContentLogic] UpdateWorkProgress find failed id=%s: %v", req.ID, err)
 		return nil, err
 	}
 	w.Progress = req.Progress
@@ -357,6 +365,7 @@ func (l *ContentLogic) UpdateWorkProgress(ctx context.Context, req *types.Update
 		w.Status = "draft"
 	}
 	if err := l.repo.UpdateWork(ctx, w); err != nil {
+		logx.WithContext(ctx).Errorf("[ContentLogic] UpdateWorkProgress update failed id=%s: %v", req.ID, err)
 		return nil, fmt.Errorf("update work progress: %w", err)
 	}
 	return l.workToType(w), nil
@@ -417,6 +426,7 @@ func (l *ContentLogic) caseToType(c *model.Case) *types.Case {
 		Views:       c.ViewCount,
 		Tags:        tags,
 		CoverColor:  c.CoverURL,
+		VideoUrl:    c.DemoVideoURL,
 		CreatedAt:   c.CreatedAt,
 		UpdatedAt:   c.UpdatedAt,
 	}
@@ -458,19 +468,38 @@ func (l *ContentLogic) outlineToType(o *model.ScriptOutline) *types.ScriptOutlin
 	}
 }
 
-// SavePipelineState 保存管道状态 JSON 快照
+// SavePipelineState 保存管道状态 JSON 快照（合并模式，不替换已有 key）
 func (l *ContentLogic) SavePipelineState(ctx context.Context, req *types.SavePipelineStateRequest) (*types.PipelineStateResponse, error) {
-	dataBytes, err := json.Marshal(req.Data)
+	logx.WithContext(ctx).Infof("[ContentLogic] SavePipelineState workID=%s keys=%d", req.WorkID, len(req.Data))
+	// 先读取已有数据，合并后再保存
+	existingStr, _ := l.repo.GetPipelineData(ctx, req.WorkID)
+	var existing map[string]interface{}
+	if existingStr != "" {
+		if err := json.Unmarshal([]byte(existingStr), &existing); err != nil {
+			existing = make(map[string]interface{})
+		}
+	} else {
+		existing = make(map[string]interface{})
+	}
+
+	// 将新数据合并到已有数据（新数据覆盖同 key）
+	for k, v := range req.Data {
+		existing[k] = v
+	}
+
+	dataBytes, err := json.Marshal(existing)
 	if err != nil {
+		logx.WithContext(ctx).Errorf("[ContentLogic] SavePipelineState marshal failed workID=%s: %v", req.WorkID, err)
 		return nil, fmt.Errorf("marshal pipeline state: %w", err)
 	}
 	if err := l.repo.SavePipelineData(ctx, req.WorkID, string(dataBytes)); err != nil {
+		logx.WithContext(ctx).Errorf("[ContentLogic] SavePipelineState save failed workID=%s: %v", req.WorkID, err)
 		return nil, fmt.Errorf("save pipeline state: %w", err)
 	}
 
-	// 将 map 转换为 PipelineState 用于响应
+	logx.WithContext(ctx).Infof("[ContentLogic] SavePipelineState success workID=%s size=%d", req.WorkID, len(dataBytes))
 	respData := &types.PipelineState{}
-	if raw, err := json.Marshal(req.Data); err == nil {
+	if raw, _ := json.Marshal(existing); len(raw) > 0 {
 		json.Unmarshal(raw, respData)
 	}
 	return &types.PipelineStateResponse{
@@ -481,8 +510,10 @@ func (l *ContentLogic) SavePipelineState(ctx context.Context, req *types.SavePip
 
 // GetPipelineState 加载管道状态 JSON 快照
 func (l *ContentLogic) GetPipelineState(ctx context.Context, req *types.GetPipelineStateRequest) (*types.PipelineStateResponse, error) {
+	logx.WithContext(ctx).Infof("[ContentLogic] GetPipelineState workID=%s", req.WorkID)
 	dataStr, err := l.repo.GetPipelineData(ctx, req.WorkID)
 	if err != nil {
+		logx.WithContext(ctx).Errorf("[ContentLogic] GetPipelineState failed workID=%s: %v", req.WorkID, err)
 		return nil, err
 	}
 	if dataStr == "" {
@@ -493,6 +524,7 @@ func (l *ContentLogic) GetPipelineState(ctx context.Context, req *types.GetPipel
 	}
 	var state types.PipelineState
 	if err := json.Unmarshal([]byte(dataStr), &state); err != nil {
+		logx.WithContext(ctx).Errorf("[ContentLogic] GetPipelineState unmarshal failed workID=%s: %v", req.WorkID, err)
 		return nil, fmt.Errorf("unmarshal pipeline state: %w", err)
 	}
 	return &types.PipelineStateResponse{

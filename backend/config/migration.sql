@@ -423,3 +423,24 @@ CREATE TABLE IF NOT EXISTS overview_configs (
     created_at         DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at         DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- AI 用量统计
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS usage_records (
+    id               BIGINT       NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id          VARCHAR(64)  NOT NULL DEFAULT '',
+    model_type       VARCHAR(32)  NOT NULL COMMENT 'llm / image / video',
+    model_name       VARCHAR(128) NOT NULL DEFAULT '' COMMENT 'deepseek-chat / seedream-4.5 / seedance-2.0',
+    tokens_in        INT          NOT NULL DEFAULT 0 COMMENT '输入 token 数',
+    tokens_out       INT          NOT NULL DEFAULT 0 COMMENT '输出 token 数',
+    call_count       INT          NOT NULL DEFAULT 1 COMMENT '调用次数',
+    duration_ms      INT          NOT NULL DEFAULT 0 COMMENT '调用耗时(毫秒)',
+    endpoint         VARCHAR(256) NOT NULL DEFAULT '' COMMENT '调用接口路径',
+    service_name     VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '调用来源服务',
+    cost_estimate    DECIMAL(10,4) NOT NULL DEFAULT 0 COMMENT '预估费用(元)',
+    created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_user_model (user_id, model_type, created_at),
+    INDEX idx_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

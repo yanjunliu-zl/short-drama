@@ -454,12 +454,53 @@ const Scene: React.FC = () => {
   const [generatingPreview, setGeneratingPreview] = useState<Record<string, boolean>>({});
   const [previewImages, setPreviewImages] = useState<Record<string, string>>({});
 
-  // 自动持久化：previewImages 变化时保存
+  // 自动持久化：previewImages 变化时保存到 localStorage + pipeline state
   useEffect(() => {
     if (Object.keys(previewImages).length > 0) {
       localStorage.setItem('scene_preview_images', JSON.stringify(previewImages));
+
+      // 构建 name → image_url 参考映射，供 Storyboard 视频生成使用
+      const referenceImages = {
+        characters: {} as Record<string, string>,
+        scenes: {} as Record<string, string>,
+        props: {} as Record<string, string>,
+      };
+      for (const [key, url] of Object.entries(previewImages)) {
+        const parts = key.split('_');
+        const type = parts[0];
+        const id = parseInt(parts.slice(1).join('_'));
+        if (type === 'character') {
+          const ch = characters.find(c => c.id === id);
+          if (ch?.name) referenceImages.characters[ch.name] = url;
+        } else if (type === 'scene') {
+          const sc = scenes.find(s => s.id === id);
+          if (sc?.name) referenceImages.scenes[sc.name] = url;
+        } else if (type === 'prop') {
+          const pr = props.find(p => p.id === id);
+          if (pr?.name) referenceImages.props[pr.name] = url;
+        }
+      }
+
+      // 保存映射到 localStorage
+      if (Object.keys(referenceImages.characters).length ||
+          Object.keys(referenceImages.scenes).length) {
+        localStorage.setItem('scene_reference_images', JSON.stringify(referenceImages));
+      }
+
+      // 异步保存到后端 pipeline state
+      (async () => {
+        const wId = getWorkId();
+        if (!wId) return;
+        try {
+          const resp = await pipelineService.getPipelineState(wId);
+          const existing = (resp as any)?.data || {};
+          existing.referenceImages = referenceImages;
+          existing.updatedAt = new Date().toISOString();
+          await pipelineService.savePipelineState(wId, existing);
+        } catch {}
+      })();
     }
-  }, [previewImages]);
+  }, [previewImages, scenes, characters, props, getWorkId]);
 
   // 预览图像生成
   const handlePreview = async (id: number, type: 'scene' | 'character' | 'prop', description: string) => {
@@ -541,7 +582,7 @@ const Scene: React.FC = () => {
                 ) : undefined}
                 title={<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Text strong>{scene.name}</Text><Tag color="blue">{scene.type}</Tag>
-                  <Space size={[2, 2]} wrap>{scene.tags.map((t, i) => (<Tag key={i} color="default" style={{ fontSize: 11 }}>{t}</Tag>))}</Space>
+                  <Space size={[2, 2]} wrap>{(scene.tags || []).map((t, i) => (<Tag key={i} color="default" style={{ fontSize: 11 }}>{t}</Tag>))}</Space>
                 </div>}
                 description={<Text type="secondary" style={{ fontSize: 12 }}>{scene.description}</Text>}
               />

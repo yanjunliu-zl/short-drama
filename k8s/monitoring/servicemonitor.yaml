@@ -1,0 +1,47 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: shortdrama-services
+  namespace: shortdrama
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: script-service
+  endpoints:
+    - port: "8000"
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: shortdrama-storyboard
+  namespace: shortdrama
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: storyboard-service
+  endpoints:
+    - port: "8001"
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: shortdrama-llmhua
+  namespace: shortdrama
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: llmhua-service
+  endpoints:
+    - port: "8002"
+      path: /metrics
+      interval: 30s

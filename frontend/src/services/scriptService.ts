@@ -10,7 +10,7 @@ import type {
   ShotGenerationResponse,
   ShotVideoResultItem,
 } from '@/types'
-import type { ShotEpisode } from '@/types'
+import type { ShotEpisode, ReferenceImages } from '@/types'
 
 export const scriptService = {
   // 生成剧本
@@ -124,12 +124,12 @@ export const scriptService = {
   },
 
   // 从剧本中提取主体（角色、地点、道具）
-  extractEntities: async (content: string): Promise<{
+  extractEntities: async (content: string, scriptId?: number | string): Promise<{
     characters: { name: string; role: string; description: string }[]
     locations: { name: string; description: string }[]
     props: { name: string; description: string }[]
   }> => {
-    const response = await api.post('/v1/scripts/extract-entities', { content })
+    const response = await api.post('/v1/scripts/extract-entities', { content, script_id: scriptId })
     return response.data
   },
 
@@ -215,6 +215,7 @@ export const scriptService = {
   generateShotsVideo: async (data: {
     storyboard_id?: string
     episodes: ShotEpisode[]
+    referenceImages?: ReferenceImages
     style?: string
     width?: number
     height?: number

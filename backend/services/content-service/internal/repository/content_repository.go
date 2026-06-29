@@ -60,6 +60,11 @@ type ContentRepository interface {
 	FindPayments(ctx context.Context, userID string, page, pageSize int) ([]*PaymentRecord, error)
 	CountPayments(ctx context.Context, userID string) (int64, error)
 
+	// AI 用量
+	CreateUsageRecord(ctx context.Context, r *model.UsageRecord) error
+	FindUsageSummary(ctx context.Context, userID string, since time.Time) (*model.UsageSummary, error)
+	FindRecentUsage(ctx context.Context, userID string, limit int) ([]*model.UsageRecord, error)
+
 	// 管道状态
 	SavePipelineData(ctx context.Context, workID string, data string) error
 	GetPipelineData(ctx context.Context, workID string) (string, error)
@@ -258,7 +263,7 @@ func (r *mysqlContentRepository) CreateCase(ctx context.Context, c *model.Case) 
 	return err
 }
 
-var findCaseByIDSQL = `SELECT id, title, description, author, cover_url, genre, tags, status, view_count, like_count, share_count, user_id, created_at, updated_at
+var findCaseByIDSQL = `SELECT id, title, description, author, cover_url, demo_video_url, genre, tags, status, view_count, like_count, share_count, user_id, created_at, updated_at
 	FROM cases WHERE id = ?`
 
 func (r *mysqlContentRepository) FindCaseByID(ctx context.Context, id string) (*model.Case, error) {
@@ -270,7 +275,7 @@ func (r *mysqlContentRepository) FindCaseByID(ctx context.Context, id string) (*
 	return &c, nil
 }
 
-var findCasesSQL = `SELECT id, title, description, author, cover_url, genre, tags, status, view_count, like_count, share_count, user_id, created_at, updated_at
+var findCasesSQL = `SELECT id, title, description, author, cover_url, demo_video_url, genre, tags, status, view_count, like_count, share_count, user_id, created_at, updated_at
 	FROM cases WHERE 1=1`
 
 func (r *mysqlContentRepository) FindCases(ctx context.Context, tag, sortBy, order string, page, pageSize int) ([]*model.Case, error) {

@@ -31,9 +31,10 @@ import {
   ThunderboltOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
-import type { Shot, ShotEpisode } from '@/types';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import type { Shot, ShotEpisode, ReferenceImages } from '@/types';
 import { scriptService } from '@/services/scriptService';
+import { pipelineService } from '@/services/pipelineService';
 import { usePipelinePersistence } from '@/hooks/usePipelinePersistence';
 type Episode = ShotEpisode;
 
@@ -43,30 +44,28 @@ const { Option } = Select;
 
 const Storyboard: React.FC = () => {
   const navigate = useNavigate();
-  const { saveState, getWorkId, loadState, restoreFromBackend } = usePipelinePersistence();
+  const [searchParams] = useSearchParams();
+  const { saveState, getWorkId, loadState, restoreFromBackend, setWorkId, userId } = usePipelinePersistence();
   // 多集数据状态
   const [episodes, setEpisodes] = useState<Episode[]>([]);
+  // 参考图像（角色/场景/道具 name → image_url）
+  const [referenceImages, setReferenceImages] = useState<ReferenceImages>({ characters: {}, scenes: {}, props: {} });
 
-  // 加载分镜数据：优先 localStorage，空则从后端恢复
+  // 加载分镜数据：优先 URL workId → 后端 → localStorage
   useEffect(() => {
     const loadData = async () => {
-      // 1. 先读 localStorage（快速缓存）
-      let data = loadState('storyboard');
-      // 兼容旧的非命名空间 key
-      if (!data) {
-        const oldData = localStorage.getItem('shot_generation_result');
-        if (oldData) {
-          try { data = JSON.parse(oldData); } catch {}
-        }
+      const urlWorkId = searchParams.get('workId');
+      if (urlWorkId) {
+        setWorkId(urlWorkId);
+        await restoreFromBackend(urlWorkId);
+      } else {
+        setEpisodes([]); return; // 无活跃作品时清空
       }
 
-      // 2. localStorage 为空，从后端恢复
+      let data = loadState('storyboard');
       if (!data) {
-        const workId = getWorkId();
-        if (workId) {
-          await restoreFromBackend(workId);
-          data = loadState('storyboard');
-        }
+        const oldData = localStorage.getItem('shot_generation_result');
+        if (oldData) { try { data = JSON.parse(oldData); } catch {} }
       }
 
       // 3. 展示数据
@@ -84,9 +83,26 @@ const Storyboard: React.FC = () => {
           message.success(`已加载 ${loadedEpisodes.length} 集分镜数据`);
         }
       }
+
+      // 加载参考图像（场景角色道具预览图，用于视频一致性）
+      const savedRefs = localStorage.getItem('scene_reference_images');
+      if (savedRefs) {
+        try { setReferenceImages(JSON.parse(savedRefs)); } catch {}
+      }
+      // 也尝试从后端 pipeline state 加载
+      if (urlWorkId) {
+        try {
+          const resp = await pipelineService.getPipelineState(urlWorkId);
+          const pipeData = (resp as any)?.data;
+          if (pipeData?.referenceImages) {
+            setReferenceImages(pipeData.referenceImages);
+            localStorage.setItem('scene_reference_images', JSON.stringify(pipeData.referenceImages));
+          }
+        } catch {}
+      }
     };
     loadData();
-  }, []);
+  }, [searchParams]);
 
   // 当前激活的集数
   const [activeEpisodeId, setActiveEpisodeId] = useState<string>('ep-1');
@@ -198,7 +214,8 @@ const Storyboard: React.FC = () => {
 
     try {
       const response = await scriptService.generateShotsVideo({
-        episodes: episodes,
+        episodes,
+        referenceImages,
         style: '写实风格',
         fps: 24,
       });
