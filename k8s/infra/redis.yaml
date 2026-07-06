@@ -6,6 +6,7 @@ metadata:
   labels:
     app: redis
 spec:
+  clusterIP: None  # Headless for StatefulSet
   ports:
     - port: 6379
       name: redis
@@ -13,12 +14,14 @@ spec:
     app: redis
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: redis
   namespace: shortdrama
 spec:
-  replicas: 1
+  serviceName: redis
+  replicas: 3  # Foundation for Redis Cluster (P1) / Sentinel
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: redis
@@ -27,9 +30,14 @@ spec:
       labels:
         app: redis
     spec:
+      terminationGracePeriodSeconds: 30
       containers:
         - name: redis
           image: redis:7-alpine
+          command:
+            - redis-server
+          args:
+            - /usr/local/etc/redis/redis.conf
           ports:
             - containerPort: 6379
               name: redis
@@ -53,6 +61,42 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: redis-config
+              mountPath: /usr/local/etc/redis
       volumes:
-        - name: data
-          emptyDir: {}
+        - name: redis-config
+          configMap:
+            name: redis-config
+            items:
+              - key: redis.conf
+                path: redis.conf
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+---
+# Redis config — foundation for P1 cluster mode
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: shortdrama
+data:
+  redis.conf: |
+    # P0: Standalone mode (foundation for P1 Redis Cluster)
+    bind 0.0.0.0
+    port 6379
+    appendonly yes
+    appendfsync everysec
+    dir /data
+    # P1: Uncomment for Redis Cluster
+    # cluster-enabled yes
+    # cluster-config-file /data/nodes.conf
+    # cluster-node-timeout 5000
+    save 900 1
+    save 300 10
+    save 60 10000

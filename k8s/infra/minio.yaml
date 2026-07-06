@@ -1,3 +1,6 @@
+# MinIO 4-node distributed mode with erasure coding
+# MinIO requires >= 4 nodes for erasure coding in distributed mode
+# Each pod gets its own PVC; total usable = sum(pvc) / 2 (with default EC parity)
 apiVersion: v1
 kind: Service
 metadata:
@@ -6,6 +9,7 @@ metadata:
   labels:
     app: minio
 spec:
+  clusterIP: None  # Headless for StatefulSet
   ports:
     - port: 9000
       name: api
@@ -15,12 +19,14 @@ spec:
     app: minio
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: minio
   namespace: shortdrama
 spec:
-  replicas: 1
+  serviceName: minio
+  replicas: 4  # Minimum 4 for erasure coding
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: minio
@@ -29,10 +35,16 @@ spec:
       labels:
         app: minio
     spec:
+      terminationGracePeriodSeconds: 30
       containers:
         - name: minio
           image: minio/minio:latest
-          args: ["server", "/data", "--console-address", ":9001"]
+          args:
+            - server
+            - --console-address
+            - ":9001"
+            # Distributed mode: each pod's /data is a separate erasure set
+            - http://minio-{0...3}.minio.shortdrama.svc.cluster.local/data
           env:
             - name: MINIO_ROOT_USER
               valueFrom:
@@ -51,14 +63,31 @@ spec:
               name: console
           resources:
             requests:
-              cpu: 100m
-              memory: 256Mi
+              cpu: 250m
+              memory: 512Mi
             limits:
-              cpu: "1"
-              memory: 1Gi
+              cpu: "2"
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 15
+            periodSeconds: 10
           volumeMounts:
             - name: data
               mountPath: /data
-      volumes:
-        - name: data
-          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 100Gi  # 4 × 100Gi / 2 (EC parity) = 200Gi usable

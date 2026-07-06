@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -163,6 +164,7 @@ type GetScriptOutlineRequest struct {
 type ListCasesRequest struct {
 	Page     int    `form:"page,default=1" validate:"min=1"`
 	PageSize int    `form:"pageSize,default=10" validate:"min=1,max=100"`
+	Search   string `form:"search,optional"`
 	Tag      string `form:"tag,optional"`
 	SortBy   string `form:"sortBy,optional" validate:"omitempty,oneof=views likes createdAt"`
 	Order    string `form:"order,optional" validate:"omitempty,oneof=asc desc"`
@@ -195,6 +197,52 @@ type DeleteCaseRequest struct {
 
 type CaseActionRequest struct {
 	ID string `path:"id"`
+}
+
+type RecommendCasesRequest struct {
+	UserID string `form:"userId,optional"`
+	Limit  int    `form:"limit,default=6" validate:"min=1,max=20"`
+}
+
+type RecommendCasesResponse struct {
+	Cases  []Case  `json:"cases"`
+	Reason string  `json:"reason"` // "personalized" or "popular"
+	Total  int     `json:"total"`
+}
+
+// ES 搜索请求/响应
+type SearchRequest struct {
+	Q        string   `form:"q,optional"`
+	Tags     []string `form:"tags,optional"`
+	Genre    string   `form:"genre,optional"`
+	Author   string   `form:"author,optional"`
+	Page     int      `form:"page,default=1"`
+	PageSize int      `form:"pageSize,default=10"`
+}
+
+type SearchHit struct {
+	ID          string              `json:"id"`
+	Title       string              `json:"title"`
+	Description string              `json:"description"`
+	Author      string              `json:"author"`
+	Tags        []string            `json:"tags"`
+	Genre       string              `json:"genre"`
+	ViewCount   int64               `json:"views"`
+	LikeCount   int64               `json:"likes"`
+	CoverColor  string              `json:"coverColor"`
+	CreatedAt   string              `json:"createdAt"`
+	UpdatedAt   string              `json:"updatedAt"`
+	Highlight   map[string][]string `json:"highlight,omitempty"`
+	Score       float64             `json:"_score,omitempty"`
+}
+
+type SearchResponse struct {
+	Hits   []SearchHit     `json:"hits"`
+	Total  int64           `json:"total"`
+	Page   int             `json:"page"`
+	Pages  int             `json:"pages"`
+	Aggs   json.RawMessage `json:"aggs,omitempty"`
+	TookMs int64           `json:"tookMs"`
 }
 
 // 作品请求/响应类型
@@ -348,6 +396,9 @@ type ContentService interface {
 	RecordCaseView(ctx context.Context, req *CaseActionRequest) error
 	RecordCaseLike(ctx context.Context, req *CaseActionRequest) error
 	RecordCaseShare(ctx context.Context, req *CaseActionRequest) error
+	RecommendCases(ctx context.Context, req *RecommendCasesRequest) (*RecommendCasesResponse, error)
+		SearchCases(ctx context.Context, req *SearchRequest) (*SearchResponse, error)
+		SyncCasesToES(ctx context.Context) error
 
 	// 资产库
 	ListPersonalAssets(ctx context.Context, req *ListPersonalAssetsRequest) (*ListPersonalAssetsResponse, error)

@@ -5,8 +5,10 @@ import (
 	"short-drama-platform/final-cut-service/internal/client"
 	"short-drama-platform/final-cut-service/internal/config"
 	"short-drama-platform/final-cut-service/internal/repository"
+	dbshared "short-drama-platform/shared/db"
 
 	goredis "github.com/go-redis/redis/v8"
+	"github.com/zeromicro/go-zero/core/logx"
 	"github.com/zeromicro/go-zero/core/stores/redis"
 	"github.com/zeromicro/go-zero/core/stores/sqlx"
 )
@@ -14,6 +16,7 @@ import (
 type ServiceContext struct {
 	Config             config.Config
 	DB                 sqlx.SqlConn
+	DBResolver         *dbshared.DBResolver // Read/write splitting resolver (P1)
 	Redis              *redis.Redis
 	RedisCluster       interface{}
 	RabbitMQ           RabbitMQClient
@@ -29,6 +32,22 @@ func NewServiceContext(c config.Config) *ServiceContext {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&loc=Local",
 		c.Database.User, c.Database.Password, c.Database.Host, c.Database.Port, c.Database.DBName)
 	db := sqlx.NewMysql(dsn)
+
+	// P1: Read/write splitting via DBResolver
+	// Reader DSNs from config; falls back to writer if no readers configured
+	var dbResolver *dbshared.DBResolver
+	if len(c.Database.ReadHosts) > 0 {
+		var readerDSNs []string
+		for _, rh := range c.Database.ReadHosts {
+			readerDSN := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&loc=Local",
+				c.Database.User, c.Database.Password, rh, c.Database.Port, c.Database.DBName)
+			readerDSNs = append(readerDSNs, readerDSN)
+		}
+		dbResolver = dbshared.NewDBResolver(dsn, readerDSNs...)
+		logx.Infof("DBResolver enabled with %d read replica(s)", len(readerDSNs))
+	} else {
+		dbResolver = dbshared.NewDBResolver(dsn) // Falls back to writer-only
+	}
 
 	// 单机Redis
 	addr := fmt.Sprintf("%s:%d", c.Redis.Host, c.Redis.Port)
@@ -64,6 +83,7 @@ func NewServiceContext(c config.Config) *ServiceContext {
 	return &ServiceContext{
 		Config:             c,
 		DB:                 db,
+		DBResolver:         dbResolver,
 		Redis:              rds,
 		RedisCluster:       redisCluster,
 		RabbitMQ:           rabbitMQ,

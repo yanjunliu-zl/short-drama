@@ -47,6 +47,23 @@ async def init_db():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("数据库表创建/验证完成")
+
+        # Ensure V2 columns exist on existing tables (safe ALTER for upgrades)
+        from sqlalchemy import text
+        alter_sqls = [
+            "ALTER TABLE scripts ADD COLUMN IF NOT EXISTS pdf_path VARCHAR(512) NULL",
+            "ALTER TABLE scripts ADD COLUMN IF NOT EXISTS excel_path VARCHAR(512) NULL",
+            "ALTER TABLE scripts ADD COLUMN IF NOT EXISTS character_graph JSON NULL",
+            "ALTER TABLE scripts ADD COLUMN IF NOT EXISTS pipeline_version VARCHAR(10) NULL DEFAULT 'v1'",
+            "ALTER TABLE scripts ADD COLUMN IF NOT EXISTS storyboard JSON NULL",
+        ]
+        async with engine.begin() as conn:
+            for sql in alter_sqls:
+                try:
+                    await conn.execute(text(sql))
+                except Exception:
+                    pass  # MySQL < 8.0 or MariaDB doesn't support IF NOT EXISTS
+        logger.info("数据库迁移检查完成")
     except Exception as e:
         logger.error(f"数据库初始化失败: {e}")
         raise

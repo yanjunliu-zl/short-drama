@@ -1,0 +1,46 @@
+# Multi-region overlay: US East (primary region)
+# Usage: kubectl apply -k k8s/overlays/us-east-1
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: shortdrama
+
+resources:
+  - ../../base
+  - ../../infra
+  - ../../services
+  - ../../ingress
+  - ../../monitoring
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: shortdrama-config
+    patch: |-
+      - op: replace
+        path: /data/REGION
+        value: "us-east-1"
+      - op: replace
+        path: /data/STORAGE_PUBLIC_ENDPOINT
+        value: "https://s3.us-east-1.amazonaws.com"
+      - op: replace
+        path: /data/STORAGE_REGION
+        value: "us-east-1"
+      - op: replace
+        path: /data/APP_ENV
+        value: "production-us"
+
+images:
+  - name: shortdrama/script-service
+    newTag: latest-us
+  - name: shortdrama/storyboard-service
+    newTag: latest-us
+  - name: shortdrama/content-service
+    newTag: latest-us
+  - name: shortdrama/user-service
+    newTag: latest-us
+  - name: shortdrama/llmhua-service
+    newTag: latest-us
+  - name: shortdrama/video-service
+    newTag: latest-us
+  - name: shortdrama/video-worker
+    newTag: latest-us

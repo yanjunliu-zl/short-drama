@@ -48,6 +48,18 @@ http:
         - retry
       service: final-cut-service
 
+    # 评论区路由 → script-service (通过 /api/v1/comments 前缀)
+    case-comments:
+      rule: "PathPrefix(`/api/v1/comments`)"
+      entryPoints:
+        - web
+      middlewares:
+        - cors
+        - rate-limit
+        - security-headers
+        - retry
+      service: script-service
+
     # 内容服务路由 (案例广场 + 我的作品)
     content-service:
       rule: "PathPrefix(`/api/v1/cases`) || PathPrefix(`/api/v1/works`) || PathPrefix(`/api/v1/scenes`) || PathPrefix(`/api/v1/characters`) || PathPrefix(`/api/v1/assets`) || PathPrefix(`/api/v1/payments`) || PathPrefix(`/api/v1/usage`)"
@@ -71,6 +83,18 @@ http:
         - security-headers
         - retry
       service: storyboard-service
+
+    # 推荐系统服务路由 (独立微服务)
+    recommendation-service:
+      rule: "PathPrefix(`/api/v1/recommendations`)"
+      entryPoints:
+        - web
+      middlewares:
+        - cors
+        - rate-limit
+        - security-headers
+        - retry
+      service: recommendation-service
 
     # llmhua AI图像视频生成服务路由
     llmhua-service:
@@ -159,6 +183,16 @@ http:
       loadBalancer:
         servers:
           - url: "http://llmhua-service:8002"
+        healthCheck:
+          path: /health
+          interval: 30s
+          timeout: 5s
+
+    # 推荐系统服务 (独立微服务)
+    recommendation-service:
+      loadBalancer:
+        servers:
+          - url: "http://recommendation-service:8004"
         healthCheck:
           path: /health
           interval: 30s

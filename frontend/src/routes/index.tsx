@@ -9,6 +9,7 @@ import FinalCut from '../pages/FinalCut';
 import Login from '../pages/Login';
 import Register from '../pages/Register';
 import Payment from '../pages/Payment';
+import Settings from '../pages/Settings';
 import { CaseDetail } from '../pages/CaseDetail';
 
 const AppRoutes: React.FC = () => {
@@ -23,6 +24,7 @@ const AppRoutes: React.FC = () => {
       <Route path="/video" element={<Video />} />
       <Route path="/final-cut" element={<FinalCut />} />
       <Route path="/payment" element={<Payment />} />
+      <Route path="/settings" element={<Settings />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="*" element={<div>404 - 页面未找到</div>} />

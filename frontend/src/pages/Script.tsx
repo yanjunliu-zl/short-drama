@@ -248,12 +248,17 @@ const Script: React.FC = () => {
             message.success('剧本生成完成！');
 
             const resultEpisodes: any[] = [];
+            let resultStoryboard: any = null;
             const title = status.result?.title || generatedScriptTitle || formTitle;
             const content = status.result?.content || '';
 
             if (status.result) {
               const script = status.result;
               setGeneratedScriptTitle(script.title || formTitle);
+              // Capture V2 storyboard data for smart storyboard
+              if (script.storyboard) {
+                resultStoryboard = script.storyboard;
+              }
               if (script.episodes && script.episodes.length > 0) {
                 const backendEpisodes: Episode[] = script.episodes.map((ep: any) => ({
                   id: `ep-${ep.episode_number || ep.episodeNumber || 1}-${Date.now().toString(36)}`,
@@ -299,6 +304,12 @@ const Script: React.FC = () => {
                     generationStatus: 'completed',
                     generationProgress: 100,
                   };
+                  if (resultStoryboard) {
+                    existing.storyboard = {
+                      episodes: resultStoryboard,
+                      generatedAt: new Date().toISOString(),
+                    };
+                  }
                   existing.updatedAt = new Date().toISOString();
                   await pipelineService.savePipelineState(workId, existing);
                 } catch {}
@@ -441,6 +452,7 @@ const Script: React.FC = () => {
           length: formLength,
           style: formStyle,
           setting: formSetting,
+          user_id: String(userId || 'anonymous'),
         });
       } else if (inputTab === 'script') {
         response = await scriptService.generateScript({
@@ -459,6 +471,7 @@ const Script: React.FC = () => {
           title: formTitle, outline: formContent,
           theme: formTheme, length: formLength,
           style: formStyle, setting: formSetting,
+          user_id: String(userId || 'anonymous'),
         });
         setGenerationProgress(100);
         setGeneratedScriptTitle(result.title);
@@ -503,6 +516,13 @@ const Script: React.FC = () => {
             const resp = await pipelineService.getPipelineState(wId);
             const existing = (resp as any)?.data || {};
             existing.script = scriptData;
+            // Save V2 storyboard data so "智能分镜" can skip storyboard-service
+            if ((result as any).storyboard) {
+              existing.storyboard = {
+                episodes: (result as any).storyboard,
+                generatedAt: new Date().toISOString(),
+              };
+            }
             existing.updatedAt = new Date().toISOString();
             await pipelineService.savePipelineState(wId, existing);
             // 同时写 localStorage 供当前页面使用
@@ -527,7 +547,9 @@ const Script: React.FC = () => {
       }
     } catch (err: any) {
       setGenerationStatus('failed');
-      setGenerationError(err?.response?.data?.detail || err?.message || '生成请求失败');
+      const detail = err?.response?.data?.detail;
+      const errMsg = Array.isArray(detail) ? detail.map((e: any) => e.msg || '').join('; ') : (detail || err?.message || '生成请求失败');
+      setGenerationError(errMsg);
       message.error('生成请求失败，请重试');
     }
   };
@@ -1358,7 +1380,7 @@ const Script: React.FC = () => {
         name: c.name || '',
         description: c.description || '',
         age: 25,
-        gender: c.role === '反派' ? '男' : '女',
+        gender: c.gender || (c.role === '反派' ? '男' : ''),
         occupation: '',
         personality: c.description || '',
         appearance: '',

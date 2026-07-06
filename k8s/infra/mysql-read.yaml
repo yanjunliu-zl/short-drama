@@ -1,0 +1,120 @@
+# MySQL read replicas — 3 nodes for horizontal read scaling
+# The primary (mysql-0.mysql) handles writes; these handle reads
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-read
+  namespace: shortdrama
+  labels:
+    app: mysql-read
+spec:
+  clusterIP: None  # Headless for StatefulSet
+  ports:
+    - port: 3306
+      name: mysql
+  selector:
+    app: mysql-read
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql-read
+  namespace: shortdrama
+spec:
+  serviceName: mysql-read
+  replicas: 3  # 3 read replicas for horizontal read scaling
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: mysql-read
+  template:
+    metadata:
+      labels:
+        app: mysql-read
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: DB_ROOT_PASSWORD
+            - name: MYSQL_DATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: shortdrama-config
+                  key: DB_NAME
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: DB_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: DB_PASSWORD
+          ports:
+            - containerPort: 3306
+              name: mysql
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: mysql-read-config
+              mountPath: /etc/mysql/conf.d/replication.cnf
+              subPath: replication.cnf
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          livenessProbe:
+            exec:
+              command: ["mysqladmin", "ping", "-h", "localhost"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["mysql", "-h", "localhost", "-e", "SELECT 1"]
+            initialDelaySeconds: 15
+            periodSeconds: 5
+      volumes:
+        - name: mysql-read-config
+          configMap:
+            name: mysql-read-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+---
+# Read replica configuration — server-id is set per pod via init container
+# In production, use MySQL Group Replication or async replication
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-read-config
+  namespace: shortdrama
+data:
+  replication.cnf: |
+    [mysqld]
+    # Read-only mode for replicas
+    read_only = ON
+    super_read_only = ON
+    # Replication settings
+    server_id = 2
+    log_bin = /var/lib/mysql/mysql-bin.log
+    binlog_format = ROW
+    relay_log = /var/lib/mysql/mysql-relay-bin.log
+    # Performance tuning for read-heavy workloads
+    innodb_buffer_pool_size = 1G
+    innodb_flush_log_at_trx_commit = 2
+    # Connection limits
+    max_connections = 500

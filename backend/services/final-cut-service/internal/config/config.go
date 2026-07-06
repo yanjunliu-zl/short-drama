@@ -15,8 +15,7 @@ type Config struct {
 	CircuitBreaker CircuitBreakerConfig
 	HealthCheck    HealthCheckConfig
 	RetryConfig    RetryConfig
-	TimeoutConfig  TimeoutConfig
-	Telemetry      TelemetryConfig
+	TimeoutConfig  TimeoutConfig `json:",optional"`
 	AIService      AIServiceConfig
 	ScriptService  ScriptServiceConfig
 	VideoService   VideoServiceConfig
@@ -33,6 +32,7 @@ type DatabaseConfig struct {
 	MaxIdleConns    int
 	ConnMaxLifetime int
 	MaxLifetime     int
+	ReadHosts       []string `json:",optional"` // P1: MySQL read replica hosts
 }
 
 type RedisConfig struct {

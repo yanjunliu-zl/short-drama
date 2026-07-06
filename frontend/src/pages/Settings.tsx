@@ -1,156 +1,173 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Typography, Row, Col, Statistic, Table, Tag, Progress, Space, Spin } from 'antd';
+import { Card, Typography, Input, Button, Space, message, Tag } from 'antd';
 import {
-  DashboardOutlined,
-  ThunderboltOutlined,
-  FileTextOutlined,
-  VideoCameraOutlined,
-  ProjectOutlined,
-  ClockCircleOutlined,
+  KeyOutlined,
+  SaveOutlined,
+  SettingOutlined,
+  ApiOutlined,
 } from '@ant-design/icons';
-import { workService, WorkItem } from '@/services/workService';
 
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
 
-interface ProjectStats {
-  totalProjects: number;
-  completedProjects: number;
-  inProgressProjects: number;
-  draftProjects: number;
-  totalScenes: number;
-  totalCharacters: number;
-  computeHours: number;
-  gpuUsage: number;
-  storageUsed: number;
-  apiCalls: number;
+const STORAGE_KEY = 'system_api_keys';
+
+interface ApiKeys {
+  llmKey: string;
+  seedreamKey: string;
+  seedanceKey: string;
 }
 
+const loadKeys = (): ApiKeys => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return { llmKey: '', seedreamKey: '', seedanceKey: '' };
+};
+
+const saveKeys = (keys: ApiKeys) => {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(keys));
+};
+
 const Settings: React.FC = () => {
-  const [loading, setLoading] = useState(true);
-  const [works, setWorks] = useState<WorkItem[]>([]);
+  const [keys, setKeys] = useState<ApiKeys>(loadKeys);
+  const [showLl, setShowLl] = useState(false);
+  const [showSr, setShowSr] = useState(false);
+  const [showSd, setShowSd] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const data = await workService.getWorks({ pageSize: 50 });
-        setWorks(data.works);
-      } catch { /* ignore */ }
-      setLoading(false);
-    };
-    fetchData();
+    setKeys(loadKeys());
   }, []);
 
-  const stats: ProjectStats = {
-    totalProjects: works.length,
-    completedProjects: works.filter((w) => w.status === 'completed' || w.status === '已完成').length,
-    inProgressProjects: works.filter((w) => w.status === 'editing' || w.status === '进行中').length,
-    draftProjects: works.filter((w) => w.status === 'draft' || w.status === '草稿').length,
-    totalScenes: works.reduce((s, w) => s + (w as any).scenes?.length || 0, 0),
-    totalCharacters: works.reduce((s, w) => s + (w as any).characters?.length || 0, 0),
-    computeHours: works.length * 2.5,
-    gpuUsage: Math.min(works.length * 8, 100),
-    storageUsed: works.length * 0.8,
-    apiCalls: works.length * 150,
+  const handleSave = () => {
+    saveKeys(keys);
+    setSaved(true);
+    message.success('API 密钥已保存');
+    setTimeout(() => setSaved(false), 2000);
   };
 
-  const columns = [
-    { title: '项目名称', dataIndex: 'title', key: 'title', render: (t: string) => <Text strong>{t}</Text> },
-    {
-      title: '状态', dataIndex: 'status', key: 'status',
-      render: (s: string) => {
-        const color = s === 'completed' || s === '已完成' ? 'success' : s === 'editing' || s === '进行中' ? 'processing' : 'default';
-        const label = s === 'completed' ? '已完成' : s === 'editing' ? '进行中' : s === 'draft' ? '草稿' : s;
-        return <Tag color={color}>{label}</Tag>;
-      },
-    },
-    { title: '进度', dataIndex: 'progress', key: 'progress', render: (p: number) => <Progress percent={p} size="small" style={{ width: 100 }} /> },
-    { title: '创建时间', dataIndex: 'createdDate', key: 'createdDate' },
-  ];
+  const updateKey = (field: keyof ApiKeys, value: string) => {
+    setKeys(prev => ({ ...prev, [field]: value }));
+    setSaved(false);
+  };
 
-  if (loading) {
-    return <div style={{ textAlign: 'center', padding: 100 }}><Spin size="large" /></div>;
-  }
+  const maskKey = (key: string) => {
+    if (!key) return '未设置';
+    if (key.length <= 8) return '••••••••';
+    return key.slice(0, 4) + '••••••••' + key.slice(-4);
+  };
 
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ marginBottom: 24 }}>
-        <Title level={2}>
-          <DashboardOutlined style={{ marginRight: 12 }} />
-          项目概览
-        </Title>
-        <Text type="secondary">查看当前所有项目的信息、资源消耗及算力使用情况</Text>
-      </div>
+    <div style={{ maxWidth: 640, margin: '0 auto', padding: '40px 24px' }}>
+      <Title level={3}>
+        <SettingOutlined style={{ marginRight: 8 }} />
+        系统设置
+      </Title>
+      <Paragraph type="secondary" style={{ marginBottom: 32 }}>
+        配置 AI 服务的 API 密钥。密钥仅保存在本地浏览器，不会上传到服务器。
+      </Paragraph>
 
-      {/* 统计卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={12} sm={8} lg={4}>
-          <Card size="small"><Statistic title="总项目" value={stats.totalProjects} prefix={<ProjectOutlined />} /></Card>
-        </Col>
-        <Col xs={12} sm={8} lg={4}>
-          <Card size="small"><Statistic title="已完成" value={stats.completedProjects} valueStyle={{ color: '#34c759' }} /></Card>
-        </Col>
-        <Col xs={12} sm={8} lg={4}>
-          <Card size="small"><Statistic title="进行中" value={stats.inProgressProjects} valueStyle={{ color: '#007aff' }} /></Card>
-        </Col>
-        <Col xs={12} sm={8} lg={4}>
-          <Card size="small"><Statistic title="草稿" value={stats.draftProjects} valueStyle={{ color: '#ff9500' }} /></Card>
-        </Col>
-        <Col xs={12} sm={8} lg={4}>
-          <Card size="small"><Statistic title="场景总数" value={stats.totalScenes} prefix={<FileTextOutlined />} /></Card>
-        </Col>
-        <Col xs={12} sm={8} lg={4}>
-          <Card size="small"><Statistic title="角色总数" value={stats.totalCharacters} prefix={<ThunderboltOutlined />} /></Card>
-        </Col>
-      </Row>
-
-      {/* 算力消耗 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12} lg={6}>
-          <Card size="small">
-            <Statistic title="计算时长" value={stats.computeHours} suffix="小时" prefix={<ClockCircleOutlined />} />
-            <Progress percent={Math.min(stats.computeHours * 2, 100)} strokeColor="#007aff" style={{ marginTop: 8 }} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card size="small">
-            <Statistic title="GPU 使用率" value={stats.gpuUsage} suffix="%" />
-            <Progress percent={stats.gpuUsage} strokeColor="#34c759" style={{ marginTop: 8 }} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card size="small">
-            <Statistic title="存储空间" value={stats.storageUsed} suffix="GB" />
-            <Progress percent={Math.min(stats.storageUsed * 2, 100)} strokeColor="#ff9500" style={{ marginTop: 8 }} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card size="small">
-            <Statistic title="API 调用" value={stats.apiCalls} suffix="次" prefix={<ThunderboltOutlined />} />
-            <Text type="secondary" style={{ fontSize: 12 }}>本月累计</Text>
-          </Card>
-        </Col>
-      </Row>
-
-      {/* 项目列表 */}
-      <Card title={<><VideoCameraOutlined style={{ marginRight: 8 }} />项目列表</>} style={{ marginBottom: 24 }}>
-        <Table
-          dataSource={works}
-          columns={columns}
-          rowKey="id"
-          pagination={{ pageSize: 10 }}
-          size="small"
-          locale={{ emptyText: '暂无项目数据' }}
-        />
+      {/* LLM Key */}
+      <Card
+        title={
+          <Space>
+            <ApiOutlined />
+            <span>LLM API Key</span>
+            <Tag color="blue">DeepSeek / OpenAI</Tag>
+          </Space>
+        }
+        style={{ marginBottom: 20 }}
+      >
+        <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+          用于剧本生成、角色提取、实体分析等 AI 文本服务。支持 DeepSeek、OpenAI 兼容接口。
+        </Paragraph>
+        <Space.Compact style={{ width: '100%' }}>
+          <Input.Password
+            prefix={<KeyOutlined />}
+            value={keys.llmKey}
+            onChange={e => updateKey('llmKey', e.target.value)}
+            placeholder="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+            visibilityToggle={{ visible: showLl, onVisibleChange: setShowLl }}
+          />
+        </Space.Compact>
+        {keys.llmKey && (
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
+            当前: {maskKey(keys.llmKey)}
+          </Text>
+        )}
       </Card>
 
-      {/* 资源说明 */}
-      <Card size="small" style={{ background: '#f5f5f7' }}>
-        <Space direction="vertical" size={4}>
-          <Text strong>💡 提示</Text>
-          <Text type="secondary">• 全局视频比例、画质、创作模式等设置已移至「故事剧本」页面的右侧设置栏</Text>
-          <Text type="secondary">• 生成剧本后，可在右侧「全局设置」面板中对所有剧本进行统一配置</Text>
-        </Space>
+      {/* Seedream Key */}
+      <Card
+        title={
+          <Space>
+            <ApiOutlined />
+            <span>Seedream API Key</span>
+            <Tag color="purple">图像生成</Tag>
+          </Space>
+        }
+        style={{ marginBottom: 20 }}
+      >
+        <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+          用于 AI 图像生成服务（Seedream 4.5）。生成角色设定图、场景预览图、分镜首帧等。
+        </Paragraph>
+        <Space.Compact style={{ width: '100%' }}>
+          <Input.Password
+            prefix={<KeyOutlined />}
+            value={keys.seedreamKey}
+            onChange={e => updateKey('seedreamKey', e.target.value)}
+            placeholder="请输入 Seedream API Key"
+            visibilityToggle={{ visible: showSr, onVisibleChange: setShowSr }}
+          />
+        </Space.Compact>
+        {keys.seedreamKey && (
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
+            当前: {maskKey(keys.seedreamKey)}
+          </Text>
+        )}
       </Card>
+
+      {/* Seedance Key */}
+      <Card
+        title={
+          <Space>
+            <ApiOutlined />
+            <span>Seedance API Key</span>
+            <Tag color="orange">视频生成</Tag>
+          </Space>
+        }
+        style={{ marginBottom: 24 }}
+      >
+        <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+          用于 AI 视频生成服务（Seedance 2.0）。将分镜图像转为动态视频片段。
+        </Paragraph>
+        <Space.Compact style={{ width: '100%' }}>
+          <Input.Password
+            prefix={<KeyOutlined />}
+            value={keys.seedanceKey}
+            onChange={e => updateKey('seedanceKey', e.target.value)}
+            placeholder="请输入 Seedance API Key"
+            visibilityToggle={{ visible: showSd, onVisibleChange: setShowSd }}
+          />
+        </Space.Compact>
+        {keys.seedanceKey && (
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
+            当前: {maskKey(keys.seedanceKey)}
+          </Text>
+        )}
+      </Card>
+
+      <Button
+        type="primary"
+        size="large"
+        icon={<SaveOutlined />}
+        onClick={handleSave}
+        disabled={saved}
+        block
+      >
+        {saved ? '已保存' : '保存设置'}
+      </Button>
     </div>
   );
 };

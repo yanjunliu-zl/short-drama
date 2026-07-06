@@ -19,6 +19,8 @@ from app.schemas.script import (
 from app.services.ai_service import AIService
 from app.services.workflow import ScriptWorkflow
 from app.services.novel2script_service import Novel2ScriptService
+from app.services.novel2script_v2_service import Novel2ScriptV2Service
+from app.core.config import settings as app_settings
 from langchain_core.messages import HumanMessage
 from app.client.service_clients import VideoServiceClient, LLMServiceClient
 from app.models import Script, GenerationTask, ScriptStatus, TaskStatus, ScriptSourceType
@@ -330,13 +332,31 @@ class ScriptService:
                 script_result = await db.execute(script_stmt)
                 script = script_result.scalar_one_or_none()
                 if script:
-                    # 从 analysis_result（events）中提取地点
-                    events = script.analysis_result or []
-                    locations = self._derive_locations_from_events(events) if events else []
+                    # 兼容 V1 (list) 和 V2 (dict with events/locations/props)
+                    raw = script.analysis_result or {}
+                    if isinstance(raw, dict):
+                        events = raw.get("events", [])
+                        locations = raw.get("locations", [])
+                    else:
+                        events = raw if isinstance(raw, list) else []
+                        locations = self._derive_locations_from_events(events) if events else []
+                    # V2: build ShotEpisode-format storyboard from stored data
+                    storyboard_episodes = None
+                    if script.pipeline_version == 'v2' and script.storyboard:
+                        storyboard_episodes = self._build_shot_episodes(
+                            script.storyboard, script.episodes
+                        )
+
+                    # V2: extract story_framework from workflow_metadata
+                    wf_meta = script.workflow_metadata or {}
+                    story_framework = wf_meta.get("story_framework", "")
+
                     status["result"] = {
                         "title": script.title,
                         "content": script.content,
                         "episodes": script.episodes,
+                        "storyboard": storyboard_episodes,
+                        "story_framework": story_framework or None,
                         "theme": script.theme,
                         "style": script.style,
                         "length": script.length,
@@ -442,6 +462,68 @@ class ScriptService:
             if loc and loc not in locations:
                 locations[loc] = {"name": loc, "description": ""}
         return list(locations.values())
+
+    def _build_shot_episodes(self, storyboard: list, episodes: list) -> list:
+        """Convert V2 storyboard flat list to ShotEpisode format for frontend.
+
+        V2 storyboard shot: {shot_number, camera_type, camera_movement,
+                             duration_seconds, description, _chapter, _scene}
+        Target Shot: {id, number, shotType, duration, description, cameraAngle, sceneRef, ...}
+        """
+        if not storyboard:
+            return []
+
+        # Group shots by _chapter → map to episode number
+        shot_episodes: Dict[str, list] = {}
+        for shot in storyboard:
+            ch = shot.get("_chapter", "")
+            if ch not in shot_episodes:
+                shot_episodes[ch] = []
+            shot_episodes[ch].append(shot)
+
+        result = []
+        global_id = 0
+        ep_list = episodes or []
+
+        for ep_idx, (chapter, shots) in enumerate(shot_episodes.items()):
+            ep_num = ep_idx + 1
+            # Find matching episode title from stored episodes
+            ep_title = f"第{self._num_to_cn(ep_num)}集"
+            if ep_idx < len(ep_list):
+                ep_title = ep_list[ep_idx].get("title", ep_title)
+
+            shot_list = []
+            for s in shots:
+                global_id += 1
+                dur = s.get("duration_seconds", 5)
+                shot_list.append({
+                    "id": global_id,
+                    "number": s.get("shot_number", global_id),
+                    "shotType": s.get("camera_type", "中景"),
+                    "duration": int(dur) if dur else 5,
+                    "cameraAngle": "正面平视",
+                    "sceneRef": s.get("_scene", ""),
+                    "characters": [],
+                    "description": s.get("description", ""),
+                    "dialogue": "",
+                    "soundEffects": [],
+                    "music": "",
+                    "notes": s.get("camera_movement", ""),
+                    "imagePrompt": None,
+                    "imagePromptZh": None,
+                    "videoPrompt": None,
+                    "videoPromptZh": None,
+                })
+            result.append({
+                "id": f"ep-{ep_num}",
+                "title": ep_title,
+                "number": ep_num,
+                "shots": shot_list,
+                "description": "",
+            })
+
+        logger.info(f"Built ShotEpisodes: {len(result)} episodes, {global_id} shots")
+        return result
 
     async def _generate_long_novel_script(
         self, novel_content: str, n2s: Novel2ScriptService,
@@ -550,9 +632,7 @@ class ScriptService:
                 novel_content = getattr(request, 'novel_content', '') or ''
                 logger.info(f"[小说→剧本] 开始 task={task_id} title={request.title} novel_len={len(novel_content)} style={request.style}")
 
-                mock_mode = getattr(self.ai_service, '_mock_mode', False)
-                n2s = Novel2ScriptService(self.ai_service.llm, mock_mode)
-
+                # Create or retrieve task record
                 task = await db.get(GenerationTask, task_id)
                 if not task:
                     task = GenerationTask(
@@ -566,6 +646,16 @@ class ScriptService:
                     task.status = TaskStatus.PROCESSING.value
                     task.progress = 5
                 await db.commit()
+
+                # --- V2 routing: default to V2 RAG-based pipeline ---
+                pipeline_version = getattr(request, 'pipeline_version', 'v2') or 'v2'
+                if pipeline_version == 'v2':
+                    await self._generate_from_novel_v2(task_id, request, task, db, novel_content)
+                    return
+                # --- V1 path follows (unchanged) ---
+
+                mock_mode = getattr(self.ai_service, '_mock_mode', False)
+                n2s = Novel2ScriptService(self.ai_service.llm, mock_mode)
 
                 # 先检测章节数（纯文本，不调AI），长篇小说直接分批处理
                 chapter_count = n2s.detect_chapter_count(novel_content)
@@ -713,6 +803,155 @@ class ScriptService:
                 logger.error(f"[小说→剧本] 异常失败 task={task_id} 耗时={time.time()-t_total:.1f}s: {e}")
                 await db.rollback()
 
+    # ================================================================
+    # V2: RAG-based novel-to-script pipeline
+    # ================================================================
+
+    async def _generate_from_novel_v2(
+        self, task_id: str, request: ScriptFromNovelRequest,
+        task: GenerationTask, db, novel_content: str
+    ):
+        """Execute the V2 RAG-based novel-to-script pipeline."""
+        t_total = time.time()
+        try:
+            mock_mode = getattr(self.ai_service, '_mock_mode', False)
+            style = getattr(request, 'style', '') or app_settings.N2S_V2_DEFAULT_STYLE
+
+            n2s_v2 = Novel2ScriptV2Service(
+                llm=self.ai_service.llm if not mock_mode else None,
+                mock_mode=mock_mode,
+                config=app_settings,
+            )
+
+            async def progress_callback(pct: int, stage: str):
+                task.progress = pct
+                await db.commit()
+                logger.info(f"[V2] 进度 {pct}% — {stage} task={task_id}")
+
+            result = await n2s_v2.run_full_pipeline(
+                novel_text=novel_content,
+                style=style,
+                progress_callback=progress_callback,
+            )
+
+            final_script = result.get("final_script", "")
+            if not final_script:
+                raise ValueError("V2 pipeline produced empty script")
+
+            # Use episodes from V2 pipeline (built with 第N集 markers), fallback to regex split
+            episodes = result.get("episodes") or self._split_content_to_episodes(final_script)
+            characters_data = result.get("characters", [])
+            character_graph = result.get("character_graph", {})
+            storyboard_data = result.get("storyboard", [])
+            entities_data = result.get("entities", {})
+
+            # Use extracted entities for characters/locations/props when available
+            extracted_characters = entities_data.get("characters", [])
+            extracted_locations = entities_data.get("locations", [])
+            extracted_props = entities_data.get("props", [])
+
+            # Build events-compatible analysis_result for downstream consumers
+            analysis_events = []
+            for ch in result.get("script_scenes", []):
+                analysis_events.append({
+                    "index": ch.get("scene_number", ""),
+                    "title": ch.get("chapter_title", ""),
+                    "description": ch.get("script_body", "")[:200],
+                    "characters_involved": ch.get("characters", []),
+                    "location": ch.get("location", ""),
+                    "is_major": True,
+                })
+
+            script = Script(
+                task_id=task_id,
+                title=request.title,
+                content=final_script,
+                episodes=episodes,
+                theme=getattr(request, 'theme', ''),
+                length=getattr(request, 'length', '短篇'),
+                style=style,
+                setting=getattr(request, 'setting', ''),
+                characters=json.dumps(extracted_characters, ensure_ascii=False) if extracted_characters else (
+                    json.dumps(characters_data, ensure_ascii=False) if characters_data else None
+                ),
+                source_type="novel",
+                source_content=novel_content[:500],
+                status=ScriptStatus.COMPLETED.value,
+                user_id=str(getattr(request, 'user_id', '')),
+                pipeline_version="v2",
+                character_graph=character_graph if character_graph else None,
+                storyboard=storyboard_data if storyboard_data else None,
+                workflow_metadata={
+                    "pipeline": "v2_rag_chapter_based",
+                    "stages": result.get("stages", {}),
+                    "story_framework": result.get("story_framework", ""),
+                },
+                analysis_result={
+                    "events": analysis_events,
+                    "locations": extracted_locations,
+                    "props": extracted_props,
+                    "global_characters": characters_data,
+                },
+            )
+            db.add(script)
+            await db.flush()
+
+            task.status = TaskStatus.COMPLETED.value
+            task.progress = 100
+            task.script_id = script.id
+            task.end_time = time.time()
+            await db.commit()
+
+            logger.info(f"[V2] 完成 script_id={script.id}, {len(episodes)}集, "
+                        f"{len(characters_data)}角色, {len(storyboard_data)}分镜, "
+                        f"总长度={len(final_script)} 总耗时={time.time()-t_total:.1f}s")
+
+            # Record business metrics for Grafana
+            try:
+                from app.middleware.prometheus import BusinessMetrics
+                BusinessMetrics.record_script_generation(
+                    script_type="novel", status="success",
+                    duration=time.time() - t_total)
+            except Exception:
+                pass
+
+            # Track usage — V2 makes N+2 LLM calls (global extract + N chapters + entity extract)
+            from app.services.usage_tracker import estimate_tokens
+            chapter_count = len(result.get("script_scenes", []))
+            call_count = chapter_count + 2 if chapter_count > 0 else 1
+            # Total input: novel(full) + per-chapter prompts + entity extraction prompt
+            estimated_in = estimate_tokens(novel_content) * 2  # novel read twice (global + per-chapter RAG)
+            estimated_out = estimate_tokens(final_script)
+            await track_llm_usage(
+                user_id=str(getattr(request, 'user_id', '')),
+                model_name="deepseek-chat",
+                tokens_in=estimated_in,
+                tokens_out=estimated_out,
+                call_count=call_count,
+                duration_ms=int((time.time() - t_total) * 1000),
+                endpoint="/generate/from-novel",
+                service_name="script-service",
+            )
+
+        except Exception as e:
+            logger.error(f"[V2] 异常失败 task={task_id} 耗时={time.time()-t_total:.1f}s: {e}")
+            await db.rollback()
+            try:
+                task.status = TaskStatus.FAILED.value
+                task.error = str(e)
+                task.end_time = time.time()
+                await db.commit()
+            except Exception:
+                pass
+
+    async def get_script_character_graph(self, script_id: int) -> Optional[dict]:
+        """Get the character relationship graph for a V2 script."""
+        async with self._get_db() as db:
+            script = await db.get(Script, script_id)
+            if script and script.character_graph:
+                return script.character_graph
+            return None
+
     def _sync_generate_from_outline(self, request_dict: dict) -> Optional[str]:
         """同步调用 AI 生成大纲剧本（在线程池中运行）"""
         import asyncio as _asyncio
@@ -729,73 +968,121 @@ class ScriptService:
             return None
 
     async def generate_script_from_outline_async(self, task_id: str, request: ScriptFromOutlineRequest):
-        """异步从大纲生成剧本 — 在线程池中运行 AI 调用，确保超时可靠"""
-        loop = asyncio.get_running_loop()
-        request_dict = request.dict() if hasattr(request, 'dict') else vars(request)
-
-        # 初始化 AI（必须在主线程完成）
-        if not self._initialized:
-            await self.initialize()
-
-        # 先创建任务记录（让前端能立即轮询到）
-        async with self._get_db() as db:
-            task = await db.get(GenerationTask, task_id)
-            if not task:
-                task = GenerationTask(
-                    task_id=task_id,
-                    status=TaskStatus.PROCESSING.value,
-                    progress=10,
-                    start_time=time.time(),
-                )
-                db.add(task)
-                await db.commit()
-            logger.info(f"开始从大纲生成剧本，任务ID: {task_id}")
-
-        # 在线程池中运行 AI 调用
-        try:
-            script_content = await asyncio.wait_for(
-                loop.run_in_executor(None, self._sync_generate_from_outline, request_dict),
-                timeout=300
-            )
-        except asyncio.TimeoutError:
-            script_content = None
-        except Exception as e:
-            logger.error(f"大纲生成 AI 调用失败: {e}")
-            script_content = None
-
-        # 更新任务结果
+        """异步从大纲生成剧本 — 使用 V2 管线，统一输出格式"""
+        t_total = time.time()
         async with self._get_db() as db:
             try:
+                if not self._initialized:
+                    await self.initialize()
+
+                outline = getattr(request, 'outline', '') or ''
+                logger.info(f"[大纲→剧本 V2] 开始 task={task_id} title={request.title} outline_len={len(outline)}")
+
                 task = await db.get(GenerationTask, task_id)
                 if not task:
-                    return
+                    task = GenerationTask(
+                        task_id=task_id,
+                        status=TaskStatus.PROCESSING.value,
+                        progress=5,
+                        start_time=time.time(),
+                    )
+                    db.add(task)
+                else:
+                    task.status = TaskStatus.PROCESSING.value
+                    task.progress = 5
+                await db.commit()
 
-                if script_content is None:
-                    task.status = TaskStatus.FAILED.value
-                    task.error = "AI 生成超时（5分钟），请缩短输入内容后重试"
-                    task.end_time = time.time()
+                mock_mode = getattr(self.ai_service, '_mock_mode', False)
+                style = getattr(request, 'style', '') or app_settings.N2S_V2_DEFAULT_STYLE
+
+                n2s_v2 = Novel2ScriptV2Service(
+                    llm=self.ai_service.llm if not mock_mode else None,
+                    mock_mode=mock_mode,
+                    config=app_settings,
+                )
+
+                async def progress_callback(pct: int, stage: str):
+                    task.progress = pct
                     await db.commit()
-                    return
+                    logger.info(f"[V2大纲] 进度 {pct}% — {stage} task={task_id}")
 
-                # 后处理：将生成内容拆分为分集
-                episodes = self._split_content_to_episodes(script_content)
-                logger.info(f"大纲生成剧本完成，拆分为 {len(episodes)} 集")
+                # Map length to target episode count (outline has no chapter markers)
+                length_to_eps = {"短篇": 5, "中篇": 8, "长篇": 12}
+                # Parse explicit episode count from user's outline/title (e.g. "二十集")
+                import re as _re2
+                _cn_nums = {c: i for i, c in enumerate(
+                    ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+                     '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十',
+                     '二十一', '二十二', '二十三', '二十四', '二十五', '二十六', '二十七', '二十八', '二十九', '三十',
+                     '三十一', '三十二', '三十三', '三十四', '三十五', '三十六', '三十七', '三十八', '三十九', '四十',
+                     '四十一', '四十二', '四十三', '四十四', '四十五', '四十六', '四十七', '四十八', '四十九', '五十'], start=0)}
+                def _parse_ep(text: str) -> int:
+                    if not text: return 0
+                    for m in _re2.finditer(r'([一二三四五六七八九十百千\d]+)\s*集', text):
+                        s = m.group(1)
+                        if s.isdigit(): return int(s)
+                        n = _cn_nums.get(s, 0)
+                        if n > 0: return n
+                    return 0
+                user_ep = _parse_ep(outline) or _parse_ep(request.title)
+                target_eps = user_ep if user_ep > 0 else length_to_eps.get(getattr(request, 'length', '短篇'), 5)
+                target_eps = min(target_eps, 50)  # cap at 50
+
+                result = await n2s_v2.run_full_pipeline(
+                    novel_text=outline,
+                    style=style,
+                    progress_callback=progress_callback,
+                    target_episodes=target_eps,
+                )
+
+                final_script = result.get("final_script", "")
+                if not final_script:
+                    raise ValueError("V2 outline pipeline produced empty script")
+
+                episodes = result.get("episodes") or self._split_content_to_episodes(final_script)
+                entities_data = result.get("entities", {})
+                extracted_characters = entities_data.get("characters", [])
+                character_graph = result.get("character_graph", {})
+                storyboard_data = result.get("storyboard", [])
+
+                analysis_events = []
+                for ch in result.get("script_scenes", []):
+                    analysis_events.append({
+                        "index": ch.get("scene_number", ""),
+                        "title": ch.get("chapter_title", ""),
+                        "description": ch.get("script_body", "")[:200],
+                        "characters_involved": ch.get("characters", []),
+                        "location": ch.get("location", ""),
+                        "is_major": True,
+                    })
 
                 script = Script(
                     task_id=task_id,
                     title=request.title,
-                    content=script_content,
+                    content=final_script,
                     episodes=episodes,
                     theme=getattr(request, 'theme', ''),
                     length=getattr(request, 'length', '短篇'),
-                    style=getattr(request, 'style', ''),
+                    style=style,
                     setting=getattr(request, 'setting', ''),
-                    characters=getattr(request, 'characters', []),
+                    characters=json.dumps(extracted_characters, ensure_ascii=False) if extracted_characters else None,
                     source_type="outline",
-                    source_content=str(getattr(request, 'outline', ''))[:500],
+                    source_content=outline[:500],
                     status=ScriptStatus.COMPLETED.value,
                     user_id=str(getattr(request, 'user_id', '')),
-                    has_optimized_version=False,
+                    pipeline_version="v2",
+                    character_graph=character_graph if character_graph else None,
+                    storyboard=storyboard_data if storyboard_data else None,
+                    workflow_metadata={
+                        "pipeline": "v2_rag_outline",
+                        "stages": result.get("stages", {}),
+                        "story_framework": result.get("story_framework", ""),
+                    },
+                    analysis_result={
+                        "events": analysis_events,
+                        "locations": entities_data.get("locations", []),
+                        "props": entities_data.get("props", []),
+                    },
                 )
                 db.add(script)
                 await db.flush()
@@ -806,11 +1093,37 @@ class ScriptService:
                 task.end_time = time.time()
                 await db.commit()
 
-                logger.info(f"剧本（大纲转）生成完成，剧本ID: {script.id}")
+                logger.info(f"[V2大纲] 完成 script_id={script.id}, {len(episodes)}集, "
+                            f"{len(storyboard_data)}分镜, 总长度={len(final_script)} 总耗时={time.time()-t_total:.1f}s")
+
+                from app.services.usage_tracker import estimate_tokens
+                chapter_count = len(result.get("script_scenes", []))
+                call_count = chapter_count + 2 if chapter_count > 0 else 1
+                estimated_in = estimate_tokens(outline) * 2
+                estimated_out = estimate_tokens(final_script)
+                await track_llm_usage(
+                    user_id=str(getattr(request, 'user_id', '')),
+                    model_name="deepseek-chat",
+                    tokens_in=estimated_in,
+                    tokens_out=estimated_out,
+                    call_count=call_count,
+                    duration_ms=int((time.time() - t_total) * 1000),
+                    endpoint="/generate/from-outline",
+                    service_name="script-service",
+                )
 
             except Exception as e:
-                logger.error(f"剧本（大纲转）生成异常: {e}")
+                logger.error(f"[V2大纲] 异常失败 task={task_id} 耗时={time.time()-t_total:.1f}s: {e}")
                 await db.rollback()
+                try:
+                    task = await db.get(GenerationTask, task_id)
+                    if task:
+                        task.status = TaskStatus.FAILED.value
+                        task.error = str(e)
+                        task.end_time = time.time()
+                        await db.commit()
+                except Exception:
+                    pass
 
     async def upload_and_split_script(self, request: ScriptSplitRequest) -> dict:
         """

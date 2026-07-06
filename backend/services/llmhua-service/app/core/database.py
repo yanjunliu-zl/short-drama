@@ -17,8 +17,8 @@ DATABASE_URL = (
 engine = create_async_engine(
     DATABASE_URL,
     echo=settings.DEBUG,
-    pool_size=10,
-    max_overflow=5,
+    pool_size=5,     # Per-pod: 10 pods × 5 = 50
+    max_overflow=3,
     pool_timeout=30,
     pool_recycle=3600,
     pool_pre_ping=True,

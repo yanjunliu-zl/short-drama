@@ -1,97 +1,148 @@
 # ============================================================
-# 生产环境覆盖配置 — Swarm 模式多副本 + 资源限制
-# 使用: docker stack deploy -c docker-compose.yml -c docker-compose.prod.yml shortdrama
+# Production Overlay — 分布式 + 水平扩展 + 高可用
+# ============================================================
+# 单机多实例:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --scale script-service=3
+#
+# Docker Swarm (多机):
+#   docker stack deploy -c docker-compose.yml -c docker-compose.prod.yml shortdrama
+#
+# 关键特性:
+#   - MySQL 读副本 (读写分离)
+#   - Redis Sentinel (自动故障转移)
+#   - 无状态服务多副本 (Traefik 自动负载均衡)
+#   - 资源限制 (防 OOM)
 # ============================================================
 
 services:
-  # API 网关
+  # ═══════════════════════════════════════════
+  # MySQL 读副本
+  # ═══════════════════════════════════════════
+  mysql-read:
+    image: mysql:8.0
+    container_name: shortdrama-mysql-read
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-shortdrama}
+    ports:
+      - "3308:3306"
+    volumes:
+      - ./backend/config/mysql/conf.d:/etc/mysql/conf.d:ro
+    networks:
+      - shortdrama-network
+    command: >
+      --read-only
+      --server-id=2
+      --log-bin=mysql-bin
+      --relay-log=relay-log
+      --report-host=mysql-read
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+    deploy:
+      replicas: 1
+      resources:
+        limits: { cpus: '1', memory: 1G }
+        reservations: { cpus: '0.25', memory: 256M }
+
+  # ═══════════════════════════════════════════
+  # Redis Sentinel
+  # ═══════════════════════════════════════════
+  redis-sentinel:
+    image: redis:7-alpine
+    container_name: shortdrama-redis-sentinel
+    restart: unless-stopped
+    ports:
+      - "26379:26379"
+    volumes:
+      - ./backend/config/redis/sentinel.conf:/usr/local/etc/redis/sentinel.conf
+    networks:
+      - shortdrama-network
+    command: redis-sentinel /usr/local/etc/redis/sentinel.conf
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 1
+      resources:
+        limits: { cpus: '0.1', memory: 64M }
+
+  # ═══════════════════════════════════════════
+  # Traefik 网关 — 2 副本
+  # ═══════════════════════════════════════════
   traefik:
     deploy:
       replicas: 2
       resources:
-        limits:
-          cpus: '1.0'
-          memory: 256M
-      restart_policy:
-        condition: any
+        limits: { cpus: '1.0', memory: 256M }
 
-  # 用户服务
+  # ═══════════════════════════════════════════
+  # 无状态应用服务 — 可水平扩展
+  # (Traefik 自动发现多副本并轮询负载均衡)
+  # ═══════════════════════════════════════════
+
+  script-service:
+    deploy:
+      replicas: ${SCRIPT_SERVICE_REPLICAS:-2}
+      resources:
+        limits: { cpus: '4', memory: 2G }
+        reservations: { cpus: '0.5', memory: 512M }
+
+  storyboard-service:
+    deploy:
+      replicas: ${STORYBOARD_SERVICE_REPLICAS:-2}
+      resources:
+        limits: { cpus: '2', memory: 1G }
+
+  llmhua-service:
+    deploy:
+      replicas: ${LLMHUA_SERVICE_REPLICAS:-2}
+      resources:
+        limits: { cpus: '2', memory: 2G }
+
+  recommendation-service:
+    deploy:
+      replicas: ${RECOMMENDATION_SERVICE_REPLICAS:-2}
+      resources:
+        limits: { cpus: '1', memory: 512M }
+
+  # ═══════════════════════════════════════════
+  # Go 服务
+  # ═══════════════════════════════════════════
+
   user-service:
     deploy:
       replicas: 2
       resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
+        limits: { cpus: '0.5', memory: 256M }
 
-  # 剧本生成服务（CPU 密集型 LLM 调用）
-  script-service:
-    deploy:
-      replicas: 2
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 1G
-
-  # 内容服务
   content-service:
     deploy:
       replicas: 2
       resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
+        limits: { cpus: '0.5', memory: 512M }
 
-  # 分镜生成服务
-  storyboard-service:
-    deploy:
-      replicas: 2
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 1G
-
-  # LLM 图像视频生成服务（GPU/CPU 密集型）
-  llmhua-service:
-    deploy:
-      replicas: 2
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2G
-
-  # 场景提取服务
-  scene-extractor:
-    deploy:
-      replicas: 1
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-
-  # 视频服务
-  video-service:
-    deploy:
-      replicas: 1
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-
-  # 最终剪辑服务
   final-cut-service:
     deploy:
       replicas: 1
       resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
+        limits: { cpus: '1', memory: 512M }
 
-  # Celery Worker
-  video-worker:
+  # 基础设施 — 单实例 + 资源限制
+  mysql:
     deploy:
-      replicas: 2
       resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
+        limits: { cpus: '2', memory: 2G }
+        reservations: { cpus: '0.5', memory: 512M }
+
+  redis:
+    deploy:
+      resources:
+        limits: { cpus: '0.5', memory: 512M }
+
+  rabbitmq:
+    deploy:
+      resources:
+        limits: { cpus: '1', memory: 1G }

@@ -256,6 +256,21 @@ const Scene: React.FC = () => {
     if (!savedState) savedState = {} as any;
     const episodes = (savedState as any).episodes || [];
 
+    // V2: check if storyboard data already exists in pipeline (from V2 generation)
+    const wId = getWorkId();
+    if (wId) {
+      try {
+        const resp = await pipelineService.getPipelineState(wId);
+        const pipelineData = (resp as any)?.data || {};
+        if (pipelineData.storyboard?.episodes?.length > 0) {
+          const storyboardData = pipelineData.storyboard;
+          message.success('已加载V2智能分镜数据，无需重新生成');
+          navigate(wId ? `/storyboard?workId=${wId}` : '/storyboard');
+          return;
+        }
+      } catch {}
+    }
+
     // 拼接所有集的描述作为剧本内容
     const scriptContent = episodes.map((ep: any) =>
       ep.description || ep.content || ''

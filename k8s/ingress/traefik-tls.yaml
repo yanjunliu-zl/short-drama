@@ -1,0 +1,131 @@
+# ============================================================
+# TLS / HTTPS IngressRoute (使用 cert-manager)
+# ============================================================
+# 前提:
+#   1. cert-manager 已安装: kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+#   2. 域名 DNS 已指向 Traefik Service 的外部 IP
+#   3. 更新下面的域名和 contact email
+# ============================================================
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: shortdrama-tls
+  namespace: shortdrama
+spec:
+  secretName: shortdrama-tls-cert
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  commonName: "shortdrama.example.com"
+  dnsNames:
+    - "shortdrama.example.com"
+    - "*.shortdrama.example.com"
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: "admin@example.com"        # ← 改为你的邮箱
+    privateKeySecretRef:
+      name: letsencrypt-prod-key
+    solvers:
+      - http01:
+          ingress:
+            class: traefik
+---
+# Staging issuer (测试用，避免触发 Let's Encrypt 速率限制)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: "admin@example.com"        # ← 改为你的邮箱
+    privateKeySecretRef:
+      name: letsencrypt-staging-key
+    solvers:
+      - http01:
+          ingress:
+            class: traefik
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: shortdrama-api-tls
+  namespace: shortdrama
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    # Frontend
+    - match: PathPrefix(`/`)
+      kind: Rule
+      services:
+        - name: frontend
+          port: 80
+    # API routes (same as non-TLS ingress)
+    - match: PathPrefix(`/api/v1/scripts`)
+      kind: Rule
+      services:
+        - name: script-service
+          port: 8000
+      middlewares:
+        - name: rate-limit
+        - name: retry
+    - match: PathPrefix(`/api/v1/storyboard`)
+      kind: Rule
+      services:
+        - name: storyboard-service
+          port: 8001
+      middlewares:
+        - name: rate-limit
+        - name: retry
+    - match: PathPrefix(`/api/v1/llmhua`)
+      kind: Rule
+      services:
+        - name: llmhua-service
+          port: 8002
+      middlewares:
+        - name: rate-limit
+        - name: retry
+    - match: PathPrefix(`/api/v1/cases`) || PathPrefix(`/api/v1/works`) || PathPrefix(`/api/v1/scenes`) || PathPrefix(`/api/v1/characters`)
+      kind: Rule
+      services:
+        - name: content-service
+          port: 8081
+      middlewares:
+        - name: rate-limit
+        - name: retry
+    - match: PathPrefix(`/api/v1/users`)
+      kind: Rule
+      services:
+        - name: user-service
+          port: 8080
+      middlewares:
+        - name: rate-limit
+        - name: retry
+    - match: PathPrefix(`/api/v1/final-cut`)
+      kind: Rule
+      services:
+        - name: final-cut-service
+          port: 8085
+      middlewares:
+        - name: rate-limit
+        - name: retry
+  tls:
+    secretName: shortdrama-tls-cert
+---
+# HTTP → HTTPS 重定向
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-https
+  namespace: shortdrama
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true

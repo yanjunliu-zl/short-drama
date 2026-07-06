@@ -15,5 +15,13 @@ Redis:
   Host: localhost
   Port: 6379
   Password:
-  DB: 0
+  DB: 10
   PoolSize: 10
+
+# 服务发现 - Consul用于集群服务注册与发现
+Consul:
+  Host: consul
+  Port: 8500
+  Token: ""
+  Enabled: true
+  Datacenter: dc1

@@ -129,6 +129,21 @@ func RegisterHandlers(server *rest.Server, serverCtx *svc.ServiceContext) {
 				Path:    "/api/v1/cases/:id/share",
 				Handler: RecordCaseShareHandler(serverCtx),
 			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/api/v1/cases/recommended",
+				Handler: RecommendCasesHandler(serverCtx),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/api/v1/cases/search",
+				Handler: SearchCasesHandler(serverCtx),
+			},
+			{
+				Method:  http.MethodPost,
+				Path:    "/api/v1/cases/sync-es",
+				Handler: SyncCasesToESHandler(serverCtx),
+			},
 		},
 	)
 

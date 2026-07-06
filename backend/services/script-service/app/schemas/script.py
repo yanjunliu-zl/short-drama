@@ -11,7 +11,7 @@ class ScriptGenerationRequest(BaseModel):
     characters: Optional[List[str]] = Field(default=[], description="角色列表")
     setting: Optional[str] = Field(default="现代都市", description="故事背景")
     style: Optional[str] = Field(default="浪漫喜剧", description="剧本风格")
-    user_id: Optional[str] = Field(default=None, description="用户ID")
+    user_id: Optional[str] = Field(default="", description="用户ID")
 
 
 # 剧本生成请求 - 从剧本大纲
@@ -24,7 +24,7 @@ class ScriptFromOutlineRequest(BaseModel):
     characters: Optional[List[str]] = Field(default=[], description="角色列表")
     setting: Optional[str] = Field(default="现代都市", description="故事背景")
     style: Optional[str] = Field(default="浪漫喜剧", description="剧本风格")
-    user_id: Optional[str] = Field(default=None, description="用户ID")
+    user_id: Optional[str] = Field(default="", description="用户ID")
 
 
 # 剧本生成请求 - 从小说
@@ -37,8 +37,9 @@ class ScriptFromNovelRequest(BaseModel):
     characters: Optional[List[str]] = Field(default=[], description="角色列表")
     setting: Optional[str] = Field(default="现代都市", description="故事背景")
     style: Optional[str] = Field(default="浪漫喜剧", description="剧本风格")
-    user_id: Optional[str] = Field(default=None, description="用户ID")
+    user_id: Optional[str] = Field(default="", description="用户ID")
     excerpt_ratio: Optional[float] = Field(default=0.3, description="抽取比例(0-1)，用于长小说")
+    pipeline_version: Optional[str] = Field(default="v2", description="Pipeline版本: 'v1' (ViMax) or 'v2' (RAG-based)")
 
 
 # 剧本创建请求
@@ -99,7 +100,7 @@ class ScriptSplitRequest(BaseModel):
     """上传完整剧本并自动分集请求"""
     title: str = Field(..., description="剧本标题")
     content: str = Field(..., description="完整剧本内容")
-    user_id: Optional[str] = Field(default=None, description="用户ID")
+    user_id: Optional[str] = Field(default="", description="用户ID")
 
 
 class ScriptSplitResponse(BaseModel):
@@ -108,3 +109,4 @@ class ScriptSplitResponse(BaseModel):
     title: str = Field(..., description="剧本标题")
     episodes: List[EpisodeItem] = Field(default_factory=list, description="分集列表")
     total_episodes: int = Field(default=0, description="总集数")
+    storyboard: Optional[Any] = Field(default=None, description="V2分镜数据（ShotEpisode格式）")

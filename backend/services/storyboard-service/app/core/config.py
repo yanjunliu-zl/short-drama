@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     REDIS_HOST: str = os.getenv("REDIS_HOST", "redis")
     REDIS_PORT: int = int(os.getenv("REDIS_PORT", 6379))
     REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD", None)
-    REDIS_DB: int = int(os.getenv("REDIS_DB", 0))
+    REDIS_DB: int = int(os.getenv("REDIS_DB", 3))
 
     # 缓存配置
     CACHE_ENABLED: bool = os.getenv("CACHE_ENABLED", "True").lower() == "true"

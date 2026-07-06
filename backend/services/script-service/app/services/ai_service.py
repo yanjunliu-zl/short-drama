@@ -11,6 +11,16 @@ from app.services.cache_service import get_cache_service
 logger = logging.getLogger(__name__)
 
 
+def _create_chat_openai(kwargs: dict):
+    """Create ChatOpenAI with real httpx clients to bypass wrapper class issue"""
+    import httpx
+    base = kwargs.get("openai_api_base", "https://api.openai.com/v1")
+    timeout = kwargs.get("timeout", 180.0)
+    kwargs["http_client"] = httpx.Client(base_url=base, timeout=timeout)
+    kwargs["http_async_client"] = httpx.AsyncClient(base_url=base, timeout=timeout)
+    return ChatOpenAI(**kwargs)
+
+
 class ScriptAICallbackHandler(BaseCallbackHandler):
     """AI回调处理器，用于跟踪剧本生成进度"""
 
@@ -53,14 +63,15 @@ class AIService:
             self.callback_handler = ScriptAICallbackHandler()
 
             # 配置AI模型 - 优先使用DeepSeek，其次OpenAI
-            import httpx
             llm_kwargs = {
                 "model_name": settings.MODEL_NAME,
                 "temperature": settings.OPENAI_TEMPERATURE,
                 "max_tokens": settings.OPENAI_MAX_TOKENS,
-                "timeout": httpx.Timeout(180.0, connect=30.0),
+                "timeout": 180.0,
                 "max_retries": 0,
                 "streaming": False,
+                "http_client": None,
+                "http_async_client": None,
             }
 
             # 优先使用DeepSeek，其次OpenAI，否则使用Mock模式
@@ -68,15 +79,18 @@ class AIService:
                 llm_kwargs["openai_api_key"] = settings.DEEPSEEK_API_KEY
                 llm_kwargs["openai_api_base"] = settings.DEEPSEEK_API_BASE
                 llm_kwargs["model_name"] = settings.DEEPSEEK_MODEL
-                logger.info(f"使用DeepSeek模型: {settings.DEEPSEEK_MODEL}")
-                self.llm = ChatOpenAI(**llm_kwargs)
+                # Enable prompt caching — DeepSeek caches the system+preamble prefix,
+                # saving ~50% on input token costs for repeated same-structure calls.
+                llm_kwargs["model_kwargs"] = {"extra_body": {"cache_prefix": True}}
+                logger.info(f"使用DeepSeek模型: {settings.DEEPSEEK_MODEL} (prompt caching enabled)")
+                self.llm = _create_chat_openai(llm_kwargs)
                 self._mock_mode = False
             elif settings.OPENAI_API_KEY:
                 llm_kwargs["openai_api_key"] = settings.OPENAI_API_KEY
                 if settings.OPENAI_API_BASE:
                     llm_kwargs["openai_api_base"] = settings.OPENAI_API_BASE
                 logger.info(f"使用OpenAI模型: {settings.MODEL_NAME}")
-                self.llm = ChatOpenAI(**llm_kwargs)
+                self.llm = _create_chat_openai(llm_kwargs)
                 self._mock_mode = False
             else:
                 logger.warning("未配置AI API密钥，使用Mock模式生成示例剧本")

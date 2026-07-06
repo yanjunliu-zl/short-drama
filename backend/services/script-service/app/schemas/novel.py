@@ -43,6 +43,7 @@ class ExtractedEntity(BaseModel):
 class ExtractedCharacterEntity(BaseModel):
     name: str = Field(..., description="Character name")
     role: str = Field(default="配角", description="Role: 主角/配角/反派/群众")
+    gender: str = Field(default="", description="Gender: 男/女")
     description: str = Field(default="", description="Visual description")
 
 

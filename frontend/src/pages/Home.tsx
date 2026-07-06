@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Tabs, Card, Typography, Row, Col, Button, Space, List, Avatar, Spin, Alert, Empty, Pagination, message, Modal } from 'antd';
+import { Tabs, Card, Typography, Row, Col, Button, Space, List, Avatar, Spin, Alert, Empty, Pagination, message, Modal, Input, Divider } from 'antd';
 import {
   AppstoreOutlined,
   FolderOutlined,
@@ -11,6 +11,7 @@ import {
   LikeOutlined,
   ShareAltOutlined,
   DeleteOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { caseService } from '@/services/caseService';
 import type { CaseItem } from '@/types/case';
@@ -35,8 +36,13 @@ const Home: React.FC = () => {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [pageSize] = useState(6);
+  const [searchText, setSearchText] = useState('');
   const [tagFilter, setTagFilter] = useState<string>('');
   const [sortBy] = useState<'views' | 'likes' | 'createdAt'>('views');
+
+  // 推荐案例
+  const [recommendedCases, setRecommendedCases] = useState<CaseItem[]>([]);
+  const [recReason, setRecReason] = useState<string>('');
 
   // 我的作品数据状态
   const [works, setWorks] = useState<WorkItem[]>([]);
@@ -56,21 +62,46 @@ const Home: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await caseService.getCases({
-        page,
-        pageSize,
-        tag: tagFilter || undefined,
-        sortBy,
-        order: 'desc',
-      });
-      setCases(data.cases);
-      setTotal(data.total);
+      // ES 搜索 (有搜索词时使用 ES full-text search)
+      if (searchText) {
+        const data = await caseService.search({
+          q: searchText,
+          tags: tagFilter ? [tagFilter] : undefined,
+          page,
+          pageSize,
+        });
+        setCases(data.hits || []);
+        setTotal(data.total || 0);
+      } else {
+        const data = await caseService.getCases({
+          page,
+          pageSize,
+          search: undefined,
+          tag: tagFilter || undefined,
+          sortBy,
+          order: 'desc',
+        });
+        setCases(data.cases);
+        setTotal(data.total);
+      }
     } catch (err: any) {
       setError(err.message || '获取案例列表失败');
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, tagFilter, sortBy]);
+  }, [page, pageSize, searchText, tagFilter, sortBy]);
+
+  // 获取推荐案例
+  const fetchRecommended = useCallback(async () => {
+    try {
+      const userId = reduxUserId ? String(reduxUserId) : undefined;
+      const data = await caseService.getRecommended(userId, 6);
+      setRecommendedCases(data.cases);
+      setRecReason(data.reason);
+    } catch {
+      // 推荐加载失败不影响主列表
+    }
+  }, [reduxUserId]);
 
   // 获取作品列表
   const fetchWorks = useCallback(async () => {
@@ -117,6 +148,7 @@ const Home: React.FC = () => {
     switch (activeTab) {
       case 'case_square':
         fetchCases();
+        fetchRecommended();
         break;
       case 'my_works':
         fetchWorks();
@@ -138,6 +170,12 @@ const Home: React.FC = () => {
   const handleTagClick = (tag: string) => {
     setTagFilter(tag === tagFilter ? '' : tag);
     setPage(1);
+  };
+
+  // 处理搜索
+  const handleSearch = (value: string) => {
+    setSearchText(value);
+    setPage(1); // 搜索时重置到第一页
   };
 
   // 处理点赞
@@ -233,9 +271,19 @@ const Home: React.FC = () => {
   // 渲染案例广场内容
   const renderCaseSquare = () => (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <Title level={3}>案例广场</Title>
-        <Text type="secondary">浏览平台上的优秀创作案例，获取灵感</Text>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <Title level={3} style={{ marginBottom: 4 }}>案例广场</Title>
+          <Text type="secondary">浏览平台上的优秀创作案例，获取灵感</Text>
+        </div>
+        <Input.Search
+          placeholder="搜索案例标题或描述..."
+          allowClear
+          onSearch={handleSearch}
+          onChange={(e) => { if (!e.target.value) handleSearch('') }}
+          style={{ width: 320 }}
+          prefix={<SearchOutlined />}
+        />
       </div>
 
       {/* 标签筛选 */}
@@ -258,6 +306,61 @@ const Home: React.FC = () => {
               </Button>
             )}
           </Space>
+        </div>
+      )}
+
+      {/* 为你推荐 — 基于浏览/点赞历史的个性化推荐 */}
+      {!loading && !error && !searchText && page === 1 && recommendedCases.length > 0 && (
+        <div style={{ marginBottom: 32 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+            <Title level={4} style={{ margin: 0 }}>为你推荐</Title>
+            {recReason === 'personalized' && (
+              <span style={{ fontSize: 12, color: '#999', background: '#f5f5f5', padding: '2px 8px', borderRadius: 4 }}>
+                基于你的浏览偏好
+              </span>
+            )}
+          </div>
+          <Row gutter={[16, 16]}>
+            {recommendedCases.map((item) => (
+              <Col xs={12} sm={8} lg={4} key={`rec-${item.id}`}>
+                <Card
+                  hoverable
+                  styles={{ body: { padding: 12 } }}
+                  onClick={() => navigate(`/case/${item.id}`)}
+                  style={{ cursor: 'pointer', border: '1px solid #e6f4ff' }}
+                  cover={
+                    <div
+                      style={{
+                        height: 200,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: `#${item.coverColor || '0066cc'}`,
+                        color: 'white',
+                        fontSize: 18,
+                        fontWeight: 'bold',
+                      }}
+                    >
+                      {item.title.slice(0, 4)}
+                    </div>
+                  }
+                >
+                  <Card.Meta
+                    title={<span style={{ fontSize: 14 }}>{item.title}</span>}
+                    description={
+                      <Space size={8}>
+                        <EyeOutlined style={{ fontSize: 12 }} />
+                        <span style={{ fontSize: 12 }}>{item.views}</span>
+                        <LikeOutlined style={{ fontSize: 12, marginLeft: 8 }} />
+                        <span style={{ fontSize: 12 }}>{item.likes}</span>
+                      </Space>
+                    }
+                  />
+                </Card>
+              </Col>
+            ))}
+          </Row>
+          <Divider style={{ margin: '24px 0 8px' }} />
         </div>
       )}
 
@@ -290,14 +393,18 @@ const Home: React.FC = () => {
       )}
 
       {/* 案例卡片列表 */}
-      {!loading && !error && cases.length > 0 && (
+      {!loading && !error && cases.length > 0 && (() => {
+        const recIds = new Set(recommendedCases.map(c => c.id));
+        const displayCases = cases.filter(c => !recIds.has(c.id));
+        if (displayCases.length === 0) return null;
+        return (
         <>
           <Row gutter={[16, 16]}>
-            {cases.map((item) => (
+            {displayCases.map((item) => (
               <Col xs={12} sm={8} lg={4} key={item.id}>
                 <Card
                   hoverable
-                  bodyStyle={{ padding: 12 }}
+                  styles={{ body: { padding: 12 } }}
                   onClick={() => navigate(`/case/${item.id}`)}
                   style={{ cursor: 'pointer' }}
                   cover={
@@ -343,7 +450,7 @@ const Home: React.FC = () => {
                     title={<span style={{ fontSize: 13 }}>{item.title}</span>}
                     description={
                       <div>
-                        <Text type="secondary" style={{ fontSize: 11 }} ellipsis={{ rows: 2 }}>
+                        <Text type="secondary" style={{ fontSize: 11 }} ellipsis>
                           {item.description}
                         </Text>
                         <div style={{ marginTop: 6 }}>
@@ -391,7 +498,7 @@ const Home: React.FC = () => {
             </div>
           )}
         </>
-      )}
+      )})()}
     </div>
   );
 

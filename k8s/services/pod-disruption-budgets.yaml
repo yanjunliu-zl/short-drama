@@ -1,0 +1,79 @@
+# Pod Disruption Budgets — ensure minimum availability during voluntary disruptions
+# (node drains, rolling updates, etc.)
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: user-service-pdb
+  namespace: shortdrama
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: user-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: content-service-pdb
+  namespace: shortdrama
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: content-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: script-service-pdb
+  namespace: shortdrama
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: script-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: storyboard-service-pdb
+  namespace: shortdrama
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: storyboard-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: llmhua-service-pdb
+  namespace: shortdrama
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: llmhua-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: video-service-pdb
+  namespace: shortdrama
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: video-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: video-worker-pdb
+  namespace: shortdrama
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: video-worker

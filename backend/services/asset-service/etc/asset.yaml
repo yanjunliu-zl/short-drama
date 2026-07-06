@@ -30,8 +30,8 @@ Database:
   User: admin
   Password: admin123
   DBName: shortdrama
-  MaxOpenConns: 100
-  MaxIdleConns: 20
+  MaxOpenConns: 20   # Per-pod
+  MaxIdleConns: 10
   ConnMaxLifetime: 3600
 
 # Redis配置
@@ -39,9 +39,9 @@ Redis:
   Host: redis
   Port: 6379
   Password: ""
-  DB: 0
-  PoolSize: 100
-  MinIdleConns: 10
+  DB: 8
+  PoolSize: 50    # Per-pod
+  MinIdleConns: 5
 
 # RabbitMQ配置 (可选)
 RabbitMQ:
@@ -51,11 +51,13 @@ RabbitMQ:
   Password: admin123
   VHost: /
 
-# 服务发现
+# 服务发现 - Consul用于集群服务注册与发现
 Consul:
   Host: consul
   Port: 8500
   Token: ""
+  Enabled: true
+  Datacenter: dc1
 
 # JWT配置 (用于验证用户)
 JWT:

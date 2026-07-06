@@ -5,7 +5,8 @@ go 1.21
 require (
 	github.com/minio/minio-go/v7 v7.0.70
 	github.com/zeromicro/go-zero v1.6.0
-// github.com/zeromicro/zero-contrib/zrpc/registry/consul v0.0.0-20231026134313-9b883d63c97d
+short-drama-platform/shared v0.0.0
+	// github.com/zeromicro/zero-contrib/zrpc/registry/consul v0.0.0-20231026134313-9b883d63c97d
 )
 
 require (
@@ -60,3 +61,5 @@ require (
 	google.golang.org/protobuf v1.31.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
+
+replace short-drama-platform/shared => ../shared/golang

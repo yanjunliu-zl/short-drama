@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"short-drama-platform/content-service/internal/repository"
+	"short-drama-platform/content-service/internal/search"
 	"short-drama-platform/content-service/internal/types"
 	"short-drama-platform/content-service/model"
 	"strings"
@@ -15,13 +16,14 @@ import (
 
 // ContentLogic 内容业务逻辑
 type ContentLogic struct {
-	repo  repository.ContentRepository
-	redis *redis.Redis
+	repo     repository.ContentRepository
+	redis    *redis.Redis
+	esClient *search.ESClient
 }
 
 // NewContentLogic 创建内容业务逻辑实例
-func NewContentLogic(repo repository.ContentRepository, redisClient *redis.Redis) types.ContentService {
-	return &ContentLogic{repo: repo, redis: redisClient}
+func NewContentLogic(repo repository.ContentRepository, redisClient *redis.Redis, esClient *search.ESClient) types.ContentService {
+	return &ContentLogic{repo: repo, redis: redisClient, esClient: esClient}
 }
 
 // ==============================
@@ -200,11 +202,11 @@ func (l *ContentLogic) GetScriptOutline(ctx context.Context, req *types.GetScrip
 // ==============================
 
 func (l *ContentLogic) ListCases(ctx context.Context, req *types.ListCasesRequest) (*types.ListCasesResponse, error) {
-	cases, err := l.repo.FindCases(ctx, req.Tag, req.SortBy, req.Order, req.Page, req.PageSize)
+	cases, err := l.repo.FindCases(ctx, req.Search, req.Tag, req.SortBy, req.Order, req.Page, req.PageSize)
 	if err != nil {
 		return nil, fmt.Errorf("list cases: %w", err)
 	}
-	total, _ := l.repo.CountCases(ctx, req.Tag)
+	total, _ := l.repo.CountCases(ctx, req.Search, req.Tag)
 
 	result := make([]types.Case, 0, len(cases))
 	for _, c := range cases {
@@ -282,6 +284,46 @@ func (l *ContentLogic) RecordCaseLike(ctx context.Context, req *types.CaseAction
 
 func (l *ContentLogic) RecordCaseShare(ctx context.Context, req *types.CaseActionRequest) error {
 	return l.repo.IncrementCaseShare(ctx, req.ID)
+}
+
+func (l *ContentLogic) RecommendCases(ctx context.Context, req *types.RecommendCasesRequest) (*types.RecommendCasesResponse, error) {
+	reason := "popular"
+
+	// Step 1: Get tags the user has interacted with
+	tags, _ := l.repo.FindUserInteractedTags(ctx, req.UserID)
+
+	// Step 2: Get cases the user has already seen
+	var excludeIDs []string
+	// (In a full implementation, query user_case_interactions for viewed case IDs)
+
+	// Step 3: Try personalized recommendation
+	var cases []*model.Case
+	var err error
+	if len(tags) > 0 {
+		cases, err = l.repo.FindRecommendedCases(ctx, tags, excludeIDs, req.Limit)
+		if err == nil && len(cases) > 0 {
+			reason = "personalized"
+		}
+	}
+
+	// Step 4: Fallback to popular if no personalized results or error
+	if len(cases) == 0 {
+		cases, err = l.repo.FindCases(ctx, "", "", "likes", "desc", 1, req.Limit)
+		if err != nil {
+			return nil, fmt.Errorf("recommend cases: %w", err)
+		}
+	}
+
+	result := make([]types.Case, 0, len(cases))
+	for _, c := range cases {
+		result = append(result, *l.caseToType(c))
+	}
+
+	return &types.RecommendCasesResponse{
+		Cases:  result,
+		Reason: reason,
+		Total:  len(result),
+	}, nil
 }
 
 // ==============================
@@ -531,4 +573,105 @@ func (l *ContentLogic) GetPipelineState(ctx context.Context, req *types.GetPipel
 		WorkID: req.WorkID,
 		Data:   &state,
 	}, nil
+}
+
+// ==============================
+// ES 搜索
+// ==============================
+
+func (l *ContentLogic) SearchCases(ctx context.Context, req *types.SearchRequest) (*types.SearchResponse, error) {
+	if l.esClient == nil {
+		return nil, fmt.Errorf("elasticsearch not available")
+	}
+
+	esReq := &search.SearchRequest{
+		Query:    req.Q,
+		Tags:     req.Tags,
+		Genre:    req.Genre,
+		Author:   req.Author,
+		Page:     req.Page,
+		PageSize: req.PageSize,
+	}
+	result, err := l.esClient.SearchCases(ctx, esReq)
+	if err != nil {
+		return nil, fmt.Errorf("es search: %w", err)
+	}
+
+	return &types.SearchResponse{
+		Hits:   l.convertSearchHits(result.Hits),
+		Total:  result.Total,
+		Page:   result.Page,
+		Pages:  result.Pages,
+		Aggs:   result.Aggs,
+		TookMs: result.TookMs,
+	}, nil
+}
+
+func (l *ContentLogic) convertSearchHits(hits []search.SearchHit) []types.SearchHit {
+	result := make([]types.SearchHit, len(hits))
+	for i, h := range hits {
+		result[i] = types.SearchHit{
+			ID:          h.ID,
+			Title:       h.Title,
+			Description: h.Description,
+			Author:      h.Author,
+			Tags:        h.Tags,
+			Genre:       h.Genre,
+			ViewCount:   h.ViewCount,
+			LikeCount:   h.LikeCount,
+			CoverColor:  h.CoverColor,
+			CreatedAt:   h.CreatedAt,
+			UpdatedAt:   h.UpdatedAt,
+			Highlight:   h.Highlight,
+			Score:       h.Score,
+		}
+	}
+	return result
+}
+
+func (l *ContentLogic) SyncCasesToES(ctx context.Context) error {
+	if l.esClient == nil {
+		return fmt.Errorf("elasticsearch not available")
+	}
+
+	cases, err := l.repo.FindCases(ctx, "", "", "", "", 1, 1000)
+	if err != nil {
+		return fmt.Errorf("fetch cases for sync: %w", err)
+	}
+
+	docs := make([]*search.CaseDocument, 0, len(cases))
+	for _, c := range cases {
+		tags := []string{}
+		if c.Tags != "" {
+			for _, t := range strings.Split(c.Tags, ",") {
+				t = strings.TrimSpace(t)
+				if t != "" {
+					tags = append(tags, t)
+				}
+			}
+		}
+		docs = append(docs, &search.CaseDocument{
+			ID:          c.ID,
+			Title:       c.Title,
+			Description: c.Description,
+			Author:      c.Author,
+			Tags:        tags,
+			Genre:       c.Genre,
+			ViewCount:   c.ViewCount,
+			LikeCount:   c.LikeCount,
+			ShareCount:  c.ShareCount,
+			Status:      c.Status,
+			CoverURL:    c.CoverURL,
+			UserID:      c.UserID,
+			CreatedAt:   c.CreatedAt.Format("2006-01-02 15:04:05"),
+			UpdatedAt:   c.UpdatedAt.Format("2006-01-02 15:04:05"),
+		})
+	}
+
+	count, err := l.esClient.BulkIndex(ctx, docs)
+	if err != nil {
+		return fmt.Errorf("es bulk index: %w", err)
+	}
+	logx.Infof("ES sync: indexed %d/%d cases", count, len(docs))
+	return nil
 }

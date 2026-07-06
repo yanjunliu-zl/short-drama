@@ -18,14 +18,15 @@ type Config struct {
 }
 
 type DatabaseConfig struct {
-	Host         string
-	Port         int
-	User         string
-	Password     string
-	DBName       string
-	MaxOpenConns int
-	MaxIdleConns int
+	Host            string
+	Port            int
+	User            string
+	Password        string
+	DBName          string
+	MaxOpenConns    int
+	MaxIdleConns    int
 	ConnMaxLifetime int
+	ReadHosts       []string `json:",optional"` // P1: MySQL read replica hosts
 }
 
 type RedisConfig struct {

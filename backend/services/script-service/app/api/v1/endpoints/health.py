@@ -49,13 +49,5 @@ async def detailed_health_check():
     }
 
 
-@router.get("/metrics")
-async def metrics():
-    """Prometheus指标端点"""
-    # 这里可以添加自定义的业务指标
-    # 实际应用中应该使用prometheus_client
-    return {
-        "requests_total": 0,  # 示例指标
-        "errors_total": 0,
-        "processing_time_avg": 0,
-    }
+# Prometheus 指标由 prometheus_client 中间件自动提供，不在此处定义
+# 指标暴露在: /metrics (由 setup_metrics 中间件处理)

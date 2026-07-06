@@ -7,6 +7,7 @@ import (
 	"short-drama-platform/user-service/internal/logic"
 	"short-drama-platform/user-service/internal/repository"
 	"short-drama-platform/user-service/internal/types"
+	dbshared "short-drama-platform/shared/db"
 
 	"github.com/zeromicro/go-zero/core/stores/redis"
 	"github.com/zeromicro/go-zero/core/stores/sqlx"
@@ -17,6 +18,7 @@ type ServiceContext struct {
 	UserRepo    repository.UserRepository
 	UserService types.UserService
 	Redis       *redis.Redis
+	DBResolver  *dbshared.DBResolver // P1: Read/write splitting
 	// 可以添加其他依赖，如RabbitMQ客户端、Consul客户端等
 }
 

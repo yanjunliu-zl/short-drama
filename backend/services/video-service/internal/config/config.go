@@ -28,6 +28,7 @@ type DatabaseConfig struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime int
+	ReadHosts       []string `json:",optional"` // P1: MySQL read replica hosts
 }
 
 type RedisConfig struct {

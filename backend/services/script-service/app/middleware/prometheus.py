@@ -28,6 +28,22 @@ logger = logging.getLogger(__name__)
 registry = CollectorRegistry()
 
 # 定义指标
+
+# ── AI 用量业务指标 ──
+script_generation_tokens = Counter(
+    'script_generation_tokens_total',
+    'Total LLM tokens consumed by script generation',
+    ['token_type', 'service'],
+    registry=registry,
+)
+script_generation_cost = Counter(
+    'script_generation_cost_estimate_total',
+    'Total estimated cost of script generation (CNY)',
+    ['service'],
+    registry=registry,
+)
+
+# ── HTTP 和应用指标 ──
 REQUEST_COUNT = Counter(
     "http_requests_total",
     "Total number of HTTP requests",
@@ -131,9 +147,14 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
                 method=method, endpoint=endpoint, status_code=response.status_code
             ).inc()
             REQUEST_DURATION.labels(method=method, endpoint=endpoint).observe(process_time)
-            RESPONSE_SIZE.labels(method=method, endpoint=endpoint).observe(
-                len(response.body)
-            )
+            # StreamingResponse has no .body; use Content-Length header or 0
+            try:
+                resp_body_len = len(response.body) if hasattr(response, 'body') else (
+                    int(response.headers.get('content-length', 0)) if hasattr(response, 'headers') else 0
+                )
+            except Exception:
+                resp_body_len = 0
+            RESPONSE_SIZE.labels(method=method, endpoint=endpoint).observe(resp_body_len)
             INPROGRESS_REQUESTS.labels(method=method, endpoint=endpoint).dec()
 
             # 设置响应头

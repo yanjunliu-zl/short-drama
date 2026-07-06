@@ -10,19 +10,10 @@ Log:
   StackTrace: false
   DisableCaller: false
 
-# 性能监控
-Prometheus:
-  Host: 0.0.0.0
+# Prometheus 指标
+DevServer:
   Port: 9085
-  Path: /metrics
-
-# 链路追踪
-Telemetry:
-  Name: final-cut-service
-  Endpoint: http://jaeger:14268/api/traces
-  Sampler: 1.0
-  Batcher: jaeger
-  TraceID: final-cut-service
+  EnableMetrics: true
 
 # 数据库配置 - 支持集群部署的连接池优化
 Database:
@@ -31,19 +22,24 @@ Database:
   User: admin
   Password: admin123
   DBName: shortdrama
-  MaxOpenConns: 100
-  MaxIdleConns: 25
+  MaxOpenConns: 20   # Per-pod: 10 pods × 20 = 200 total
+  MaxIdleConns: 10
   ConnMaxLifetime: 3600
   MaxLifetime: 7200
+  # P1: MySQL read replica hosts (uncomment when mysql-read service is deployed)
+  # ReadHosts:
+  #   - mysql-read-0.mysql-read
+  #   - mysql-read-1.mysql-read
+  #   - mysql-read-2.mysql-read
 
 # Redis配置 - 支持单机和集群模式
 Redis:
   Host: redis
   Port: 6379
   Password: ""
-  DB: 0
-  PoolSize: 200
-  MinIdleConns: 20
+  DB: 5
+  PoolSize: 50    # Per-pod: 10 pods × 50 = 500
+  MinIdleConns: 5
   ClusterEnabled: false
   ClusterNodes:
     - redis-node1:6379
@@ -68,7 +64,7 @@ RabbitMQ:
   User: admin
   Password: admin123
   VHost: /
-  Heartbeat: 30s
+  Heartbeat: 30
   ChannelMax: 65535
 
 # 服务发现 - Consul用于集群服务注册与发现
@@ -91,17 +87,11 @@ CircuitBreaker:
   ErrorRate: 0.5
 
 # 重试配置
-Retry:
+RetryConfig:
   MaxRetries: 3
   InitialDelay: 500ms
   MaxDelay: 5s
   BackoffFactor: 2.0
-
-# 超时配置
-Timeout:
-  RequestTimeout: 30s
-  ResponseTimeout: 60s
-  IdleTimeout: 120s
 
 # 健康检查
 HealthCheck:
@@ -111,17 +101,17 @@ HealthCheck:
 # AI服务配置
 AIService:
   Endpoint: http://llmhua-service:8000
-  Timeout: 60s
+  Timeout: 60
 
 # 剧本服务配置
 ScriptService:
   Endpoint: http://script-service:8000
-  Timeout: 30s
+  Timeout: 30
 
 # 视频服务配置
 VideoService:
   Endpoint: http://video-service:8081
-  Timeout: 30s
+  Timeout: 30
 
 # 存储配置 (MinIO / Ceph / S3 兼容)
 Storage:

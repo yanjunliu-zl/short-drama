@@ -1,6 +1,7 @@
 """AI 用量跟踪 — 上报到 content-service 持久化"""
 import logging
 import os
+import re
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -16,8 +17,23 @@ SEEDANCE_IMAGE_PRICE = 0.10   # RMB per image
 SEEDANCE_VIDEO_PRICE = 0.50   # RMB per video second (avg 5s → 2.5 RMB)
 
 
+def estimate_tokens(text: str) -> int:
+    """Estimate token count from text.
+    Chinese: ~1 char ≈ 1.5 tokens. English: ~1 char ≈ 0.25 tokens.
+    Returns a reasonable estimate for mixed Chinese/English text.
+    """
+    if not text:
+        return 0
+    # Count Chinese characters (CJK range)
+    cjk = len(re.findall(r'[一-鿿㐀-䶿豈-﫿]', text))
+    other = len(text) - cjk
+    # Chinese ≈ 1.5 tokens/char, other ≈ 0.3 tokens/char
+    return int(cjk * 1.5 + other * 0.3)
+
+
 async def track_llm_usage(user_id: str, model_name: str, tokens_in: int, tokens_out: int,
-                          duration_ms: int = 0, endpoint: str = "", service_name: str = ""):
+                          duration_ms: int = 0, endpoint: str = "", service_name: str = "",
+                          call_count: int = 1):
     """跟踪 LLM 调用用量"""
     if not user_id:
         user_id = os.getenv("DEFAULT_USER_ID", "anonymous")
@@ -33,12 +49,21 @@ async def track_llm_usage(user_id: str, model_name: str, tokens_in: int, tokens_
         "modelName": model_name,
         "tokensIn": tokens_in,
         "tokensOut": tokens_out,
-        "callCount": 1,
+        "callCount": call_count,
         "durationMs": duration_ms,
         "endpoint": endpoint,
         "serviceName": service_name,
         "costEstimate": round(cost, 4),
     }
+
+    # Emit Prometheus metrics (imported from middleware for registry consistency)
+    try:
+        from app.middleware.prometheus import script_generation_tokens, script_generation_cost
+        script_generation_tokens.labels(token_type='input', service=service_name).inc(tokens_in)
+        script_generation_tokens.labels(token_type='output', service=service_name).inc(tokens_out)
+        script_generation_cost.labels(service=service_name).inc(cost)
+    except Exception:
+        pass
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:

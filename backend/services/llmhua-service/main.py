@@ -11,6 +11,7 @@ from app.core.logging import setup_logging
 from app.core.tracing import init_tracing, instrument_fastapi
 from app.services.seedance_service import get_seedance_service, close_seedance_service
 from app.services.storage_service import get_storage_service, close_storage_service
+from app.services.task_store import get_task_store, close_task_store
 from app.middleware.prometheus import setup_metrics
 
 # 设置日志
@@ -59,6 +60,7 @@ async def startup_event():
     await init_db()
     await get_seedance_service()
     await get_storage_service()
+    await get_task_store()
     logger.info("Service started successfully")
 
 
@@ -67,6 +69,7 @@ async def shutdown_event():
     logger.info("Shutting down llmhua video generation service...")
     await close_seedance_service()
     await close_storage_service()
+    await close_task_store()
     from app.core.database import close_db
     await close_db()
     logger.info("Service shutdown completed")

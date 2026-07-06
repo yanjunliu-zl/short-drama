@@ -29,4 +29,23 @@ export const caseService = {
   recordShare: async (id: string): Promise<void> => {
     await api.post(`/v1/cases/${id}/share`)
   },
+
+  /** ES 全文搜索 (smartcn分词 + 高亮 + 聚合) */
+  search: async (params: { q?: string; tags?: string[]; genre?: string; page?: number; pageSize?: number }): Promise<any> => {
+    const response = await api.get<any>('/v1/cases/search', { params })
+    return response.data
+  },
+
+  /** 获取个性化推荐案例 (独立推荐微服务) */
+  getRecommended: async (userId?: string, limit = 6): Promise<any> => {
+    const response = await api.get<any>('/v1/recommendations/recommend', {
+      params: { user_id: userId || undefined, limit },
+    })
+    // 适配新接口: { items, reason, total } → { cases, reason, total }
+    return {
+      cases: response.data.items || [],
+      reason: response.data.reason || 'popular',
+      total: response.data.total || 0,
+    }
+  },
 }

@@ -50,6 +50,7 @@ const Video: React.FC = () => {
   const [clusterMode, setClusterMode] = useState(true);
   const [genAll, setGenAll] = useState(false);
   const [genProgress, setGenProgress] = useState(0);
+  const [quality, setQuality] = useState('480P');
   const [activeTab, setActiveTab] = useState('edit');
 
   const fmt = (t: number) => { const m = Math.floor(t / 60), s = Math.floor(t % 60); return `${m}:${s.toString().padStart(2, '0')}`; };
@@ -157,7 +158,7 @@ const Video: React.FC = () => {
       <div style={{ width: '15%', minWidth: 160, background: '#f9fafb', borderRight: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ padding: 12, borderBottom: '1px solid #e5e7eb', background: '#fff' }}>
           <Text strong style={{ fontSize: 13 }}>集数列表</Text>
-          <Text style={{ color: '#6b7280', fontSize: 11, marginLeft: 4 }}>共 {episodes.length} 集</Text>
+          <Text style={{ color: '#6b7280', fontSize: 11, marginLeft: 4 }}>共 {episodes.length} 集 · {videoTasks.length} 镜头</Text>
         </div>
         <div style={{ flex: 1, overflow: 'auto', padding: 4 }}>
           {episodes.map(ep => {
@@ -199,12 +200,10 @@ const Video: React.FC = () => {
           <div style={{ background: '#fff', borderRadius: 8, padding: 12, border: '1px solid #f0f0f0', marginBottom: 8 }}>
             <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center' }}><Text style={{ width: 80, color: '#111', fontSize: 13, flexShrink: 0 }}>视觉风格</Text><Select value={visualStyle} onChange={setVisualStyle} style={{ flex: 1 }} options={['写实', '2D吉卜力动画', '3D国风', '日漫'].map(v => ({ value: v, label: v }))} /></div>
             <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center' }}><Text style={{ width: 80, color: '#111', fontSize: 13, flexShrink: 0 }}>摄影风格</Text><Select value={photoStyle} onChange={setPhotoStyle} style={{ flex: 1 }} options={['经典电影', '纪实风格', '黑色电影'].map(v => ({ value: v, label: v }))} /></div>
-            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center' }}><Text style={{ width: 80, color: '#111', fontSize: 13, flexShrink: 0 }}>画面比例</Text><Radio.Group value={aspectRatio} onChange={e => setAspectRatio(e.target.value)} size="small"><Radio.Button value="landscape">横屏</Radio.Button><Radio.Button value="portrait">竖屏</Radio.Button><Radio.Button value="hd">高清(2K)</Radio.Button></Radio.Group></div>
-            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}><Text style={{ color: '#111', fontSize: 13 }}>画质</Text><Button size="small" type="primary" ghost>标准(480P)</Button><Text style={{ color: '#111', fontSize: 13, marginLeft: 8 }}>生成方式</Text><Button size="small" onClick={() => setGenMode('single')}>单图生成</Button><Button size="small" type="primary" style={{ background: genMode === 'merge' ? '#2563eb' : undefined, borderColor: '#2563eb' }} onClick={() => setGenMode('merge')}>合并生成</Button></div>
+            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center' }}><Text style={{ width: 80, color: '#111', fontSize: 13, flexShrink: 0 }}>画面比例</Text><Radio.Group value={aspectRatio} onChange={e => setAspectRatio(e.target.value)} size="small"><Radio.Button value="landscape">横屏</Radio.Button><Radio.Button value="portrait">竖屏</Radio.Button></Radio.Group></div>
+            <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}><Text style={{ color: '#111', fontSize: 13 }}>画质</Text><Radio.Group value={quality} onChange={e => setQuality(e.target.value)} size="small"><Radio.Button value="480P">标准(480P)</Radio.Button><Radio.Button value="720P">720P</Radio.Button><Radio.Button value="1080P">1080P</Radio.Button></Radio.Group></div>
             <Text style={{ color: '#9ca3af', fontSize: 11, display: 'block', marginBottom: 6 }}>(best quality, masterpiece, 8k, high detailed:1.2), (Studio Ghibli style:1...</Text>
             <div style={{ marginBottom: 10 }}><Text style={{ color: '#111', fontSize: 13, marginRight: 8 }}>首/尾帧</Text><Radio.Group value={frameMode} onChange={e => setFrameMode(e.target.value)} size="small"><Radio.Button value="first">仅首帧</Radio.Button><Radio.Button value="last">仅尾帧</Radio.Button><Radio.Button value="both">首+尾</Radio.Button></Radio.Group></div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}><Select size="small" value="cluster" style={{ flex: 1 }} options={[{ value: 'cluster', label: 'Cluster (聚类去)' }]} /><Button size="small" type="default" ghost style={{ borderColor: '#2563eb', color: '#2563eb' }}>范例图开</Button></div>
-            <Button type="primary" block icon={<StarOutlined />} onClick={handleGenAll} loading={genAll} style={{ background: '#111', borderColor: '#111', borderRadius: 8, height: 40, fontSize: 14 }}>{genAll ? `生成中 ${genProgress}%` : '执行合并生成'}</Button>
           </div>
 
           {/* Selected Shot Card */}

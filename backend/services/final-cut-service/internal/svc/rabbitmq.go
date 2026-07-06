@@ -14,7 +14,7 @@ type RabbitMQClient struct {
 }
 
 func NewRabbitMQClient(cfg config.RabbitMQConfig) RabbitMQClient {
-	conn, err := amqp.Dial(fmt.Sprintf("%s:%d", cfg.Host, cfg.Port))
+	conn, err := amqp.Dial(fmt.Sprintf("amqp://%s:%s@%s:%d/%s", cfg.User, cfg.Password, cfg.Host, cfg.Port, cfg.VHost))
 	if err != nil {
 		panic(err)
 	}
@@ -33,13 +33,17 @@ func NewRabbitMQClient(cfg config.RabbitMQConfig) RabbitMQClient {
 }
 
 func (r *RabbitMQClient) Publish(queueName string, body []byte) error {
+	// P1: Quorum queue — highly available, Raft-based, survives node failures
+	args := amqp.Table{
+		"x-queue-type": "quorum",
+	}
 	q, err := r.channel.QueueDeclare(
 		queueName,
-		true,
-		false,
-		false,
-		false,
-		nil,
+		true,  // durable
+		false, // autoDelete
+		false, // exclusive
+		false, // noWait
+		args,
 	)
 	if err != nil {
 		return err
@@ -58,13 +62,16 @@ func (r *RabbitMQClient) Publish(queueName string, body []byte) error {
 }
 
 func (r *RabbitMQClient) Consume(queueName string, consumerName string) (<-chan amqp.Delivery, error) {
+	args := amqp.Table{
+		"x-queue-type": "quorum",
+	}
 	q, err := r.channel.QueueDeclare(
 		queueName,
 		true,
 		false,
 		false,
 		false,
-		nil,
+		args,
 	)
 	if err != nil {
 		return nil, err
@@ -73,10 +80,10 @@ func (r *RabbitMQClient) Consume(queueName string, consumerName string) (<-chan 
 	return r.channel.Consume(
 		q.Name,
 		consumerName,
-		true,
-		false,
-		false,
-		false,
+		true,  // autoAck
+		false, // exclusive
+		false, // noLocal
+		false, // noWait
 		nil,
 	)
 }

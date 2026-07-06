@@ -27,6 +27,7 @@ export interface CaseListResponse {
 export interface CaseListParams {
   page?: number
   pageSize?: number
+  search?: string
   tag?: string
   sortBy?: 'views' | 'likes' | 'createdAt'
   order?: 'asc' | 'desc'

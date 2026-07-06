@@ -43,10 +43,21 @@ WORKDIR /app
 
 # 从构建阶段复制Python包
 COPY --from=builder /root/.local /home/appuser/.local
-ENV PATH=/home/appuser/.local/bin:$PATH
+ENV PATH=/home/appuser/.local/bin:$PATH \
+    PYTHONPATH=/home/appuser/.local/lib/python3.10/site-packages
 
 # 复制应用代码
 COPY . .
+
+# 修复 langchain_openai + openai 兼容性
+# 1. 打源代码补丁
+RUN python3 patch_openai.py
+# 2. 删除所有 .pyc 缓存 (确保 Python 从补丁后的源码重新编译)
+RUN find /home/appuser/.local/lib/python3.10/site-packages/openai -name '*.pyc' -delete && \
+    find /home/appuser/.local/lib/python3.10/site-packages/langsmith -name '*.pyc' -delete 2>/dev/null || true
+# 3. 修正权限以便运行时补丁也能工作
+RUN chown -R appuser:appuser /home/appuser/.local/lib/python3.10/site-packages/openai && \
+    chown -R appuser:appuser /home/appuser/.local/lib/python3.10/site-packages/langsmith 2>/dev/null || true
 
 # 设置权限
 RUN chown -R appuser:appuser /app

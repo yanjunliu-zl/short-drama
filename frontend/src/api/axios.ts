@@ -107,7 +107,15 @@ axiosInstance.interceptors.response.use(
 
     if (response) {
       const { status, data } = response
-      const msg = typeof data === 'string' ? data : data?.message
+      // Handle Pydantic validation errors (array) vs plain strings
+      let msg: string | undefined
+      if (typeof data === 'string') {
+        msg = data
+      } else if (data && Array.isArray(data.detail)) {
+        msg = (data.detail as any[]).map((e: any) => e.msg || e.type || JSON.stringify(e)).join('; ')
+      } else {
+        msg = data?.message || (typeof data?.detail === 'string' ? data.detail : undefined)
+      }
 
       switch (status) {
         case 400:

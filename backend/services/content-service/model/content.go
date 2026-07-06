@@ -62,6 +62,15 @@ type Work struct {
 	UpdatedAt    time.Time `db:"updated_at" json:"updatedAt"`
 }
 
+// UserCaseInteraction 用户案例交互记录 — 推荐系统数据源
+type UserCaseInteraction struct {
+	ID         int64     `db:"id" json:"id"`
+	UserID     string    `db:"user_id" json:"userId"`
+	CaseID     string    `db:"case_id" json:"caseId"`
+	ActionType string    `db:"action_type" json:"actionType"` // view, like, share
+	CreatedAt  time.Time `db:"created_at" json:"createdAt"`
+}
+
 // ScriptOutline 剧本大纲
 type ScriptOutline struct {
 	ID        string    `db:"id" json:"id"`

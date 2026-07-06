@@ -18,6 +18,7 @@ metadata:
   namespace: shortdrama
 spec:
   replicas: 2
+  minReadySeconds: 15
   selector:
     matchLabels:
       app: script-service
@@ -98,7 +99,7 @@ spec:
     kind: Deployment
     name: script-service
   minReplicas: 2
-  maxReplicas: 6
+  maxReplicas: 20
   metrics:
     - type: Resource
       resource:

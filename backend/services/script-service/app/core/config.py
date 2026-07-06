@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     DB_USER: str = os.getenv("DB_USER", "admin")
     DB_PASSWORD: str = os.getenv("DB_PASSWORD", "admin123")
     DB_NAME: str = os.getenv("DB_NAME", "shortdrama")
-    DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", 20))
-    DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", 10))
+    DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", 10))     # Per-pod: 10 pods × 10 = 100
+    DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", 5))
     DB_POOL_TIMEOUT: int = int(os.getenv("DB_POOL_TIMEOUT", 30))
     DB_POOL_RECYCLE: int = int(os.getenv("DB_POOL_RECYCLE", 3600))
 
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     REDIS_HOST: str = os.getenv("REDIS_HOST", "redis")
     REDIS_PORT: int = int(os.getenv("REDIS_PORT", 6379))
     REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD", None)
-    REDIS_DB: int = int(os.getenv("REDIS_DB", 0))
+    REDIS_DB: int = int(os.getenv("REDIS_DB", 2))
     REDIS_POOL_SIZE: int = int(os.getenv("REDIS_POOL_SIZE", 50))
     REDIS_CLUSTER_ENABLED: bool = os.getenv("REDIS_CLUSTER_ENABLED", "False").lower() == "true"
     REDIS_CLUSTER_NODES: List[str] = [
@@ -148,6 +148,15 @@ class Settings(BaseSettings):
     GRAPHRAG_NEO4J_USERNAME: str = os.getenv("GRAPHRAG_NEO4J_USERNAME", "neo4j")
     GRAPHRAG_NEO4J_PASSWORD: str = os.getenv("GRAPHRAG_NEO4J_PASSWORD", "password")
     GRAPHRAG_VECTOR_DB: str = os.getenv("GRAPHRAG_VECTOR_DB", "memory")  # memory, chroma, pinecone
+
+    # Novel2Script V2 — RAG-based pipeline
+    N2S_V2_EMBEDDING_MODEL: str = os.getenv("N2S_V2_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    N2S_V2_CHUNK_SIZE: int = int(os.getenv("N2S_V2_CHUNK_SIZE", 4096))
+    N2S_V2_CHUNK_OVERLAP: int = int(os.getenv("N2S_V2_CHUNK_OVERLAP", 512))
+    N2S_V2_TOP_K: int = int(os.getenv("N2S_V2_TOP_K", 5))
+    N2S_V2_DEFAULT_STYLE: str = os.getenv("N2S_V2_DEFAULT_STYLE", "ancient")
+    N2S_V2_OUTPUT_DIR: str = os.getenv("N2S_V2_OUTPUT_DIR", "/app/data/output")
+    N2S_V2_LLM_PROVIDER: str = os.getenv("N2S_V2_LLM_PROVIDER", "deepseek")
 
     class Config:
         case_sensitive = True

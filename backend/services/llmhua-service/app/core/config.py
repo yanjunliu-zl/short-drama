@@ -47,12 +47,12 @@ class Settings(BaseSettings):
     REDIS_HOST: str = os.getenv("REDIS_HOST", "redis")
     REDIS_PORT: int = int(os.getenv("REDIS_PORT", 6379))
     REDIS_PASSWORD: Optional[str] = os.getenv("REDIS_PASSWORD", None)
-    REDIS_DB: int = int(os.getenv("REDIS_DB", 0))
+    REDIS_DB: int = int(os.getenv("REDIS_DB", 4))
 
     # Seedance/Seedream服务配置 (火山引擎 Ark API)
     SEEDANCE_API_URL: str = os.getenv("SEEDANCE_API_URL", "https://ark.cn-beijing.volces.com/api/v3")
     SEEDANCE_API_KEY: Optional[str] = os.getenv("SEEDANCE_API_KEY", None)
-    SEEDANCE_MODEL: str = os.getenv("SEEDANCE_MODEL", "doubao-seedream-4-5-251128")
+    SEEDANCE_IMAGE_MODEL: str = os.getenv("SEEDANCE_IMAGE_MODEL", "doubao-seedream-4-5-251128")
     SEEDANCE_VIDEO_MODEL: str = os.getenv("SEEDANCE_VIDEO_MODEL", "doubao-seedance-2-0-260128")
     SEEDANCE_TIMEOUT: int = int(os.getenv("SEEDANCE_TIMEOUT", 300))
 

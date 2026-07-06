@@ -34,13 +34,16 @@ type ContentRepository interface {
 	// 案例
 	CreateCase(ctx context.Context, c *model.Case) error
 	FindCaseByID(ctx context.Context, id string) (*model.Case, error)
-	FindCases(ctx context.Context, tag, sortBy, order string, page, pageSize int) ([]*model.Case, error)
-	CountCases(ctx context.Context, tag string) (int64, error)
+	FindCases(ctx context.Context, search, tag, sortBy, order string, page, pageSize int) ([]*model.Case, error)
+	CountCases(ctx context.Context, search, tag string) (int64, error)
 	UpdateCase(ctx context.Context, c *model.Case) error
 	DeleteCase(ctx context.Context, id string) error
 	IncrementCaseView(ctx context.Context, id string) error
 	IncrementCaseLike(ctx context.Context, id string) error
 	IncrementCaseShare(ctx context.Context, id string) error
+		RecordCaseInteraction(ctx context.Context, userID, caseID, actionType string) error
+		FindUserInteractedTags(ctx context.Context, userID string) ([]string, error)
+		FindRecommendedCases(ctx context.Context, tags []string, excludeIDs []string, limit int) ([]*model.Case, error)
 
 	// 作品
 	CreateWork(ctx context.Context, w *model.Work) error
@@ -278,9 +281,16 @@ func (r *mysqlContentRepository) FindCaseByID(ctx context.Context, id string) (*
 var findCasesSQL = `SELECT id, title, description, author, cover_url, demo_video_url, genre, tags, status, view_count, like_count, share_count, user_id, created_at, updated_at
 	FROM cases WHERE 1=1`
 
-func (r *mysqlContentRepository) FindCases(ctx context.Context, tag, sortBy, order string, page, pageSize int) ([]*model.Case, error) {
+func (r *mysqlContentRepository) FindCases(ctx context.Context, search, tag, sortBy, order string, page, pageSize int) ([]*model.Case, error) {
 	sql := findCasesSQL
 	args := []interface{}{}
+
+	// 搜索 — 标题和描述模糊匹配
+	if search != "" {
+		sql += " AND (title LIKE ? OR description LIKE ?)"
+		keyword := "%" + search + "%"
+		args = append(args, keyword, keyword)
+	}
 
 	// 标签筛选 (LIKE 匹配逗号分隔的 tags 字段)
 	if tag != "" {
@@ -317,9 +327,15 @@ func (r *mysqlContentRepository) FindCases(ctx context.Context, tag, sortBy, ord
 
 var countCasesSQL = `SELECT COUNT(*) FROM cases WHERE 1=1`
 
-func (r *mysqlContentRepository) CountCases(ctx context.Context, tag string) (int64, error) {
+func (r *mysqlContentRepository) CountCases(ctx context.Context, search, tag string) (int64, error) {
 	sql := countCasesSQL
 	args := []interface{}{}
+
+	if search != "" {
+		sql += " AND (title LIKE ? OR description LIKE ?)"
+		keyword := "%" + search + "%"
+		args = append(args, keyword, keyword)
+	}
 
 	if tag != "" {
 		sql += " AND FIND_IN_SET(?, tags) > 0"
@@ -485,4 +501,95 @@ func (r *mysqlContentRepository) GetPipelineData(ctx context.Context, workID str
 		return "", fmt.Errorf("get pipeline data for work %s: %w", workID, err)
 	}
 	return data, nil
+}
+
+// ==============================
+// 推荐系统
+// ==============================
+
+var recordInteractionSQL = `INSERT INTO user_case_interactions (user_id, case_id, action_type)
+	VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE created_at = NOW()`
+
+func (r *mysqlContentRepository) RecordCaseInteraction(ctx context.Context, userID, caseID, actionType string) error {
+	if userID == "" {
+		return nil // 未登录用户不记录
+	}
+	_, err := r.conn.ExecCtx(ctx, recordInteractionSQL, userID, caseID, actionType)
+	return err
+}
+
+var findUserInteractedTagsSQL = `SELECT DISTINCT REPLACE(REPLACE(SUBSTRING_INDEX(SUBSTRING_INDEX(c.tags, ',', n.n), ',', -1), ' ', ''), '\n', '')
+	FROM cases c
+	JOIN user_case_interactions uci ON c.id = uci.case_id
+	JOIN (
+		SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+		UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8
+		UNION ALL SELECT 9 UNION ALL SELECT 10
+	) n ON CHAR_LENGTH(c.tags) - CHAR_LENGTH(REPLACE(c.tags, ',', '')) >= n.n - 1
+	WHERE uci.user_id = ? AND uci.action_type IN ('view', 'like')
+	ORDER BY uci.created_at DESC
+	LIMIT 20`
+
+func (r *mysqlContentRepository) FindUserInteractedTags(ctx context.Context, userID string) ([]string, error) {
+	if userID == "" {
+		return nil, nil
+	}
+	var tags []string
+	err := r.conn.QueryRowsCtx(ctx, &tags, findUserInteractedTagsSQL, userID)
+	if err != nil {
+		return nil, fmt.Errorf("find user interacted tags: %w", err)
+	}
+	return tags, nil
+}
+
+func (r *mysqlContentRepository) FindRecommendedCases(ctx context.Context, tags []string, excludeIDs []string, limit int) ([]*model.Case, error) {
+	if limit <= 0 {
+		limit = 6
+	}
+
+	sql := `SELECT id, title, description, author, cover_url, demo_video_url,
+		genre, tags, status, view_count, like_count, share_count, user_id,
+		created_at, updated_at FROM cases WHERE status = 'published'`
+
+	args := []interface{}{}
+
+	// 排除已浏览的案例
+	if len(excludeIDs) > 0 {
+		sql += " AND id NOT IN ("
+		for i, id := range excludeIDs {
+			if i > 0 {
+				sql += ","
+			}
+			sql += "?"
+			args = append(args, id)
+		}
+		sql += ")"
+	}
+
+	// 标签匹配评分: 匹配标签越多得分越高
+	if len(tags) > 0 {
+		sql += " AND ("
+		for i, tag := range tags {
+			if i > 0 {
+				sql += " OR "
+			}
+			sql += "FIND_IN_SET(?, tags) > 0"
+			args = append(args, tag)
+		}
+		sql += ")"
+	}
+
+	// 评分排序: 标签匹配数 + 热度加权
+	// 简化：按like_count + view_count*0.1 降序
+	sql += " ORDER BY (like_count * 3 + view_count) DESC"
+
+	sql += " LIMIT ?"
+	args = append(args, limit)
+
+	var cases []*model.Case
+	err := r.conn.QueryRowsCtx(ctx, &cases, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("find recommended cases: %w", err)
+	}
+	return cases, nil
 }

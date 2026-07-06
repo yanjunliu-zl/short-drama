@@ -40,6 +40,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     '/video': 'storyboard_video',
     '/final-cut': 'final_video',
     '/payment': 'payment_center',
+    '/settings': 'settings_page',
   };
 
   // 菜单key到路由的映射
@@ -112,6 +113,12 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       icon: <UserOutlined />,
       label: '个人中心',
       onClick: () => navigate('/'),
+    },
+    {
+      key: 'settings',
+      icon: <SettingOutlined />,
+      label: '系统设置',
+      onClick: () => navigate('/settings'),
     },
     {
       key: 'payment',

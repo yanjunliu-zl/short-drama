@@ -1,3 +1,6 @@
+# 启动补丁: 修复 langchain_openai + openai SDK http_client 兼容性
+from app.patch_startup import apply_patch; apply_patch()
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -54,7 +57,9 @@ app.add_middleware(
     allowed_hosts=settings.ALLOWED_HOSTS,
 )
 
-# 添加 Prometheus 指标端点
+# 添加 Prometheus 指标端点 + HTTP 请求指标记录
+from app.middleware.prometheus import PrometheusMiddleware
+app.add_middleware(PrometheusMiddleware, app_name=settings.PROJECT_NAME)
 MetricsEndpointMiddleware(app, settings.PROJECT_NAME)
 
 # 健康检查端点

@@ -46,6 +46,11 @@ class Script(Base):
     workflow_metadata = Column(JSON, nullable=True, comment="工作流元数据")
     analysis_result = Column(JSON, nullable=True, comment="分析结果")
     has_optimized_version = Column(Boolean, default=False, comment="是否有优化版本")
+    pdf_path = Column(String(512), nullable=True, comment="PDF导出文件路径")
+    excel_path = Column(String(512), nullable=True, comment="Excel分镜导出文件路径")
+    character_graph = Column(JSON, nullable=True, comment="角色关系图谱")
+    pipeline_version = Column(String(10), nullable=True, default="v1", comment="Pipeline版本: v1/v2")
+    storyboard = Column(JSON, nullable=True, comment="分镜数据")
     error_message = Column(Text, nullable=True, comment="错误信息")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), comment="创建时间")
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), comment="更新时间")
@@ -74,6 +79,11 @@ class Script(Base):
             "workflow_metadata": self.workflow_metadata,
             "analysis_result": self.analysis_result,
             "has_optimized_version": self.has_optimized_version,
+            "pdf_path": self.pdf_path,
+            "excel_path": self.excel_path,
+            "character_graph": self.character_graph,
+            "pipeline_version": self.pipeline_version,
+            "storyboard": self.storyboard,
             "error_message": self.error_message,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,

@@ -7,6 +7,7 @@ python-multipart>=0.0.9
 sqlalchemy[asyncio]>=2.0.25
 aiomysql>=0.2.0
 pymysql>=1.1.0
+cryptography
 
 # HTTP client
 httpx>=0.26.0
@@ -34,3 +35,12 @@ opentelemetry-sdk>=1.21
 opentelemetry-exporter-otlp-proto-http>=1.21
 opentelemetry-instrumentation-fastapi>=0.42b0
 opentelemetry-instrumentation-httpx>=0.42b0
+
+# Redis cache (for TaskStore, model cache)
+redis>=5.0.0
+
+# P1-P2: gRPC + async messaging for internet-scale architecture
+grpcio>=1.64.0
+protobuf>=3.20.0,<6.0.0
+aio-pika>=9.4.0
+aiokafka>=0.10.0

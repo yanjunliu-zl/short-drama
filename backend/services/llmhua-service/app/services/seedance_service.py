@@ -37,7 +37,7 @@ class SeedanceService:
     def __init__(self):
         self.api_url = settings.SEEDANCE_API_URL
         self.api_key = settings.SEEDANCE_API_KEY
-        self.model = getattr(settings, 'SEEDANCE_MODEL', 'doubao-seedream-4-5-251128')
+        self.model = getattr(settings, 'SEEDANCE_IMAGE_MODEL', 'doubao-seedream-4-5-251128')
         self.video_model = getattr(settings, 'SEEDANCE_VIDEO_MODEL', 'doubao-seedance-2-0-260128')
         self.timeout = settings.SEEDANCE_TIMEOUT
         self._initialized = False

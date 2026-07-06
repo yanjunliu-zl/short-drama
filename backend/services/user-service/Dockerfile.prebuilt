@@ -1,0 +1,11 @@
+FROM python:3.10-slim
+RUN apt-get update && apt-get install -y ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
+RUN groupadd -g 1001 appuser && useradd -u 1001 -g appuser -s /bin/bash -m appuser
+WORKDIR /app
+COPY user-service /usr/local/bin/user-service
+COPY etc /app/etc
+USER appuser
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD python3 -c "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.send(b'GET /health HTTP/1.0\r\nHost:localhost\r\n\r\n'); exit(0 if b'200' in s.recv(256) else 1)"
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/user-service", "-f", "etc/user.yaml"]

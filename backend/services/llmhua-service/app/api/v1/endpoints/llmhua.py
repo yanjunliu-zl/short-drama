@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel, Field
 
 from app.services.usage_tracker import track_image_usage, track_video_usage
+from app.services.task_store import get_task_store
 import uuid
 import time
 
@@ -29,10 +30,6 @@ from app.services.seedance_service import get_seedance_service, close_seedance_s
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
-
-
-# ==================== 全局状态存储 ====================
-_llmhua_tasks: Dict[str, Dict[str, Any]] = {}
 
 
 # ==================== 图像生成端点 ====================
@@ -73,13 +70,14 @@ async def _generate_image_task(
     seedance_service
 ):
     """后台图像生成任务"""
+    task_store = await get_task_store()
     try:
-        _llmhua_tasks[task_id] = {
+        await task_store.create(task_id, {
             "status": "processing",
             "progress": 10,
             "result": None,
             "start_time": time.time(),
-        }
+        })
 
         # 调用Seedance生成图像
         result = await seedance_service.generate_image_from_scene(
@@ -91,29 +89,29 @@ async def _generate_image_task(
         )
 
         if result and result.get("status") == "completed":
-            _llmhua_tasks[task_id] = {
+            await task_store.set(task_id, {
                 "status": "completed",
                 "progress": 100,
                 "result": result,
                 "end_time": time.time(),
                 "task_id": task_id
-            }
+            })
         else:
-            _llmhua_tasks[task_id] = {
+            await task_store.set(task_id, {
                 "status": "failed",
                 "progress": 0,
                 "error": "Failed to generate image",
                 "end_time": time.time()
-            }
+            })
 
     except Exception as e:
         logger.error(f"图像生成失败，任务ID: {task_id}, 错误: {e}")
-        _llmhua_tasks[task_id] = {
+        await task_store.set(task_id, {
             "status": "failed",
             "progress": 0,
             "error": str(e),
             "end_time": time.time()
-        }
+        })
 
 
 @router.get("/images/{task_id}", response_model=ImageGenerationResponse)
@@ -122,7 +120,8 @@ async def get_image_generation_result(task_id: str):
     获取图像生成结果
     """
     try:
-        task_info = _llmhua_tasks.get(task_id)
+        task_store = await get_task_store()
+        task_info = await task_store.get(task_id)
         if not task_info:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -147,7 +146,8 @@ async def get_image_generation_status(task_id: str):
     获取图像生成任务状态
     """
     try:
-        task_info = _llmhua_tasks.get(task_id)
+        task_store = await get_task_store()
+        task_info = await task_store.get(task_id)
         if not task_info:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -331,14 +331,15 @@ async def _generate_preview_image_task(
     seedance_service
 ):
     """后台预览图像生成任务"""
+    task_store = await get_task_store()
     try:
-        _llmhua_tasks[task_id] = {
+        await task_store.create(task_id, {
             "status": "processing",
             "progress": 10,
             "result": None,
             "start_time": time.time(),
             "task_type": "preview-image",
-        }
+        })
 
         result = await seedance_service.generate_image_from_scene(
             scene_description=prompt,
@@ -348,40 +349,41 @@ async def _generate_preview_image_task(
         )
 
         if result and result.get("status") == "completed":
-            _llmhua_tasks[task_id] = {
+            await task_store.set(task_id, {
                 "status": "completed",
                 "progress": 100,
                 "result": result,
                 "end_time": time.time(),
                 "task_id": task_id,
                 "task_type": "preview-image",
-            }
+            })
         else:
             err_detail = result.get("message", "") if result else "API返回为空"
-            _llmhua_tasks[task_id] = {
+            await task_store.set(task_id, {
                 "status": "failed",
                 "progress": 0,
                 "error": f"Failed to generate preview image: {err_detail}",
                 "end_time": time.time(),
                 "task_type": "preview-image",
-            }
+            })
 
     except Exception as e:
         logger.error(f"预览图像生成失败，任务ID: {task_id}, 错误: {e}")
-        _llmhua_tasks[task_id] = {
+        await task_store.set(task_id, {
             "status": "failed",
             "progress": 0,
             "error": str(e),
             "end_time": time.time(),
             "task_type": "preview-image",
-        }
+        })
 
 
 @router.get("/preview-image/{task_id}/status")
 async def get_preview_image_status(task_id: str):
     """获取预览图像生成状态"""
     try:
-        task_info = _llmhua_tasks.get(task_id)
+        task_store = await get_task_store()
+        task_info = await task_store.get(task_id)
         if not task_info:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -435,13 +437,14 @@ async def _generate_video_task(
     seedance_service
 ):
     """后台视频生成任务"""
+    task_store = await get_task_store()
     try:
-        _llmhua_tasks[task_id] = {
+        await task_store.create(task_id, {
             "status": "processing",
             "progress": 10,
             "result": None,
             "start_time": time.time(),
-        }
+        })
 
         # 调用Seedance生成视频
         result = await seedance_service.generate_video_from_image(
@@ -454,29 +457,29 @@ async def _generate_video_task(
         )
 
         if result and result.get("status") == "completed":
-            _llmhua_tasks[task_id] = {
+            await task_store.set(task_id, {
                 "status": "completed",
                 "progress": 100,
                 "result": result,
                 "end_time": time.time(),
                 "task_id": task_id
-            }
+            })
         else:
-            _llmhua_tasks[task_id] = {
+            await task_store.set(task_id, {
                 "status": "failed",
                 "progress": 0,
                 "error": "Failed to generate video",
                 "end_time": time.time()
-            }
+            })
 
     except Exception as e:
         logger.error(f"视频生成失败，任务ID: {task_id}, 错误: {e}")
-        _llmhua_tasks[task_id] = {
+        await task_store.set(task_id, {
             "status": "failed",
             "progress": 0,
             "error": str(e),
             "end_time": time.time()
-        }
+        })
 
 
 @router.get("/videos/{task_id}", response_model=VideoGenerationResponse)
@@ -485,7 +488,8 @@ async def get_video_generation_result(task_id: str):
     获取视频生成结果
     """
     try:
-        task_info = _llmhua_tasks.get(task_id)
+        task_store = await get_task_store()
+        task_info = await task_store.get(task_id)
         if not task_info:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -509,7 +513,8 @@ async def get_video_generation_status(task_id: str):
     获取视频生成任务状态
     """
     try:
-        task_info = _llmhua_tasks.get(task_id)
+        task_store = await get_task_store()
+        task_info = await task_store.get(task_id)
         if not task_info:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -565,13 +570,14 @@ async def _generate_complete_storyboard_task(
     seedance_service
 ):
     """后台完整分镜生成任务"""
+    task_store = await get_task_store()
     try:
-        _llmhua_tasks[task_id] = {
+        await task_store.create(task_id, {
             "status": "processing",
             "progress": 5,
             "result": None,
             "start_time": time.time(),
-        }
+        })
 
         results = []
         successful_count = 0
@@ -619,10 +625,10 @@ async def _generate_complete_storyboard_task(
 
             results.append(scene_result)
 
-            # 更新进度
-            _llmhua_tasks[task_id]["progress"] = int(5 + (idx + 1) / len(request.scenes) * 95)
+            # 更新进度（部分更新，不覆盖整个任务状态）
+            await task_store.update(task_id, {"progress": int(5 + (idx + 1) / len(request.scenes) * 95)})
 
-        _llmhua_tasks[task_id] = {
+        await task_store.set(task_id, {
             "status": "completed",
             "progress": 100,
             "result": {
@@ -633,16 +639,16 @@ async def _generate_complete_storyboard_task(
             },
             "end_time": time.time(),
             "task_id": task_id
-        }
+        })
 
     except Exception as e:
         logger.error(f"完整分镜生成失败，任务ID: {task_id}, 错误: {e}")
-        _llmhua_tasks[task_id] = {
+        await task_store.set(task_id, {
             "status": "failed",
             "progress": 0,
             "error": str(e),
             "end_time": time.time()
-        }
+        })
 
 
 @router.get("/storyboard/{task_id}/result", response_model=CompleteResult)
@@ -651,7 +657,8 @@ async def get_complete_storyboard_result(task_id: str):
     获取完整分镜生成结果
     """
     try:
-        task_info = _llmhua_tasks.get(task_id)
+        task_store = await get_task_store()
+        task_info = await task_store.get(task_id)
         if not task_info:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -816,16 +823,17 @@ async def _generate_shots_to_video_task(
     seedance_service
 ):
     """后台批量镜头视频生成任务"""
+    task_store = await get_task_store()
     try:
         total_shots = sum(len(ep.shots) for ep in request.episodes)
 
-        _llmhua_tasks[task_id] = {
+        await task_store.create(task_id, {
             "status": "processing",
             "progress": 5,
             "result": None,
             "start_time": time.time(),
             "task_type": "shots-to-video",
-        }
+        })
 
         results: list = []
         completed_count = 0
@@ -935,12 +943,12 @@ async def _generate_shots_to_video_task(
                     error=error_msg,
                 ).model_dump())
 
-                # 更新进度
+                # 更新进度（部分更新）
                 total_processed = completed_count + failed_count
                 progress = int(5 + (total_processed / total_shots) * 95)
-                _llmhua_tasks[task_id]["progress"] = progress
+                await task_store.update(task_id, {"progress": progress})
 
-        _llmhua_tasks[task_id] = {
+        await task_store.set(task_id, {
             "status": "completed",
             "progress": 100,
             "result": {
@@ -952,7 +960,7 @@ async def _generate_shots_to_video_task(
             "end_time": time.time(),
             "task_id": task_id,
             "task_type": "shots-to-video",
-        }
+        })
 
         logger.info(f"批量镜头视频生成完成: {completed_count}/{total_shots} 成功")
         # 记录用量：图像生成数 + 视频生成数
@@ -973,13 +981,13 @@ async def _generate_shots_to_video_task(
 
     except Exception as e:
         logger.error(f"批量镜头视频生成失败，任务ID: {task_id}, 错误: {e}")
-        _llmhua_tasks[task_id] = {
+        await task_store.set(task_id, {
             "status": "failed",
             "progress": 0,
             "error": str(e),
             "end_time": time.time(),
             "task_type": "shots-to-video",
-        }
+        })
 
 
 @router.get("/shots-to-video/{task_id}/status", response_model=TaskStatusResponse)
@@ -988,7 +996,8 @@ async def get_shots_to_video_status(task_id: str):
     获取批量镜头视频生成任务状态
     """
     try:
-        task_info = _llmhua_tasks.get(task_id)
+        task_store = await get_task_store()
+        task_info = await task_store.get(task_id)
         if not task_info:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -1013,7 +1022,8 @@ async def get_shots_to_video_result(task_id: str):
     获取批量镜头视频生成结果
     """
     try:
-        task_info = _llmhua_tasks.get(task_id)
+        task_store = await get_task_store()
+        task_info = await task_store.get(task_id)
         if not task_info:
             raise HTTPException(status_code=404, detail="Task not found")
 

@@ -1,60 +1,25 @@
-# ============================================================
-# Filebeat 配置 — 收集 Docker 容器日志 → Elasticsearch
-# ============================================================
-
+# Filebeat — Docker logs → Elasticsearch
 filebeat.inputs:
   - type: docker
     containers.ids: "*"
-    # 合并多行 JSON 日志（异常堆栈会跨行）
-    multiline.pattern: "^\\{\"timestamp\""
+    multiline.pattern: '^{'
     multiline.negate: true
     multiline.match: after
-    # JSON 解析：自动解析 message 字段中的 JSON
-    json.keys_under_root: false
+    json.keys_under_root: true
     json.add_error_key: true
-    json.message_key: message
-    # 保留 Docker 元数据
     processors:
       - add_docker_metadata:
           host: "unix:///var/run/docker.sock"
-      - drop_fields:
-          fields: ["agent", "ecs", "input", "log.file", "log.offset"]
-          ignore_missing: true
 
-# ============================================================
-# Elasticsearch 输出
-# ============================================================
 output.elasticsearch:
   hosts: ["elasticsearch:9200"]
   index: "shortdrama-logs-%{+yyyy.MM.dd}"
-  # 按服务名创建数据流别名，方便 Kibana 按服务筛选
-  indices:
-    - index: "shortdrama-logs-%{+yyyy.MM.dd}"
-      when.equals:
-        container.labels.com_docker_compose_service: "*"
 
-# ============================================================
-# 日志索引生命周期（自动清理旧数据）
-# ============================================================
 setup.ilm.enabled: true
 setup.ilm.rollover_alias: "shortdrama-logs"
 setup.ilm.pattern: "{now/d}-000001"
 setup.ilm.policy_name: "shortdrama-logs-policy"
-setup.ilm.policy:
-  phases:
-    hot:
-      actions:
-        rollover:
-          max_size: "2GB"
-          max_age: "1d"
-    delete:
-      min_age: "14d"
-      actions:
-        delete: {}
 
-# ============================================================
-# 日志级别
-# ============================================================
-logging.level: info
+logging.level: warning
 logging.to_files: false
 logging.to_stderr: true

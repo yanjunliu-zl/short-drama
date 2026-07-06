@@ -18,6 +18,7 @@ metadata:
   namespace: shortdrama
 spec:
   replicas: 2
+  minReadySeconds: 15
   selector:
     matchLabels:
       app: content-service
@@ -77,7 +78,7 @@ spec:
     kind: Deployment
     name: content-service
   minReplicas: 2
-  maxReplicas: 5
+  maxReplicas: 20
   metrics:
     - type: Resource
       resource:
@@ -85,3 +86,9 @@ spec:
         target:
           type: Utilization
           averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

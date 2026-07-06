@@ -76,3 +76,33 @@ def setup_logging():
     root_logger.propagate = False
 
     logging.info("Logging configured with JSON format")
+
+
+def setup_structured_logging(service_name: str, log_level: str):
+    """设置结构化日志 - 带参数版本"""
+    # 配置根日志记录器
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, log_level.upper()))
+
+    # 清除现有的处理器
+    root_logger.handlers.clear()
+
+    # 控制台处理器 - JSON 格式
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(getattr(logging, log_level.upper()))
+    console_formatter = StructuredJSONFormatter(service_name)
+    console_handler.setFormatter(console_formatter)
+    root_logger.addHandler(console_handler)
+
+    # 设置第三方库的日志级别
+    logging.getLogger("uvicorn").setLevel(logging.INFO)
+    logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+    logging.getLogger("celery").setLevel(logging.WARNING)
+
+    # 避免重复日志
+    root_logger.propagate = False
+
+    logging.info(f"Structured logging configured for {service_name} at level {log_level}")

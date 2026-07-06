@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from typing import List, Optional
+import os
 import uuid
 import time
 import logging
@@ -395,13 +396,35 @@ async def upload_and_split_script(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/{script_id}/character-graph")
+async def get_character_graph(
+    script_id: int,
+    script_service: ScriptService = Depends(get_script_service)
+):
+    """获取角色关系图谱（V2 pipeline）"""
+    logger.info(f"[API] GET /{script_id}/character-graph")
+    try:
+        graph = await script_service.get_script_character_graph(script_id)
+        if graph is None:
+            raise HTTPException(status_code=404, detail="Character graph not available for this script")
+        return graph
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[API] GET /{script_id}/character-graph 异常: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/generate/from-outline-sync", response_model=ScriptSplitResponse)
 async def generate_from_outline_sync(
     request: ScriptFromOutlineRequest,
     script_service: ScriptService = Depends(get_script_service)
 ):
-    """从大纲/想法同步生成剧本 — 直接等待 AI 结果返回"""
+    """从大纲/想法同步生成剧本 — 使用 V2 管线，统一输出格式"""
     import asyncio as _asyncio
+    from app.services.novel2script_v2_service import Novel2ScriptV2Service
+    from app.core.config import settings as app_settings
+
     outline_len = len(getattr(request, 'outline', '') or '')
     logger.info(f"[API] POST /generate/from-outline-sync title={request.title} outline_len={outline_len}")
     t0 = time.time()
@@ -414,21 +437,91 @@ async def generate_from_outline_sync(
         if not script_service._initialized:
             await script_service.initialize()
 
-        request_dict = request.dict() if hasattr(request, 'dict') else vars(request)
-        script_content = await _asyncio.wait_for(
-            script_service.ai_service.generate_script_from_outline(request_dict),
+        mock_mode = getattr(script_service.ai_service, '_mock_mode', False)
+        style = getattr(request, 'style', '') or app_settings.N2S_V2_DEFAULT_STYLE
+
+        n2s_v2 = Novel2ScriptV2Service(
+            llm=script_service.ai_service.llm if not mock_mode else None,
+            mock_mode=mock_mode,
+            config=app_settings,
+        )
+
+        length_to_eps = {"短篇": 5, "中篇": 8, "长篇": 12}
+
+        # Try to parse explicit episode count from user's request text
+        import re as _re
+        cn_num_map = {c: i for i, c in enumerate(
+            ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+             '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十',
+             '二十一', '二十二', '二十三', '二十四', '二十五', '二十六', '二十七', '二十八', '二十九', '三十',
+             '三十一', '三十二', '三十三', '三十四', '三十五', '三十六', '三十七', '三十八', '三十九', '四十',
+             '四十一', '四十二', '四十三', '四十四', '四十五', '四十六', '四十七', '四十八', '四十九', '五十'], start=0)}
+        def _parse_ep_count(text: str) -> int:
+            if not text: return 0
+            # Match "二十集", "20集", "20 集" etc
+            for m in _re.finditer(r'([一二三四五六七八九十百千\d]+)\s*集', text):
+                num_str = m.group(1)
+                if num_str.isdigit(): return int(num_str)
+                n = cn_num_map.get(num_str, 0)
+                if n > 0: return n
+            return 0
+
+        user_ep_count = _parse_ep_count(request.outline) or _parse_ep_count(request.title)
+        target_eps = user_ep_count if user_ep_count > 0 else length_to_eps.get(getattr(request, 'length', '短篇'), 5)
+        target_eps = min(target_eps, 50)  # cap at 50
+
+        result = await _asyncio.wait_for(
+            n2s_v2.run_full_pipeline(novel_text=request.outline, style=style,
+                                      target_episodes=target_eps),
             timeout=600
         )
-        episodes = script_service._split_content_to_episodes(script_content)
+
+        episodes = result.get("episodes") or script_service._split_content_to_episodes(
+            result.get("final_script", "")
+        )
+        # Build ShotEpisode-format storyboard from V2 pipeline data
+        storyboard_data = result.get("storyboard", [])
+        shot_episodes = script_service._build_shot_episodes(
+            storyboard_data, episodes
+        ) if storyboard_data else None
+
+        # Track usage (fire-and-forget)
+        from app.services.usage_tracker import track_llm_usage, estimate_tokens
+        chapter_count = len(result.get("script_scenes", []))
+        call_count = chapter_count + 2 if chapter_count > 0 else 1
+        estimated_in = estimate_tokens(request.outline) * 2
+        estimated_out = estimate_tokens(result.get("final_script", ""))
+        user_id_str = str(getattr(request, 'user_id', '') or 'anonymous')
+        _asyncio.ensure_future(track_llm_usage(
+            user_id=user_id_str, model_name="deepseek-chat",
+            tokens_in=estimated_in, tokens_out=estimated_out,
+            call_count=call_count,
+            duration_ms=int((time.time() - t0) * 1000),
+            endpoint="/generate/from-outline-sync",
+            service_name="script-service",
+        ))
+
+        # Record business metrics
+        try:
+            from app.middleware.prometheus import BusinessMetrics
+            BusinessMetrics.record_script_generation(
+                script_type="outline", status="success",
+                duration=time.time() - t0)
+        except Exception:
+            pass
+
         logger.info(f"[API] POST /generate/from-outline-sync 完成 title={request.title} "
-                    f"episodes={len(episodes)} total_chars={len(script_content)} 耗时={time.time()-t0:.1f}s")
+                    f"episodes={len(episodes)} total_chars={len(result.get('final_script', ''))} "
+                    f"storyboard_shots={len(storyboard_data)} "
+                    f"耗时={time.time()-t0:.1f}s")
         return {
             "script_id": 0, "title": request.title,
             "episodes": episodes, "total_episodes": len(episodes),
+            "storyboard": shot_episodes,
         }
     except _asyncio.TimeoutError:
         logger.error(f"[API] POST /generate/from-outline-sync 超时 title={request.title} (600s)")
-        raise HTTPException(status_code=504, detail="AI 生成超时（5分钟），请缩短输入内容后重试")
+        raise HTTPException(status_code=504, detail="AI 生成超时（10分钟），请缩短输入内容后重试")
     except HTTPException:
         raise
     except Exception as e:

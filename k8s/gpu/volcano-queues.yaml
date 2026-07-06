@@ -1,0 +1,137 @@
+# Volcano GPU调度器 — AI任务公平调度 + GPU虚拟化
+# Volcano is a K8s-native batch scheduling system for AI/ML workloads.
+# Install: kubectl apply -f https://raw.githubusercontent.com/volcano-sh/volcano/master/installer/volcano-development.yaml
+#
+# Queue design:
+#   P1-realtime: Guaranteed GPU resources, preempts lower queues
+#   P2-video:    Elastic GPU, auto-scale with spot instances
+#   P3-batch:    Best-effort, uses excess capacity + spot instances
+---
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: Queue
+metadata:
+  name: p1-realtime
+  namespace: shortdrama
+  annotations:
+    priority: "1"
+    description: "用户实时AI请求 — 延迟<2s，有保障GPU"
+spec:
+  reclaimable: false        # 不可被抢占
+  weight: 100               # 最高权重 (vs p2=50, p3=10)
+  capability:
+    cpu: "16"
+    memory: "64Gi"
+    nvidia.com/gpu: "8"     # 保障8张GPU
+---
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: Queue
+metadata:
+  name: p2-video
+  namespace: shortdrama
+  annotations:
+    priority: "2"
+    description: "视频/图像生成 — 延迟<5min，弹性GPU"
+spec:
+  reclaimable: true         # 可被P1抢占
+  weight: 50
+  capability:
+    cpu: "32"
+    memory: "128Gi"
+    nvidia.com/gpu: "16"    # 弹性扩展到16张
+---
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: Queue
+metadata:
+  name: p3-batch
+  namespace: shortdrama
+  annotations:
+    priority: "3"
+    description: "批量离线处理 — 无延迟要求，竞价实例"
+spec:
+  reclaimable: true
+  weight: 10
+  capability:
+    cpu: "64"
+    memory: "256Gi"
+    nvidia.com/gpu: "32"    # 竞价实例池，成本优化
+---
+# PodGroup for coordinated GPU job scheduling
+# Ensures all pods in an AI job start together (gang scheduling)
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: PodGroup
+metadata:
+  name: ai-inference-group
+  namespace: shortdrama
+spec:
+  minMember: 1
+  minResources:
+    nvidia.com/gpu: "1"
+  queue: p1-realtime
+  priorityClassName: high-priority
+---
+# GPU node pool configuration (for cluster autoscaler / Karpenter)
+# Nodes with this label get GPU-aware scheduling
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gpu-node-config
+  namespace: shortdrama
+data:
+  # GPU node selectors for different workload tiers
+  gpu-tiers.yaml: |
+    # GPU虚拟化配置 — MIG (Multi-Instance GPU) + vGPU
+    tiers:
+      # A100/H100 — MIG分区，用于大模型推理
+      a100-mig:
+        nodeSelector:
+          nvidia.com/gpu.product: "NVIDIA-A100-SXM4-40GB"
+        mig:
+          enabled: true
+          profiles:
+            - name: 1g.5gb    # 7个推理实例
+              count: 7
+      # L40S/T4 — vGPU分片，用于图像/视频生成
+      l40s-vgpu:
+        nodeSelector:
+          nvidia.com/gpu.product: "NVIDIA-L40S"
+        vgpu:
+          enabled: true
+          maxInstances: 8    # 每张卡最多8个vGPU
+      # 竞价实例 — 弹性GPU池
+      spot-gpu:
+        nodeSelector:
+          node.kubernetes.io/spot: "true"
+          nvidia.com/gpu.present: "true"
+        tolerations:
+          - key: "spot"
+            operator: "Equal"
+            value: "true"
+            effect: "NoSchedule"
+---
+# PriorityClass for AI workloads
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: high-priority
+  namespace: shortdrama
+value: 1000
+globalDefault: false
+description: "P1 realtime AI inference — highest priority"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: medium-priority
+  namespace: shortdrama
+value: 500
+globalDefault: false
+description: "P2 video generation — medium priority"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: low-priority
+  namespace: shortdrama
+value: 100
+globalDefault: true
+description: "P3 batch processing — lowest priority, spot-friendly"

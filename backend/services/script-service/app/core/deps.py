@@ -19,8 +19,8 @@ async def initialize_script_service():
         await _script_service_instance.initialize()
         logger.info("剧本服务初始化完成")
     except Exception as e:
-        logger.error(f"剧本服务初始化失败: {e}")
-        raise
+        logger.error(f"剧本服务初始化失败: {e}，服务将以降级模式运行")
+        # 不抛出异常，允许服务以降级模式启动
 
 
 def get_script_service() -> ScriptService:
@@ -28,10 +28,19 @@ def get_script_service() -> ScriptService:
     global _script_service_instance
 
     if _script_service_instance is None:
-        logger.warning("ScriptService实例未初始化，创建新实例（这通常应在应用启动时初始化）")
+        logger.warning("ScriptService实例未初始化，创建新实例")
         _script_service_instance = ScriptService()
 
     return _script_service_instance
+
+
+async def ensure_script_service_initialized():
+    """确保 ScriptService 已初始化 (首次请求时懒加载)"""
+    global _script_service_instance
+    if _script_service_instance is None:
+        _script_service_instance = ScriptService()
+    if not _script_service_instance.ai_service._initialized:
+        await _script_service_instance.initialize()
 
 
 async def get_current_user(

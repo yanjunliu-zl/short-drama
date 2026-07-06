@@ -1,17 +1,25 @@
-# 构建阶段
-FROM golang:1.21-alpine AS builder
+# 使用 python:3.10-slim 作为基础镜像（包含 curl 和 ca-certificates）
+FROM python:3.10-slim
 
-# 安装必要的构建工具
-RUN apk add --no-cache git ca-certificates tzdata
+# 安装 Go（用于构建 Go 代码）
+RUN apt-get update && apt-get install -y wget git ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
 
-# 设置工作目录
+# 下载并安装 Go
+RUN wget -q https://go.dev/dl/go1.21.0.linux-amd64.tar.gz -O /tmp/go.tar.gz && \
+    tar -C /usr/local -xzf /tmp/go.tar.gz && \
+    rm /tmp/go.tar.gz
+
+ENV PATH=/usr/local/go/bin:$PATH
+
+# 创建用户（使用非系统用户）
+RUN groupadd -g 1001 appuser && useradd -u 1001 -g appuser -s /bin/bash -m appuser
+
 WORKDIR /app
 
-# 复制go模块文件
-COPY go.mod go.sum ./
-ENV GOSUMDB=off
+# 复制代码
+COPY . .
 
-# 代理设置（构建时通过 --build-arg 传入）
+# 设置代理（通过环境变量）
 ARG https_proxy
 ARG http_proxy
 ARG all_proxy
@@ -19,46 +27,14 @@ ENV https_proxy=$https_proxy
 ENV http_proxy=$http_proxy
 ENV all_proxy=$all_proxy
 
-# 下载依赖
-RUN go mod download
-
-# 复制源代码
-COPY . .
-
-# 构建应用
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/bin/user-service ./cmd
-
-# 运行阶段
-FROM alpine:latest
-
-# 安装必要的运行时依赖
-RUN apk --no-cache add ca-certificates tzdata
-
-# 创建非root用户
-RUN addgroup -g 1001 -S appuser && adduser -u 1001 -S appuser -G appuser
-
-# 设置工作目录
-WORKDIR /app
-
-# 从构建阶段复制二进制文件
-COPY --from=builder /app/bin/user-service /usr/local/bin/
-COPY --from=builder /app/etc/user.yaml ./etc/user.yaml
-
-# 复制时区信息
-COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
-
-# 设置权限
-RUN chown -R appuser:appuser /app
+# 下载依赖并构建
+RUN go mod download && CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /usr/local/bin/user-service ./cmd
 
 # 切换到非root用户
 USER appuser
 
-# 健康检查
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD wget -q --spider http://localhost:8080/health || exit 1
 
-# 暴露端口
 EXPOSE 8080
-
-# 启动应用
 ENTRYPOINT ["/usr/local/bin/user-service", "-f", "etc/user.yaml"]

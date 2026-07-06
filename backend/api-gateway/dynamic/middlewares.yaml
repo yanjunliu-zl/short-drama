@@ -6,11 +6,36 @@ http:
     compress:
       compress: {}
 
-    # 限流中间件
+    # P3: Tiered rate limiting for billion-level concurrency
+    # Global default (generous for public content)
     rate-limit:
       rateLimit:
-        average: 100
-        burst: 50
+        average: 1000
+        burst: 200
+
+    # Auth endpoints — tight to prevent brute force
+    rate-limit-auth:
+      rateLimit:
+        average: 10
+        burst: 5
+
+    # AI generation endpoints — expensive, very tight
+    rate-limit-ai:
+      rateLimit:
+        average: 5
+        burst: 2
+
+    # Public content browsing — generous
+    rate-limit-public:
+      rateLimit:
+        average: 500
+        burst: 100
+
+    # Video processing — moderate
+    rate-limit-video:
+      rateLimit:
+        average: 20
+        burst: 10
 
     # 认证中间件
     auth:

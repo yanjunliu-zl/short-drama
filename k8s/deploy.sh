@@ -39,6 +39,7 @@ deploy_all() {
   wait_for_pods content-service
   wait_for_pods script-service
   wait_for_pods storyboard-service
+  wait_for_pods frontend
   echo "应用服务已就绪"
   echo ""
 

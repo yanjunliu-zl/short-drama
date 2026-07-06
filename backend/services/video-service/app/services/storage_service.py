@@ -264,7 +264,7 @@ class StorageService:
             f.write(data)
 
         logger.info(f"字节数据上传到本地存储: {object_name}")
-        return f"/storage/{object_name}")
+        return f"/storage/{object_name}"
 
     async def download_file(self, object_name: str, file_path: str) -> bool:
         """从对象存储下载文件

@@ -5,6 +5,7 @@ import (
 	"short-drama-platform/content-service/internal/config"
 	"short-drama-platform/content-service/internal/logic"
 	"short-drama-platform/content-service/internal/repository"
+	"short-drama-platform/content-service/internal/search"
 	"short-drama-platform/content-service/internal/types"
 	"time"
 
@@ -41,8 +42,11 @@ func NewServiceContext(c config.Config) *ServiceContext {
 	// 初始化仓库
 	contentRepo := repository.NewContentRepository(conn)
 
+	// 初始化 ES 客户端
+	esClient := search.NewESClient("http://elasticsearch:9200")
+
 	// 初始化服务
-	contentService := logic.NewContentLogic(contentRepo, redisClient)
+	contentService := logic.NewContentLogic(contentRepo, redisClient, esClient)
 
 	return &ServiceContext{
 		Config:         c,

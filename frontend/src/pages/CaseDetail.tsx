@@ -9,6 +9,7 @@ import {
   ShareAltOutlined, PlayCircleOutlined
 } from '@ant-design/icons'
 import { caseService, type CaseItem } from '@/services/caseService'
+import { CommentSection } from '@/components/CommentSection'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -82,7 +83,7 @@ export const CaseDetail: React.FC = () => {
       <Row gutter={[24, 24]}>
         {/* 左侧：视频播放器 */}
         <Col xs={24} lg={16}>
-          <Card bodyStyle={{ padding: 0 }} style={{ overflow: 'hidden', borderRadius: 12 }}>
+          <Card styles={{ body: { padding: 0 } }} style={{ overflow: 'hidden', borderRadius: 12 }}>
             {videoUrl ? (
               <video
                 controls
@@ -166,6 +167,9 @@ export const CaseDetail: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      {/* 评论区 */}
+      <CommentSection caseId={id!} />
     </div>
   )
 }

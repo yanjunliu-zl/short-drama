@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"short-drama-platform/final-cut-service/internal/config"
+	grpcsvr "short-drama-platform/final-cut-service/internal/grpc"
 	"short-drama-platform/final-cut-service/internal/handler"
 	"short-drama-platform/final-cut-service/internal/svc"
 
@@ -38,8 +39,18 @@ func main() {
 		Handler: healthHandler,
 	})
 
-	// 启动服务
-	fmt.Printf("Starting server at %s:%d...\n", c.Host, c.Port)
+	// P2: Start gRPC server on dedicated port alongside REST server
+	grpcPort := 19085 // Dedicated gRPC port (avoiding Prometheus on 9085)
+	grpcServer := grpcsvr.NewServer(ctx, grpcPort)
+	go func() {
+		if err := grpcServer.Start(); err != nil {
+			fmt.Printf("gRPC server error: %v\n", err)
+		}
+	}()
+	defer grpcServer.Stop()
+
+	// 启动 REST 服务
+	fmt.Printf("Starting REST server at %s:%d, gRPC at :%d...\n", c.Host, c.Port, grpcPort)
 	server.Start()
 }
 

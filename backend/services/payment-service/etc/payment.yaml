@@ -16,7 +16,7 @@ Redis:
   Host: localhost
   Port: 6379
   Password: ""
-  DB: 0
+  DB: 9
   PoolSize: 50
   MinIdleConns: 5
 
@@ -36,6 +36,14 @@ Alipay:
   NotifyURL: "https://yourdomain.com/api/v1/payments/alipay/notify"
   ReturnURL: "https://yourdomain.com/payment/result"
   SignType: "RSA2"
+
+# 服务发现 - Consul用于集群服务注册与发现
+Consul:
+  Host: consul
+  Port: 8500
+  Token: ""
+  Enabled: true
+  Datacenter: dc1
 
 JWT:
   Secret: "your_jwt_secret"

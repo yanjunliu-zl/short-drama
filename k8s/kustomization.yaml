@@ -6,20 +6,31 @@ resources:
   - base/namespace.yaml
   - base/configmap.yaml
   - base/secrets.yaml
+  - infra/storageclass.yaml
   - infra/mysql.yaml
+  - infra/mysql-read.yaml
   - infra/redis.yaml
   - infra/rabbitmq.yaml
   - infra/minio.yaml
+  - infra/consul.yaml
   - services/user-service.yaml
   - services/content-service.yaml
   - services/script-service.yaml
   - services/storyboard-service.yaml
   - services/llmhua-service.yaml
   - services/video-service.yaml
+  - services/frontend.yaml
+  - services/pod-disruption-budgets.yaml
   - ingress/traefik-ingressroute.yaml
   - monitoring/servicemonitor.yaml
 
+# To enable Linkerd service mesh, uncomment:
+# commonAnnotations:
+#   linkerd.io/inject: enabled
+
 images:
+  - name: shortdrama/frontend
+    newTag: latest
   - name: shortdrama/script-service
     newTag: latest
   - name: shortdrama/storyboard-service
