@@ -163,7 +163,7 @@ class SeedanceService:
         if not self.api_key:
             raise ValueError("SEEDANCE_API_KEY 未配置")
         width = kwargs.get("width", 1920)
-        height = kwargs.get("height", 1920)
+        height = kwargs.get("height", 1080)  # 16:9 for short drama
         payload = {"model": self.model, "prompt": prompt, "size": f"{width}x{height}", "n": 1, "response_format": "url"}
 
         async def _call():
@@ -230,8 +230,37 @@ class SeedanceService:
         return {"status": "completed", "image_url": image_url, "original_url": source_image_url,
                 "job_id": job_id, "message": "Image generated successfully"}
 
-    async def generate_image_from_scene(self, scene_description, style="写实风格", **kwargs):
-        prompt = f"{style}，{scene_description}" if style else scene_description
+    async def generate_image_from_scene(self, scene_description, style="写实风格",
+                                         enhance_prompt: bool = True, **kwargs):
+        """Generate image from scene description with optional LLM prompt enhancement.
+
+        When enhance_prompt=True (default), uses PromptEnhancer to translate the
+        plain description into a professional-grade image generation prompt with
+        composition, lighting, color, and quality keywords.
+
+        Falls back to simple "{style}, {description}" if LLM is unavailable.
+        """
+        if enhance_prompt:
+            try:
+                from app.services.prompt_enhancer import get_prompt_enhancer
+                enhancer = get_prompt_enhancer()
+                if enhancer.llm is None:
+                    # Try to initialize with a lightweight LLM
+                    from app.utils.model_router import create_llm_client
+                    enhancer.llm = create_llm_client(prefer="deepseek", timeout=30.0)
+                enhanced = await enhancer.enhance(
+                    description=scene_description,
+                    style=style,
+                    scene_type="scene",
+                )
+                prompt = enhanced.get("image_prompt_zh") or enhanced.get("image_prompt") or f"{style}，{scene_description}"
+                logger.debug(f"Prompt enhanced: {len(scene_description)} → {len(prompt)} chars")
+            except Exception as e:
+                logger.debug(f"Prompt enhancement skipped ({e}), using raw description")
+                prompt = f"{style}，{scene_description}" if style else scene_description
+        else:
+            prompt = f"{style}，{scene_description}" if style else scene_description
+
         return await self.generate_image(prompt=prompt, negative_prompt="模糊，低质量，变形，水印，文字", **kwargs)
 
     # ================================================================

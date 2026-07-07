@@ -14,8 +14,9 @@ class Settings(BaseSettings):
     # 服务器配置
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", 8000))
-    WORKERS: int = int(os.getenv("WORKERS", 4))  # Gunicorn workers数量
-    THREADS: int = int(os.getenv("THREADS", 2))  # Gunicorn threads数量
+    WORKERS: int = int(os.getenv("WORKERS", 8))  # Gunicorn workers (I/O-bound AI service)
+    THREADS: int = int(os.getenv("THREADS", 4))  # Gunicorn threads per worker
+    MAX_BACKGROUND_TASKS: int = int(os.getenv("MAX_BACKGROUND_TASKS", 10))  # 并发后台任务上限
 
     # 安全配置
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
@@ -150,7 +151,7 @@ class Settings(BaseSettings):
     GRAPHRAG_VECTOR_DB: str = os.getenv("GRAPHRAG_VECTOR_DB", "memory")  # memory, chroma, pinecone
 
     # Novel2Script V2 — RAG-based pipeline
-    N2S_V2_EMBEDDING_MODEL: str = os.getenv("N2S_V2_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    N2S_V2_EMBEDDING_MODEL: str = os.getenv("N2S_V2_EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5")
     N2S_V2_CHUNK_SIZE: int = int(os.getenv("N2S_V2_CHUNK_SIZE", 4096))
     N2S_V2_CHUNK_OVERLAP: int = int(os.getenv("N2S_V2_CHUNK_OVERLAP", 512))
     N2S_V2_TOP_K: int = int(os.getenv("N2S_V2_TOP_K", 5))

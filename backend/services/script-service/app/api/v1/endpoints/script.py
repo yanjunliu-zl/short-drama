@@ -547,6 +547,22 @@ async def generate_from_outline_sync(
         target_eps = user_ep_count if user_ep_count > 0 else length_to_eps.get(getattr(request, 'length', '短篇'), 5)
         target_eps = min(target_eps, 50)
 
+        # Fetch user preference profile for personalized generation
+        user_context = ""
+        user_id = getattr(request, 'user_id', '') or ''
+        if user_id and user_id != 'anonymous':
+            try:
+                from app.services.user_preferences import get_user_preference_service
+                pref_svc = await get_user_preference_service()
+                # Use script_service's DB session for querying
+                db_session = getattr(script_service, '_db_session', None)
+                profile = await pref_svc.get_profile(user_id, db_session)
+                user_context = profile.to_prompt_context()
+                if user_context:
+                    logger.info(f"User preferences loaded for {user_id}: {profile.total_scripts} scripts")
+            except Exception as e:
+                logger.debug(f"User preferences skipped: {e}")
+
         # ---- SSE streaming path ----
         if use_streaming:
             async def event_generator():
@@ -563,7 +579,8 @@ async def generate_from_outline_sync(
         # ---- Non-streaming path (existing code) ----
         result = await _asyncio.wait_for(
             n2s_v2.run_full_pipeline(novel_text=request.outline, style=style,
-                                      target_episodes=target_eps),
+                                      target_episodes=target_eps,
+                                      user_context=user_context),
             timeout=600
         )
 

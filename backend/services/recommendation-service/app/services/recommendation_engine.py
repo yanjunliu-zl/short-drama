@@ -254,9 +254,10 @@ class RankingLayer:
         self.service = ranking_service
         self.bandit = bandit_service
 
-    async def rank(self, candidates: List[RecallItem], user_id: str = "") -> List[RankedItem]:
-        # 提取特征
-        features_list = [self._extract_features(item) for item in candidates]
+    async def rank(self, candidates: List[RecallItem], user_id: str = "",
+                   user_profile: Dict[str, Any] = None) -> List[RankedItem]:
+        # Extract features with real user data when available
+        features_list = [self._extract_features(item, user_profile) for item in candidates]
 
         # 尝试 PyTorch 打分
         try:
@@ -294,18 +295,46 @@ class RankingLayer:
         ranked.sort(key=lambda x: x.ctr_score, reverse=True)
         return ranked
 
-    def _extract_features(self, item: RecallItem) -> Dict[str, Any]:
+    def _extract_features(self, item: RecallItem, user_profile: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Extract features for Wide&Deep ranking model.
+
+        Args:
+            item: Recall candidate.
+            user_profile: Optional user interaction stats dict with keys:
+                total_view_count, total_like_count, tag_diversity,
+                favorite_tags, favorite_authors.
+        """
+        up = user_profile or {}
+        fav_tags = up.get("favorite_tags", [])
+        item_tags = item.tags or []
+        tag_match = len(set(fav_tags) & set(item_tags)) if fav_tags and item_tags else 0
+
+        fav_authors = up.get("favorite_authors", [])
+        author_match = 1 if item.author in fav_authors else 0
+
+        genre_match = 1 if item.genre and item.genre == up.get("favorite_genre", "") else 0
+
+        # Item age in days
+        item_age_days = 0
+        if item.created_at:
+            try:
+                from datetime import datetime as dt
+                created = dt.fromisoformat(item.created_at.replace("Z", "+00:00"))
+                item_age_days = (dt.now() - created.replace(tzinfo=None)).days
+            except Exception:
+                pass
+
         return {
-            "user_view_count": 0,
-            "user_like_count": 0,
-            "user_tag_diversity": 0,
+            "user_view_count": up.get("total_view_count", 0),
+            "user_like_count": up.get("total_like_count", 0),
+            "user_tag_diversity": up.get("tag_diversity", 0),
             "item_view_count": item.view_count,
             "item_like_count": item.like_count,
-            "item_share_count": 0,
-            "item_age_days": 0,
-            "tag_match_count": 0,
-            "genre_match": 0,
-            "author_match": 0,
+            "item_share_count": up.get("total_share_count", 0),
+            "item_age_days": item_age_days,
+            "tag_match_count": tag_match,
+            "genre_match": genre_match,
+            "author_match": author_match,
             "recall_source": item.recall_source,
             "recall_score": item.recall_score,
             "hour_of_day": datetime.now().hour,
@@ -365,7 +394,91 @@ class RecommendationPipeline:
         self.recall = RecallLayer(db)
         self.filter = FilterLayer(db)
         self.ranking = RankingLayer(ranking_service, bandit_service)
-        self.rank_layer = ranking_service  # store for reference
+        self.rank_layer = ranking_service
+        self.db = db  # Keep reference for user profile queries
+
+    async def _get_user_profile(self, user_id: str) -> Dict[str, Any]:
+        """Fetch rich user interaction stats for feature extraction.
+
+        Returns:
+            Dict with:
+              - total_view_count, total_like_count, total_share_count
+              - tag_diversity: unique tags interacted with
+              - favorite_tags: top-5 most-interacted tags
+              - favorite_genre: most-viewed genre
+              - favorite_authors: top-3 most-interacted authors
+              - recency_days: days since last activity
+              - preferred_hour: peak activity hour (0-23)
+        """
+        if not user_id:
+            return {}
+        try:
+            from sqlalchemy import text
+            sql = text("""
+                SELECT
+                    COUNT(DISTINCT CASE WHEN uci.action_type = 'view' THEN uci.case_id END) as total_views,
+                    COUNT(DISTINCT CASE WHEN uci.action_type = 'like' THEN uci.case_id END) as total_likes,
+                    COUNT(DISTINCT CASE WHEN uci.action_type = 'share' THEN uci.case_id END) as total_shares,
+                    DATEDIFF(NOW(), MAX(uci.created_at)) as recency_days,
+                    HOUR(MAX(uci.created_at)) as recent_hour
+                FROM user_case_interactions uci WHERE uci.user_id = :uid
+            """)
+            rows = await self.db.execute(sql, {"uid": user_id})
+            row = rows.fetchone()
+            if not row or row.total_views is None:
+                return {}
+
+            # Fetch favorite tags via joined query
+            tag_sql = text("""
+                SELECT TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(c.tags, ',', n.n), ',', -1)) t,
+                       COUNT(*) cnt
+                FROM cases c
+                JOIN user_case_interactions uci ON c.id = uci.case_id
+                JOIN (SELECT 1 n UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+                      UNION ALL SELECT 5 UNION ALL SELECT 6) n
+                    ON CHAR_LENGTH(c.tags)-CHAR_LENGTH(REPLACE(c.tags,',','')) >= n.n-1
+                WHERE uci.user_id = :uid AND uci.action_type IN ('view','like')
+                GROUP BY t ORDER BY cnt DESC LIMIT 5
+            """)
+            tag_rows = await self.db.execute(tag_sql, {"uid": user_id})
+            favorite_tags = [r.t for r in tag_rows.fetchall() if r.t]
+            tag_diversity = len(favorite_tags)
+
+            # Favorite genre
+            genre_sql = text("""
+                SELECT COALESCE(c.genre, '') g, COUNT(*) cnt
+                FROM cases c JOIN user_case_interactions uci ON c.id = uci.case_id
+                WHERE uci.user_id = :uid AND uci.action_type = 'view'
+                GROUP BY g ORDER BY cnt DESC LIMIT 1
+            """)
+            genre_rows = await self.db.execute(genre_sql, {"uid": user_id})
+            genre_row = genre_rows.fetchone()
+            favorite_genre = genre_row.g if genre_row else ""
+
+            # Favorite authors
+            author_sql = text("""
+                SELECT c.author, COUNT(*) cnt
+                FROM cases c JOIN user_case_interactions uci ON c.id = uci.case_id
+                WHERE uci.user_id = :uid AND uci.action_type IN ('view','like')
+                GROUP BY c.author ORDER BY cnt DESC LIMIT 3
+            """)
+            author_rows = await self.db.execute(author_sql, {"uid": user_id})
+            favorite_authors = [r.author for r in author_rows.fetchall() if r.author]
+
+            return {
+                "total_view_count": row.total_views or 0,
+                "total_like_count": row.total_likes or 0,
+                "total_share_count": row.total_shares or 0,
+                "tag_diversity": tag_diversity,
+                "favorite_tags": favorite_tags,
+                "favorite_genre": favorite_genre,
+                "favorite_authors": favorite_authors,
+                "recency_days": int(row.recency_days) if row.recency_days is not None else 999,
+                "preferred_hour": int(row.recent_hour) if row.recent_hour is not None else 12,
+            }
+        except Exception as e:
+            logger.debug(f"User profile fetch failed (non-critical): {e}")
+        return {}
 
     async def run(
         self, user_id: str = "", search_query: str = "", limit: int = 10,
@@ -385,9 +498,14 @@ class RecommendationPipeline:
         candidates = await self.filter.apply(user_id, candidates)
         logger.info("Filter: %d candidates after dedup+viewed removal", len(candidates))
 
-        # Layer 3: Rank (with Contextual Bandit)
-        ranked = await self.ranking.rank(candidates, user_id)
-        logger.info("Rank: top score=%.4f", ranked[0].ctr_score if ranked else 0)
+        # Fetch user profile for feature extraction
+        user_profile = await self._get_user_profile(user_id) if user_id else {}
+
+        # Layer 3: Rank (with Contextual Bandit + real user features)
+        ranked = await self.ranking.rank(candidates, user_id, user_profile=user_profile)
+        logger.info("Rank: top score=%.4f (user_features=%s)",
+                    ranked[0].ctr_score if ranked else 0,
+                    "yes" if user_profile else "no")
 
         # Layer 4: Rerank
         final = RerankLayer.rerank(ranked, top_n=limit, lambda_=0.7)

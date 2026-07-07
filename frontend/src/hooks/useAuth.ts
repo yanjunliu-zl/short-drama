@@ -6,6 +6,7 @@ import {
   login as loginAction,
   logout as logoutAction,
   register as registerAction,
+  initializeAuth as initializeAuthAction,
   clearAuth,
   setError,
 } from '@/store/slices/authSlice'
@@ -85,16 +86,14 @@ export const useAuth = () => {
     return isAuthenticated && !!token
   }, [isAuthenticated, token])
 
-  const initializeAuth = useCallback(() => {
-    // 检查token是否有效
-    const token = localStorage.getItem('token')
-    if (!token) {
-      dispatch(clearAuth())
+  const initializeAuth = useCallback(async () => {
+    try {
+      const result = await (dispatch as any)(initializeAuthAction()).unwrap()
+      return result.valid
+    } catch {
+      dispatch(setError(null))
       return false
     }
-
-    // 这里可以添加token验证逻辑
-    return true
   }, [dispatch])
 
   const clearError = useCallback(() => {

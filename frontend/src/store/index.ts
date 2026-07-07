@@ -1,5 +1,5 @@
 import { configureStore } from '@reduxjs/toolkit'
-import { persistStore, persistReducer } from 'redux-persist'
+import { persistStore, persistReducer, createTransform } from 'redux-persist'
 import storage from 'redux-persist/lib/storage'
 import { combineReducers } from 'redux'
 
@@ -10,12 +10,27 @@ import videoReducer from './slices/videoSlice'
 import orderReducer from './slices/orderSlice'
 import uiReducer from './slices/uiSlice'
 
+// Transform: 持久化时不保存 isAuthenticated 和 isInitialized
+// 这两个字段由 runtime token 验证决定，不能从缓存恢复
+const authTransform = createTransform(
+  // inbound: state → persisted storage
+  (inboundState: any) => ({
+    ...inboundState,
+    isAuthenticated: false,
+    isInitialized: false,
+  }),
+  // outbound: persisted storage → state (keep as-is, initializeAuth will set)
+  (outboundState: any) => outboundState,
+  { whitelist: ['auth'] }
+)
+
 // 持久化配置
 const persistConfig = {
   key: 'root',
   storage,
-  whitelist: ['auth', 'user'], // 只持久化auth和user状态
-  version: 1,
+  whitelist: ['auth', 'user'],
+  version: 2,  // Bump version — old persisted state will be cleared
+  transforms: [authTransform],
 }
 
 // 合并reducer

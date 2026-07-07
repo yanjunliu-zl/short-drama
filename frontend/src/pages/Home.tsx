@@ -19,6 +19,7 @@ import { workService, WorkItem } from '@/services/workService';
 import { pipelineService } from '@/services/pipelineService';
 import { useSelector } from 'react-redux';
 import type { RootState } from '@/store';
+import { useAuth } from '@/hooks/useAuth';
 import { assetService, AssetItem } from '@/services/assetService';
 import { clearPipelineStorage } from '@/hooks/usePipelinePersistence';
 
@@ -26,6 +27,7 @@ const { Title, Text } = Typography;
 
 const Home: React.FC = () => {
   const navigate = useNavigate();
+  const { isAuthenticated } = useAuth();
   const reduxUserId = useSelector((s: RootState) => (s.auth.user as any)?.id);
   const [activeTab, setActiveTab] = useState('case_square');
 
@@ -761,6 +763,21 @@ const Home: React.FC = () => {
           ]}
         />
       </Card>
+
+      {!isAuthenticated && (
+        <Alert
+          message="登录后可解锁全部功能"
+          description="登录后可使用 AI 剧本生成、分镜制作、视频生成等全部创作功能。"
+          type="info"
+          showIcon
+          style={{ margin: '0 24px 16px', borderRadius: 8 }}
+          action={
+            <Button type="primary" size="small" onClick={() => navigate('/login')}>
+              立即登录
+            </Button>
+          }
+        />
+      )}
 
       <Card style={{ border: 'none', background: 'transparent' }}>
         {activeTab === 'case_square' && renderCaseSquare()}

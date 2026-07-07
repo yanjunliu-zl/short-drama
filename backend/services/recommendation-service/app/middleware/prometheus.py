@@ -1,4 +1,4 @@
-"""Prometheus 指标中间件 — storyboard-service"""
+"""Prometheus 指标中间件 — recommendation-service"""
 import time
 import logging
 from fastapi import Request, Response, FastAPI
@@ -11,19 +11,19 @@ logger = logging.getLogger(__name__)
 registry = CollectorRegistry()
 
 # HTTP 指标
-REQUEST_COUNT = Counter("http_requests_total", "Total HTTP requests", ["method", "endpoint", "status_code"], registry=registry)
-REQUEST_DURATION = Histogram("http_request_duration_seconds", "Request duration", ["method", "endpoint"], buckets=[0.1, 0.5, 1, 2, 5, 10, float("inf")], registry=registry)
+REQUEST_COUNT = Counter("http_requests_total", "Total HTTP requests", ["method", "endpoint", "status_code", "service"], registry=registry)
+REQUEST_DURATION = Histogram("http_request_duration_seconds", "Request duration", ["method", "endpoint", "service"], buckets=[0.1, 0.5, 1, 2, 5, 10, float("inf")], registry=registry)
 INPROGRESS_REQUESTS = Gauge("http_requests_inprogress", "Requests in progress", ["method", "endpoint"], registry=registry)
-EXCEPTIONS = Counter("http_exceptions_total", "Total exceptions", ["exception_type", "endpoint"], registry=registry)
+EXCEPTIONS = Counter("http_exceptions_total", "Total exceptions", ["exception_type", "endpoint", "service"], registry=registry)
 
-# 业务指标
-STORYBOARD_GENERATION_COUNT = Counter("storyboard_generation_total", "Storyboard generations", ["type", "status"], registry=registry)
-STORYBOARD_DURATION = Histogram("storyboard_generation_duration_seconds", "Storyboard generation duration", ["type"], buckets=[5, 15, 30, 60, 120, 300, float("inf")], registry=registry)
+# 推荐业务指标
+RECOMMENDATION_COUNT = Counter("recommendation_total", "Recommendation requests", ["reason", "status"], registry=registry)
+RECOMMENDATION_DURATION = Histogram("recommendation_duration_seconds", "Recommendation pipeline duration", ["stage"], buckets=[0.01, 0.05, 0.1, 0.5, 1, 2, 5], registry=registry)
 HEALTH_STATUS = Gauge("service_health_status", "Health status", ["service"], registry=registry)
 
 
 class PrometheusMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app: ASGIApp, app_name: str = "storyboard-service"):
+    def __init__(self, app: ASGIApp, app_name: str = "recommendation-service"):
         super().__init__(app)
         self.app_name = app_name
 

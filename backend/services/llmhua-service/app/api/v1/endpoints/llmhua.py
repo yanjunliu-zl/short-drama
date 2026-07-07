@@ -952,37 +952,88 @@ async def generate_shots_to_video(
         total_shots = sum(len(ep.shots) for ep in request.episodes)
         logger.info(f"[API] POST /shots-to-video (stream) shots={total_shots}")
 
+        # #S1: Build character consistency context from reference images
+        ref_chars = {}
+        if request.referenceImages and request.referenceImages.characters:
+            ref_chars = request.referenceImages.characters  # name → image_url
+
+        async def generate_shot_image(shot, ep_idx: int):
+            """Generate image+video for a single shot with retry. Returns ShotVideoResult dict."""
+            # #S2: Use PromptBuilder-enriched prompt if available, else raw description
+            img_prompt = (
+                shot.imagePromptZh or shot.imagePrompt or
+                shot.description
+            )
+
+            # #S1: Append character consistency hint if reference images exist
+            if ref_chars and shot.characters:
+                char_refs = [f"{c}参考图:{ref_chars[c]}" for c in shot.characters if c in ref_chars]
+                if char_refs:
+                    img_prompt = f"{img_prompt}。角色视觉参考: {'; '.join(char_refs)}"
+
+            # #S3: Retry image generation up to 2 times
+            img_result = None
+            for attempt in range(2):
+                img_result = await seedance_service.generate_image_from_scene(
+                    scene_description=img_prompt[:500],
+                    style=request.style or "写实风格",
+                    width=request.width or 1920, height=request.height or 1920,
+                )
+                if img_result and img_result.get("image_url"):
+                    break
+                logger.warning(f"Shot {shot.number} image attempt {attempt+1}/2 failed, retrying...")
+
+            video_url = None
+            if img_result and img_result.get("image_url"):
+                vid_prompt = _build_shot_video_prompt(shot, request.style or "写实风格", request.referenceImages)
+                # #S5: Adaptive duration — longer dialogue = longer video
+                dialogue_len = len(shot.dialogue or "")
+                adaptive_duration = max(3, min(15, shot.duration or 5, int(dialogue_len / 3) + 3))
+                vid_result = await seedance_service.generate_video_from_image(
+                    image_url=img_result["image_url"], prompt=vid_prompt,
+                    duration=adaptive_duration,
+                )
+                video_url = vid_result.get("video_url") if vid_result else None
+
+            return ShotVideoResult(
+                shot_id=shot.id, shot_number=shot.number,
+                episode_id=ep.id, episode_title=ep.title,
+                status="completed" if video_url else "failed",
+                video_url=video_url,
+                image_url=img_result.get("image_url") if img_result else None,
+            ).dict()
+
         async def event_generator():
             try:
                 yield format_sse_event({"stage": "starting", "total_shots": total_shots, "progress": 0}, event=EVENT_PROGRESS)
-                completed = 0
                 results = []
+                completed = 0
+
                 for ep in request.episodes:
-                    for shot in ep.shots:
-                        yield format_sse_event({"stage": "shot_start", "shot_number": shot.number, "completed": completed, "total": total_shots, "progress": int(5 + (completed / total_shots) * 95)}, event=EVENT_PROGRESS)
-                        prompt = _build_shot_video_prompt(shot, request.style or "写实风格", request.referenceImages)
-                        img_result = await seedance_service.generate_image_from_scene(
-                            scene_description=shot.description, style=request.style or "写实风格",
-                            width=request.width or 1920, height=request.height or 1920,
+                    ep_shots = ep.shots
+                    # #S6: Process shots within an episode concurrently (max 3)
+                    sem = asyncio.Semaphore(3)
+                    async def process_one(s):
+                        async with sem:
+                            return await generate_shot_image(s, ep.number)
+                    shot_tasks = [process_one(s) for s in ep_shots]
+                    ep_results = await asyncio.gather(*shot_tasks)
+
+                    for r in ep_results:
+                        results.append(r)
+                        if r["status"] == "completed":
+                            completed += 1
+                        yield format_sse_event(
+                            {"stage": "shot_done", "shot_number": r["shot_number"],
+                             "completed": completed, "total": total_shots,
+                             "progress": int(5 + (completed / total_shots) * 95)},
+                            event=EVENT_PROGRESS,
                         )
-                        video_url = None
-                        if img_result and img_result.get("image_url"):
-                            vid_result = await seedance_service.generate_video_from_image(
-                                image_url=img_result["image_url"], prompt=prompt,
-                                duration=shot.duration or 5,
-                            )
-                            video_url = vid_result.get("video_url") if vid_result else None
-                        completed += 1
-                        results.append(ShotVideoResult(
-                            shot_id=shot.id, shot_number=shot.number,
-                            episode_id=ep.id, episode_title=ep.title,
-                            status="completed" if video_url else "failed",
-                            video_url=video_url,
-                            image_url=img_result.get("image_url") if img_result else None,
-                        ).dict())
+
                 yield format_sse_event({"stage": "completed", "progress": 100}, event=EVENT_PROGRESS)
                 yield format_sse_event({"results": results, "total_shots": total_shots, "completed_shots": completed}, event=EVENT_DONE)
             except Exception as e:
+                logger.error(f"shots-to-video stream error: {e}")
                 yield format_sse_event({"error": str(e), "code": type(e).__name__}, event=EVENT_ERROR)
 
         return StreamingResponse(event_generator(), media_type="text/event-stream",
@@ -1034,6 +1085,7 @@ async def _generate_shots_to_video_task(
         results: list = []
         completed_count = 0
         failed_count = 0
+        scene_seeds: dict = {}  # #S11: shared seeds per scene for cross-shot consistency
 
         for ep in request.episodes:
             for shot in ep.shots:
@@ -1071,6 +1123,12 @@ async def _generate_shots_to_video_task(
                                 reference_image_url = ref_scenes[scene_ref]
                                 logger.info(f"镜头 {shot_dict.get('number','?')} 使用场景参考图: {scene_ref}")
 
+                    # #S11: Cross-shot consistency — shared seed per scene
+                    scene_ref = shot_dict.get('sceneRef', '')
+                    if scene_ref not in scene_seeds:
+                        scene_seeds[scene_ref] = hash(scene_ref + str(shot_dict.get('number', 0))) % (2**31)
+                    shared_seed = scene_seeds[scene_ref]
+
                     # 生成首帧图像：有参考图则跳过生成直接用参考图
                     if reference_image_url:
                         image_result = {"status": "completed", "image_url": reference_image_url,
@@ -1080,6 +1138,7 @@ async def _generate_shots_to_video_task(
                         image_result = await seedance_service.generate_image_from_scene(
                             scene_description=image_prompt,
                             style=request.style,
+                            seed=shared_seed,  # Shared seed for scene consistency
                             width=request.width or 1920,
                             height=request.height or 1920,
                         )
@@ -1109,11 +1168,11 @@ async def _generate_shots_to_video_task(
                             status = "completed"
                             completed_count += 1
                         else:
-                            # 视频生成失败，用图像作为降级输出
-                            video_url = image_url
-                            status = "completed"
-                            error_msg = "视频生成失败，保留预览图"
-                            completed_count += 1
+                            # 视频生成失败 — 显式标记为 image_only，不伪装成 completed
+                            video_url = None
+                            status = "image_only"
+                            error_msg = "视频生成失败，仅保留预览图"
+                            # Do NOT increment completed_count — video wasn't completed
                     else:
                         error_msg = "图像生成失败"
                         failed_count += 1

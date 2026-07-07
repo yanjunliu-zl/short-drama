@@ -18,10 +18,27 @@ class StoryboardCacheService:
         self.default_ttl = settings.CACHE_DEFAULT_TTL
         self.storyboard_ttl = settings.CACHE_SCRIPT_TTL  # 分镜缓存2小时
 
+    def _generate_storyboard_key(self, request: Dict[str, Any], prefix: str = "storyboard") -> str:
+        """生成分镜缓存键。prefix 区分场景级分镜和镜头级分镜，避免缓存互相覆盖。"""
+        key_data = {
+            "title": request.get('title', ''),
+            "theme": request.get('theme', ''),
+            "style": request.get('style', ''),
+            "scene_count": request.get('scene_count', 0),
+            "script_hash": hashlib.md5(request.get('script', '').encode()).hexdigest()[:16],
+            # Shot-level specific fields (empty for scene-level requests)
+            "episode_count": request.get('episodeCount', 0),
+            "episode_contents_hash": hashlib.md5(
+                json.dumps(request.get('episodeContents', []), sort_keys=True).encode()
+            ).hexdigest()[:8],
+        }
+        key_str = json.dumps(key_data, sort_keys=True)
+        return f"{prefix}:{hashlib.md5(key_str.encode()).hexdigest()}"
+
     async def get_cached_storyboard(self, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """获取缓存的分镜"""
+        """获取缓存的场景级分镜"""
         try:
-            cache_key = self._generate_storyboard_key(request)
+            cache_key = self._generate_storyboard_key(request, prefix="storyboard")
             cached = await self.redis.get(cache_key)
             if cached:
                 return json.loads(cached)
@@ -31,9 +48,9 @@ class StoryboardCacheService:
             return None
 
     async def cache_storyboard_generation(self, request: Dict[str, Any], data: Dict[str, Any]) -> bool:
-        """缓存分镜生成结果"""
+        """缓存场景级分镜生成结果"""
         try:
-            cache_key = self._generate_storyboard_key(request)
+            cache_key = self._generate_storyboard_key(request, prefix="storyboard")
             await self.redis.setex(
                 cache_key,
                 self.storyboard_ttl,
@@ -44,18 +61,31 @@ class StoryboardCacheService:
             logger.error(f"缓存分镜失败: {e}")
             return False
 
-    def _generate_storyboard_key(self, request: Dict[str, Any]) -> str:
-        """生成分镜缓存键"""
-        # 提取关键参数生成唯一键
-        key_data = {
-            "title": request.get('title', ''),
-            "theme": request.get('theme', ''),
-            "style": request.get('style', ''),
-            "scene_count": request.get('scene_count', 0),
-            "script_hash": hashlib.md5(request.get('script', '').encode()).hexdigest()[:16]
-        }
-        key_str = json.dumps(key_data, sort_keys=True)
-        return f"storyboard:{hashlib.md5(key_str.encode()).hexdigest()}"
+    async def get_cached_shots(self, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """获取缓存的镜头级分镜"""
+        try:
+            cache_key = self._generate_storyboard_key(request, prefix="shots")
+            cached = await self.redis.get(cache_key)
+            if cached:
+                return json.loads(cached)
+            return None
+        except Exception as e:
+            logger.warning(f"获取镜头缓存失败: {e}")
+            return None
+
+    async def cache_shots_generation(self, request: Dict[str, Any], data: Dict[str, Any]) -> bool:
+        """缓存镜头级分镜生成结果"""
+        try:
+            cache_key = self._generate_storyboard_key(request, prefix="shots")
+            await self.redis.setex(
+                cache_key,
+                self.storyboard_ttl,
+                json.dumps(data, ensure_ascii=False)
+            )
+            return True
+        except Exception as e:
+            logger.error(f"缓存镜头分镜失败: {e}")
+            return False
 
 
 # 全局缓存服务实例

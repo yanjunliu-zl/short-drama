@@ -12,6 +12,28 @@ from app.core.config import settings
 from app.services.cache_service import get_storyboard_cache_service
 from app.services.usage_tracker import track_llm_usage
 from app.utils.sse import stream_tokens_from_llm, format_sse_event, EVENT_STAGE, EVENT_DONE
+from app.utils.model_router import create_llm_client, get_active_provider, provider_is_healthy
+from app.services.prompt_builder import PromptBuilder, ShotPromptInput
+from app.services.cinematography_profiles import get_profile, list_profiles
+
+# Map Chinese style names → cinematography profile IDs
+_STYLE_TO_PROFILE: Dict[str, str] = {
+    "写实风格": "classic-cinematic",
+    "悬疑风格": "suspense-thriller",
+    "悬疑": "suspense-thriller",
+    "浪漫喜剧": "romantic-comedy",
+    "喜剧": "romantic-comedy",
+    "古装风格": "ancient-palace",
+    "古风": "wuxia-classic",
+    "武侠": "wuxia-classic",
+    "科幻": "sci-fi-future",
+    "赛博朋克": "cyberpunk-neon",
+    "日系": "japanese-fresh",
+    "纪实风格": "documentary",
+    "家庭": "family-warmth",
+    "民国": "republican-era",
+    "港风": "hk-retro-90s",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -60,21 +82,12 @@ class StoryboardAIService:
             # 初始化回调处理器
             self.callback_handler = StoryboardAICallbackHandler()
 
-            # 配置AI模型 - 使用DeepSeek
-            llm_kwargs = {
-                "model_name": settings.DEEPSEEK_MODEL,
-                "temperature": settings.STORYBOARD_TEMPERATURE,
-                "max_tokens": settings.STORYBOARD_MAX_TOKENS,
-                "timeout": settings.STORYBOARD_TIMEOUT,
-                "streaming": True,  # Enable both ainvoke() and astream()
-                "openai_api_key": settings.DEEPSEEK_API_KEY,
-                "openai_api_base": settings.DEEPSEEK_API_BASE,
-            }
-
-            logger.info(f"使用DeepSeek模型: {settings.DEEPSEEK_MODEL}")
-
-            # 创建LLM实例
-            self.llm = ChatOpenAI(**llm_kwargs)
+            # Use ModelRouter for automatic provider fallback
+            self.llm = create_llm_client(
+                prefer="deepseek",
+                timeout=settings.STORYBOARD_TIMEOUT,
+            )
+            logger.info(f"LLM provider: {get_active_provider()}")
 
             # 配置LangChain追踪
             if settings.LANGCHAIN_TRACING and settings.LANGCHAIN_API_KEY:
@@ -155,7 +168,7 @@ class StoryboardAIService:
             logger.info(f"开始生成镜头级分镜(逐集): {title} episodes={episode_count} script_len={script_len}")
 
             if self.cache_service:
-                cached = await self.cache_service.get_cached_storyboard(request)
+                cached = await self.cache_service.get_cached_shots(request)
                 if cached and cached.get("episodes"):
                     logger.info("缓存命中")
                     return cached
@@ -232,9 +245,13 @@ class StoryboardAIService:
                         global_shot_id += len(ep.get("shots", []))
                         all_episodes.append(ep)
 
+            # Enrich shots with 5-layer prompt builder + cinematography profiles
+            style = request.get("style", "写实风格")
+            all_episodes = self._enrich_all_shots(all_episodes, style)
+
             result = {"episodes": all_episodes}
             if self.cache_service and all_episodes:
-                await self.cache_service.cache_storyboard_generation(request, result)
+                await self.cache_service.cache_shots_generation(request, result)
 
             total = sum(len(ep.get("shots", [])) for ep in all_episodes)
             elapsed = time.time() - t0
@@ -316,10 +333,84 @@ class StoryboardAIService:
                 event=EVENT_STAGE,
             )
 
+        # Enrich shots with 5-layer prompt builder + cinematography profiles
+        style = request.get("style", "写实风格")
+        all_episodes = self._enrich_all_shots(all_episodes, style)
+
         yield format_sse_event(
             {"status": "completed", "episodes": all_episodes},
             event=EVENT_DONE,
         )
+
+    # ================================================================
+    # Prompt enrichment — 5-layer builder + cinematography profiles
+    # ================================================================
+
+    def _get_profile_for_style(self, style: str) -> Optional[Any]:
+        """Resolve a Chinese style name to a CinematographyProfile."""
+        profile_id = _STYLE_TO_PROFILE.get(style)
+        if profile_id:
+            return get_profile(profile_id)
+        # Fuzzy match: check if any known key contains the style string
+        for key, pid in _STYLE_TO_PROFILE.items():
+            if style in key or key in style:
+                return get_profile(pid)
+        return get_profile("classic-cinematic")
+
+    def _enrich_shot_with_prompts(self, shot: dict, style: str) -> dict:
+        """Enrich a single shot with image/video prompts from PromptBuilder.
+
+        Adds imagePromptZh, videoPromptZh, endFramePromptZh, needsEndFrame
+        fields to the shot dict if they are not already populated.
+        """
+        profile = self._get_profile_for_style(style)
+        try:
+            shot_input = ShotPromptInput(
+                shot_type=shot.get("shotType", "中景"),
+                duration=shot.get("duration", 5),
+                camera_angle=shot.get("cameraAngle", "正面平视"),
+                description=shot.get("description", ""),
+                dialogue=shot.get("dialogue", ""),
+                characters=shot.get("characters", []),
+                camera_movement=shot.get("cameraMovement"),
+                camera_rig=shot.get("cameraRig"),
+                movement_speed=shot.get("movementSpeed"),
+                depth_of_field=shot.get("depthOfField"),
+                focus_target=shot.get("focusTarget"),
+                focus_transition=shot.get("focusTransition"),
+                lighting_style=shot.get("lightingStyle"),
+                lighting_direction=shot.get("lightingDirection"),
+                color_temperature=shot.get("colorTemperature"),
+                emotion_tags=shot.get("emotionTags", []),
+                narrative_function=shot.get("narrativeFunction"),
+                atmospheric_effects=shot.get("atmosphericEffects"),
+                effect_intensity=shot.get("effectIntensity"),
+                focal_length=shot.get("focalLength"),
+                photography_technique=shot.get("photographyTechnique"),
+                playback_speed=shot.get("playbackSpeed"),
+                style=style,
+            )
+
+            # Only generate if not already set by AI
+            if not shot.get("imagePromptZh"):
+                shot["imagePromptZh"] = PromptBuilder.build_image_prompt(shot_input, profile)
+            if not shot.get("videoPromptZh"):
+                shot["videoPromptZh"] = PromptBuilder.build_video_prompt(shot_input, profile)
+            if not shot.get("needsEndFrame"):
+                shot["needsEndFrame"] = PromptBuilder.infer_needs_end_frame(shot_input)
+            if shot.get("needsEndFrame") and not shot.get("endFramePromptZh"):
+                shot["endFramePromptZh"] = PromptBuilder.build_end_frame_prompt(shot_input, profile)
+        except Exception as e:
+            logger.warning(f"Prompt enrichment failed for shot {shot.get('id', '?')}: {e}")
+
+        return shot
+
+    def _enrich_all_shots(self, episodes: list, style: str) -> list:
+        """Enrich all shots across all episodes with PromptBuilder prompts."""
+        for ep in episodes:
+            for shot in ep.get("shots", []):
+                self._enrich_shot_with_prompts(shot, style)
+        return episodes
 
     def _split_script_to_episodes(self, script: str) -> list:
         """按第N集标记拆分剧本（仅精确匹配集标题）"""
@@ -519,8 +610,16 @@ class StoryboardAIService:
 - soundEffects: 音效数组
 - music: 背景音乐描述
 - notes: 备注
+- lightingStyle: 灯光风格（自然光/三点布光/高调光/低调光/侧光/逆光/霓虹光/烛光）
+- depthOfField: 景深（浅景深/中等景深/深景深）
+- cameraRig: 拍摄设备（三脚架/手持/斯坦尼康/滑轨/摇臂/无人机）
+- cameraMovement: 运镜方式（推/拉/摇/移/跟/升/降/固定）
+- movementSpeed: 运动速度（缓慢/中速/快速）
+- emotionTags: 情绪标签数组（如["紧张","压抑","期待"]）
+- atmosphericEffects: 氛围特效（无/雾/雨/雪/烟/灰尘）
 
 每集应包含6-12个镜头，确保镜头节奏紧凑。
+每个镜头必须填充所有上述摄影字段，根据剧情设计不同的值而非全用默认。
 
 输出JSON格式:
 {{

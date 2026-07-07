@@ -11,22 +11,27 @@ import Register from '../pages/Register';
 import Payment from '../pages/Payment';
 import Settings from '../pages/Settings';
 import { CaseDetail } from '../pages/CaseDetail';
+import ProtectedRoute from '../components/ProtectedRoute';
 
 const AppRoutes: React.FC = () => {
   return (
     <Routes>
+      {/* 公开页面 — 无需登录 */}
       <Route path="/" element={<Home />} />
       <Route path="/overview" element={<Home />} />
       <Route path="/case/:id" element={<CaseDetail />} />
-      <Route path="/script" element={<Script />} />
-      <Route path="/scene" element={<Scene />} />
-      <Route path="/storyboard" element={<Storyboard />} />
-      <Route path="/video" element={<Video />} />
-      <Route path="/final-cut" element={<FinalCut />} />
-      <Route path="/payment" element={<Payment />} />
-      <Route path="/settings" element={<Settings />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+
+      {/* 需要登录才能访问的页面 */}
+      <Route path="/script" element={<ProtectedRoute><Script /></ProtectedRoute>} />
+      <Route path="/scene" element={<ProtectedRoute><Scene /></ProtectedRoute>} />
+      <Route path="/storyboard" element={<ProtectedRoute><Storyboard /></ProtectedRoute>} />
+      <Route path="/video" element={<ProtectedRoute><Video /></ProtectedRoute>} />
+      <Route path="/final-cut" element={<ProtectedRoute><FinalCut /></ProtectedRoute>} />
+      <Route path="/payment" element={<ProtectedRoute><Payment /></ProtectedRoute>} />
+      <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+
       <Route path="*" element={<div>404 - 页面未找到</div>} />
     </Routes>
   );

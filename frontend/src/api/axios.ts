@@ -96,8 +96,13 @@ axiosInstance.interceptors.response.use(
         duration: 3,
       })
 
-      // 重定向到登录页
-      window.location.href = '/login'
+      // 重定向到登录页，记住当前路径以便登录后跳回
+      const currentPath = window.location.pathname + window.location.search
+      if (currentPath !== '/login' && currentPath !== '/register') {
+        window.location.href = `/login?redirect=${encodeURIComponent(currentPath)}`
+      } else {
+        window.location.href = '/login'
+      }
       return Promise.reject(error)
     }
 

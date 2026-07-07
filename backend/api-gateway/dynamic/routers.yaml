@@ -13,97 +13,97 @@ http:
         - security-headers
         - retry
       service: user-service
-    # 剧本服务路由
+    # 剧本服务路由 (AI generation — tiered rate limit)
     script-service:
       rule: "PathPrefix(`/api/v1/scripts`)"
       entryPoints:
         - web
       middlewares:
         - cors
-        - rate-limit
+        - rate-limit-ai
         - security-headers
         - retry
       service: script-service
-    # 视频服务路由
+    # 视频服务路由 (I/O heavy)
     video-service:
       rule: "PathPrefix(`/api/v1/videos`)"
       entryPoints:
         - web
       middlewares:
         - cors
-        - rate-limit
+        - rate-limit-video
         - security-headers
         - retry
       service: video-service
 
-    # 最终剪辑服务路由
+    # 最终剪辑服务路由 (I/O heavy)
     final-cut-service:
       rule: "PathPrefix(`/api/v1/final-cut`)"
       entryPoints:
         - web
       middlewares:
         - cors
-        - rate-limit
+        - rate-limit-video
         - security-headers
         - retry
       service: final-cut-service
 
-    # 评论区路由 → script-service (通过 /api/v1/comments 前缀)
+    # 评论区路由 → script-service (public content)
     case-comments:
       rule: "PathPrefix(`/api/v1/comments`)"
       entryPoints:
         - web
       middlewares:
         - cors
-        - rate-limit
+        - rate-limit-public
         - security-headers
         - retry
       service: script-service
 
-    # 内容服务路由 (案例广场 + 我的作品)
+    # 内容服务路由 (案例广场 + 作品 — public browsing)
     content-service:
       rule: "PathPrefix(`/api/v1/cases`) || PathPrefix(`/api/v1/works`) || PathPrefix(`/api/v1/scenes`) || PathPrefix(`/api/v1/characters`) || PathPrefix(`/api/v1/assets`) || PathPrefix(`/api/v1/payments`) || PathPrefix(`/api/v1/usage`)"
       entryPoints:
         - web
       middlewares:
         - cors
-        - rate-limit
+        - rate-limit-public
         - security-headers
         - retry
       service: content-service
 
-    # 分镜服务路由
+    # 分镜服务路由 (AI generation)
     storyboard-service:
       rule: "PathPrefix(`/api/v1/storyboard`)"
       entryPoints:
         - web
       middlewares:
         - cors
-        - rate-limit
+        - rate-limit-ai
         - security-headers
         - retry
       service: storyboard-service
 
-    # 推荐系统服务路由 (独立微服务)
+    # 推荐系统服务路由 (public browsing)
     recommendation-service:
       rule: "PathPrefix(`/api/v1/recommendations`)"
       entryPoints:
         - web
       middlewares:
         - cors
-        - rate-limit
+        - rate-limit-public
         - security-headers
         - retry
       service: recommendation-service
 
-    # llmhua AI图像视频生成服务路由
+    # llmhua AI图像视频生成服务路由 (AI generation)
     llmhua-service:
       rule: "PathPrefix(`/api/v1/llmhua`)"
       entryPoints:
         - web
       middlewares:
         - cors
-        - rate-limit
+        - rate-limit-ai
         - security-headers
         - retry
       service: llmhua-service

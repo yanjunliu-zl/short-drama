@@ -19,6 +19,7 @@ interface AuthState {
   token: string | null
   refreshToken: string | null
   isAuthenticated: boolean
+  isInitialized: boolean   // Token validation completed
   isLoading: boolean
   error: string | null
 }
@@ -27,7 +28,8 @@ const initialState: AuthState = {
   user: null,
   token: localStorage.getItem('token'),
   refreshToken: localStorage.getItem('refreshToken'),
-  isAuthenticated: !!localStorage.getItem('token'),
+  isAuthenticated: false,  // Must be validated by initializeAuth first
+  isInitialized: false,
   isLoading: false,
   error: null,
 }
@@ -62,6 +64,18 @@ export const register = createAsyncThunk<LoginResponse, RegisterRequest>(
     } catch (error: any) {
       return rejectWithValue(error.response?.data || error.message)
     }
+  }
+)
+
+export const initializeAuth = createAsyncThunk(
+  'auth/initialize',
+  async (_, { dispatch }) => {
+    // Check if token exists in localStorage — actual validity
+    // is enforced by the axios 401 interceptor at request time
+    const token = localStorage.getItem('token')
+    const valid = !!token
+    dispatch(authSlice.actions.setInitialized())
+    return { valid }
   }
 )
 
@@ -105,11 +119,15 @@ const authSlice = createSlice({
       localStorage.setItem('token', action.payload)
       state.isAuthenticated = true
     },
+    setInitialized: (state) => {
+      state.isInitialized = true
+    },
     clearAuth: (state) => {
       state.user = null
       state.token = null
       state.refreshToken = null
       state.isAuthenticated = false
+      state.isInitialized = true  // Still initialized — we know auth is cleared
       state.error = null
       localStorage.removeItem('token')
       localStorage.removeItem('refreshToken')
@@ -180,6 +198,25 @@ const authSlice = createSlice({
         state.error = action.payload as string || '注册失败'
       })
 
+      // Initialize auth
+      .addCase(initializeAuth.fulfilled, (state, action) => {
+        if (action.payload.valid) {
+          state.isAuthenticated = true
+          state.isInitialized = true
+        } else {
+          state.token = null
+          state.refreshToken = null
+          state.isAuthenticated = false
+          state.isInitialized = true
+          localStorage.removeItem('token')
+          localStorage.removeItem('refreshToken')
+        }
+      })
+      .addCase(initializeAuth.rejected, (state) => {
+        state.isAuthenticated = false
+        state.isInitialized = true
+      })
+
       // Logout
       .addCase(logout.fulfilled, (state) => {
         state.user = null
@@ -213,5 +250,5 @@ const authSlice = createSlice({
   },
 })
 
-export const { setUser, setToken, clearAuth, setError, clearError } = authSlice.actions
+export const { setUser, setToken, setInitialized, clearAuth, setError, clearError } = authSlice.actions
 export default authSlice.reducer

@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { Form, Input, Button, Card, Typography, Space, Divider } from 'antd'
 import { UserOutlined, LockOutlined } from '@ant-design/icons'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import type { LoginRequest } from '@/types'
 
@@ -10,14 +10,25 @@ const { Title, Text } = Typography
 const Login: React.FC = () => {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
-  const { login } = useAuth()
+  const { login, isAuthenticated } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+
+  // 如果已登录，直接跳转
+  React.useEffect(() => {
+    if (isAuthenticated) {
+      const from = (location.state as any)?.from || '/'
+      navigate(from, { replace: true })
+    }
+  }, [isAuthenticated])
 
   const handleSubmit = async (values: LoginRequest) => {
     setLoading(true)
     try {
       await login(values)
-      navigate('/')
+      // 登录成功后跳转到之前的页面，或首页
+      const from = (location.state as any)?.from || '/'
+      navigate(from, { replace: true })
     } catch {
       // 错误已在 useAuth hook 中处理
     } finally {

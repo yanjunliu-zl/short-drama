@@ -1,0 +1,209 @@
+# GPU 推理服务部署 — vLLM + TEI + Seedance worker
+# 配合 Volcano GPU 队列 (volcano-queues.yaml) 使用
+---
+# vLLM 推理服务 — 自托管 LLM (Qwen2.5-7B)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-server
+  namespace: shortdrama
+  labels:
+    app: vllm-server
+    queue: p1-realtime
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vllm-server
+  template:
+    metadata:
+      labels:
+        app: vllm-server
+    spec:
+      priorityClassName: high-priority
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args:
+            - "--model"
+            - "Qwen/Qwen2.5-7B-Instruct"
+            - "--gpu-memory-utilization"
+            - "0.85"
+            - "--max-model-len"
+            - "8192"
+            - "--tensor-parallel-size"
+            - "1"
+          ports:
+            - containerPort: 8000
+          env:
+            - name: VLLM_API_KEY
+              value: "not-needed"
+          resources:
+            requests:
+              nvidia.com/gpu: "1"
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              nvidia.com/gpu: "1"
+              cpu: "8"
+              memory: "32Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+      # Use MIG profile for A100: 1g.5gb instance
+      nodeSelector:
+        nvidia.com/gpu.product: "NVIDIA-A100-SXM4-40GB"
+---
+# vLLM 推理服务 — 大模型 (Qwen2.5-14B, 2xGPU)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-server-large
+  namespace: shortdrama
+  labels:
+    app: vllm-server-large
+    queue: p1-realtime
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-server-large
+  template:
+    metadata:
+      labels:
+        app: vllm-server-large
+    spec:
+      priorityClassName: high-priority
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args:
+            - "--model"
+            - "Qwen/Qwen2.5-14B-Instruct"
+            - "--gpu-memory-utilization"
+            - "0.90"
+            - "--max-model-len"
+            - "16384"
+            - "--tensor-parallel-size"
+            - "2"
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              nvidia.com/gpu: "2"
+              cpu: "8"
+              memory: "32Gi"
+            limits:
+              nvidia.com/gpu: "2"
+              cpu: "16"
+              memory: "64Gi"
+      nodeSelector:
+        nvidia.com/gpu.product: "NVIDIA-A100-SXM4-40GB"
+---
+# TEI Embedding 服务
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tei-server
+  namespace: shortdrama
+  labels:
+    app: tei-server
+    queue: p1-realtime
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tei-server
+  template:
+    metadata:
+      labels:
+        app: tei-server
+    spec:
+      priorityClassName: high-priority
+      containers:
+        - name: tei
+          image: ghcr.io/huggingface/text-embeddings-inference:latest
+          args:
+            - "--model-id"
+            - "BAAI/bge-large-zh-v1.5"
+            - "--max-concurrent-requests"
+            - "128"
+            - "--max-batch-tokens"
+            - "16384"
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              nvidia.com/gpu: "1"
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              nvidia.com/gpu: "1"
+              cpu: "4"
+              memory: "16Gi"
+      nodeSelector:
+        nvidia.com/gpu.product: "NVIDIA-L40S"  # L40S with vGPU
+---
+# vLLM K8s Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-server
+  namespace: shortdrama
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+  selector:
+    app: vllm-server
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-server-large
+  namespace: shortdrama
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+  selector:
+    app: vllm-server-large
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tei-server
+  namespace: shortdrama
+spec:
+  ports:
+    - port: 80
+      targetPort: 80
+  selector:
+    app: tei-server
+---
+# GPU Node Autoscaler — Karpenter Provisioner for GPU nodes
+apiVersion: karpenter.sh/v1beta1
+kind: NodePool
+metadata:
+  name: gpu-pool
+  namespace: shortdrama
+spec:
+  template:
+    spec:
+      requirements:
+        - key: nvidia.com/gpu.present
+          operator: In
+          values: ["true"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+      nodeClassRef:
+        name: default
+  limits:
+    nvidia.com/gpu: "32"  # Max 32 GPUs across all tiers
+  disruption:
+    consolidationPolicy: WhenUnderutilized
+    expireAfter: 720h  # 30 days

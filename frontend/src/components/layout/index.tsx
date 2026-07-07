@@ -14,6 +14,7 @@ import {
   UserOutlined,
   LoginOutlined,
   LogoutOutlined,
+  LockOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -62,9 +63,14 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   // 菜单项点击处理
   const handleMenuClick = ({ key }: { key: string }) => {
     const route = menuKeyToRoute[key] || '/';
+    // 需要登录的页面：未登录时跳转到登录页
+    const protectedPages = ['story_script', 'scene_character_props', 'storyboard_script', 'storyboard_video', 'final_video'];
+    if (protectedPages.includes(key) && !isAuthenticated) {
+      navigate('/login', { state: { from: route } });
+      return;
+    }
     // 为故事剧本/场景/分镜/视频/成片页面携带当前 workId
-    const pipelinePages = ['story_script', 'scene_character_props', 'storyboard_script', 'storyboard_video', 'final_video'];
-    if (pipelinePages.includes(key)) {
+    if (protectedPages.includes(key)) {
       const workId = localStorage.getItem(`pipeline_${reduxUserId}_workId`);
       navigate(workId ? `${route}?workId=${workId}` : route);
     } else {
@@ -144,6 +150,20 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         collapsed={collapsed}
         onCollapse={setCollapsed}
         width={250}
+        trigger={
+          <div style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            height: '100%',
+            width: '100%',
+            fontSize: 10,
+            color: '#86868b',
+            lineHeight: 1,
+          }}>
+            {collapsed ? '▶' : '◀'}
+          </div>
+        }
         style={{
           background: '#f5f5f7',
           borderRight: '1px solid #e5e5ea',
@@ -156,6 +176,27 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             display: flex !important;
             flex-direction: column !important;
             height: 100% !important;
+          }
+          .ant-layout-sider-trigger {
+            height: 24px !important;
+            line-height: 24px !important;
+            background: #f5f5f7 !important;
+            border-top: 1px solid #e5e5ea !important;
+            padding: 0 !important;
+          }
+          .ant-layout-sider-trigger:hover {
+            background: #e8e8ed !important;
+          }
+          .ant-layout-sider-trigger > * {
+            display: flex !important;
+            justify-content: center !important;
+            align-items: center !important;
+          }
+          .sidebar-user-area .ant-avatar > .anticon {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            vertical-align: unset !important;
           }
         `}</style>
         <Link to="/" style={{ textDecoration: 'none', flexShrink: 0 }}>
@@ -189,76 +230,44 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
         {/* 侧边栏底部用户区域 */}
         <div
+          className="sidebar-user-area"
           style={{
-            padding: '16px',
+            padding: '8px 20px',
             borderTop: '1px solid #e5e5ea',
             flexShrink: 0,
           }}
         >
           {isAuthenticated ? (
             <Dropdown menu={{ items: userMenuItems }} placement="topRight" trigger={['click']}>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '8px',
-                  borderRadius: 8,
-                  cursor: 'pointer',
-                  transition: 'background 0.2s',
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLElement).style.background = '#f2f2f7'
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLElement).style.background = 'transparent'
-                }}
-              >
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                cursor: 'pointer',
+                padding: '4px 0',
+                justifyContent: collapsed ? 'center' : 'flex-start',
+              }}>
                 <Avatar
-                  size={collapsed ? 28 : 32}
+                  size={28}
                   icon={<UserOutlined />}
                   style={{ backgroundColor: '#0066cc', flexShrink: 0 }}
                 />
                 {!collapsed && (
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontSize: 14,
-                        fontWeight: 500,
-                        color: '#1d1d1f',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {user?.username || '用户'}
-                    </div>
-                    <div style={{ fontSize: 12, color: '#86868b' }}>
-                      {user?.email || ''}
-                    </div>
-                  </div>
+                  <span style={{ fontSize: 13, fontWeight: 500, color: '#1d1d1f' }}>
+                    {user?.username || '用户'}
+                  </span>
                 )}
               </div>
             </Dropdown>
           ) : (
-            <div style={{ display: 'flex', flexDirection: collapsed ? 'column' : 'row', gap: 8, alignItems: 'center' }}>
-              <Button
-                type="primary"
-                icon={<LoginOutlined />}
-                onClick={() => navigate('/login')}
-                block
-              >
-                {!collapsed && '登录'}
-              </Button>
-              {!collapsed && (
-                <Button
-                  onClick={() => navigate('/register')}
-                  block
-                >
-                  注册
-                </Button>
-              )}
-            </div>
+            collapsed ? (
+              <Button type="primary" shape="circle" size="small" icon={<LoginOutlined />} onClick={() => navigate('/login')} />
+            ) : (
+              <div style={{ display: 'flex', gap: 6 }}>
+                <Button type="primary" icon={<LoginOutlined />} onClick={() => navigate('/login')} block size="small">登录</Button>
+                <Button onClick={() => navigate('/register')} block size="small">注册</Button>
+              </div>
+            )
           )}
         </div>
       </Sider>

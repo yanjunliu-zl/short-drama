@@ -19,23 +19,25 @@ http:
         average: 10
         burst: 5
 
-    # AI generation endpoints — expensive, very tight
+    # AI generation endpoints — rate limited per-user at application level;
+    # gateway level allows burst of concurrent requests for responsiveness.
+    # For production, pair with API-key-level throttling in the application.
     rate-limit-ai:
       rateLimit:
-        average: 5
-        burst: 2
+        average: 50
+        burst: 20
 
-    # Public content browsing — generous
+    # Public content browsing — generous for content discovery
     rate-limit-public:
       rateLimit:
-        average: 500
-        burst: 100
+        average: 2000
+        burst: 500
 
-    # Video processing — moderate
+    # Video processing — moderate, I/O-heavy
     rate-limit-video:
       rateLimit:
-        average: 20
-        burst: 10
+        average: 100
+        burst: 30
 
     # 认证中间件
     auth:

@@ -430,60 +430,115 @@ class InMemoryStorage(KnowledgeGraphStorage):
         ]
 
 
-# ============== 图嵌入存储（向量数据库） ==============
+# ============== FAISS 向量存储（真实 embedding） ==============
 
 class VectorKnowledgeStore:
-    """向量知识存储 - 用于语义检索"""
+    """FAISS-based 向量知识存储 — 用于语义检索。
 
-    def __init__(self):
-        self._embeddings = {}
-        self._text_map = {}
+    使用 HuggingFace embeddings（与 V2 pipeline 共享模型）实现真实语义搜索，
+    替代之前基于 MD5 hash 的关键词匹配。
+    """
+
+    def __init__(self, embedding_model_name: str = "BAAI/bge-large-zh-v1.5"):
+        self._texts: Dict[str, str] = {}
+        self._metadata: Dict[str, Dict[str, Any]] = {}
+        self._embeddings = None  # Lazy-loaded
+        self._faiss_index = None  # Lazy-built
+        self._embedding_model_name = embedding_model_name
+        self._dirty = False
+
+    def _get_embeddings(self):
+        """Lazy-load the HuggingFace embedding model."""
+        if self._embeddings is None:
+            from langchain_huggingface import HuggingFaceEmbeddings
+            logger.info(f"GraphRAG: loading embedding model {self._embedding_model_name}")
+            self._embeddings = HuggingFaceEmbeddings(
+                model_name=self._embedding_model_name,
+            )
+        return self._embeddings
+
+    def _build_index(self):
+        """Build FAISS index from stored texts."""
+        from langchain_community.vectorstores import FAISS
+        if not self._texts:
+            return
+        embeddings = self._get_embeddings()
+        texts = list(self._texts.values())
+        self._faiss_index = FAISS.from_texts(texts, embeddings)
+        self._dirty = False
 
     async def add_text(self, text_id: str, text: str, metadata: Dict[str, Any] = None):
-        """添加文本到向量存储"""
-        self._text_map[text_id] = {"text": text, "metadata": metadata or {}}
-        # 简单的哈希作为临时 embedding（实际应使用真实的嵌入模型）
-        text_hash = hashlib.md5(text.encode()).hexdigest()
-        self._embeddings[text_id] = text_hash
+        """Add text to vector store and mark index for rebuild."""
+        self._texts[text_id] = text
+        self._metadata[text_id] = metadata or {}
+        self._dirty = True
 
     async def search_similar(self, query: str, top_k: int = 5) -> List[Dict]:
-        """搜索相似文本"""
-        # 简单的关键词匹配（实际应使用向量相似度搜索）
+        """Semantic search using FAISS + real embeddings.
+
+        Falls back to keyword matching if the embedding model fails to load.
+        """
+        # Try FAISS semantic search
+        if self._faiss_index is None or self._dirty:
+            try:
+                self._build_index()
+            except Exception as e:
+                logger.warning(f"FAISS index build failed: {e} — falling back to keyword")
+
+        if self._faiss_index is not None:
+            try:
+                docs = self._faiss_index.similarity_search_with_score(query, k=top_k)
+                results = []
+                for doc, score in docs:
+                    text_id = None
+                    for tid, text in self._texts.items():
+                        if text == doc.page_content:
+                            text_id = tid
+                            break
+                    results.append({
+                        "id": text_id or "unknown",
+                        "text": doc.page_content,
+                        "score": float(1.0 / (1.0 + score)),  # Convert distance to similarity
+                        "metadata": doc.metadata or {},
+                    })
+                if results:
+                    return results
+            except Exception as e:
+                logger.warning(f"FAISS search failed: {e} — falling back to keyword")
+
+        # Fallback: keyword matching
         results = []
-        for text_id, data in self._text_map.items():
-            if query.lower() in data["text"].lower():
+        for text_id, data in list(self._texts.items()):
+            score = sum(1 for kw in query.split() if kw in data)
+            if score > 0:
                 results.append({
                     "id": text_id,
-                    "text": data["text"],
-                    "score": 1.0,
-                    "metadata": data["metadata"]
+                    "text": data,
+                    "score": min(score * 0.3, 1.0),
+                    "metadata": self._metadata.get(text_id, {}),
                 })
 
-        # 如果没有匹配，返回随机结果
         if not results:
-            for text_id, data in list(self._text_map.items())[:top_k]:
+            for text_id, data in list(self._texts.items())[:top_k]:
                 results.append({
                     "id": text_id,
-                    "text": data["text"],
-                    "score": 0.5,
-                    "metadata": data["metadata"]
+                    "text": data,
+                    "score": 0.1,
+                    "metadata": self._metadata.get(text_id, {}),
                 })
 
-        return results[:top_k]
+        return sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
 
     async def get_context_for_entities(self, entity_names: List[str], script_id: str) -> str:
-        """获取实体的上下文信息"""
+        """Get context snippets for given entities using semantic search."""
         context_parts = []
-
         for entity_name in entity_names:
-            # 搜索包含该实体的文本
-            for text_id, data in self._text_map.items():
-                if entity_name in data["text"] and data["metadata"].get("script_id") == script_id:
-                    context_parts.append(data["text"])
-
+            results = await self.search_similar(entity_name, top_k=2)
+            for r in results:
+                if r["metadata"].get("script_id") == script_id or not script_id:
+                    context_parts.append(r["text"][:500])
         if context_parts:
-            return "\n\n".join(context_parts[:3])  # 返回最多3个相关片段
-
+            return "\n---\n".join(context_parts[:3])
         return ""
 
 

@@ -16,29 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 def create_llm_client():
-    """创建 LLM 客户端（优先 DeepSeek，其次 OpenAI，否则返回 None）"""
+    """创建 LLM 客户端（优先 DeepSeek，其次 OpenAI/Anthropic，否则返回 None）"""
     try:
-        from app.core.config import settings
-        from langchain_openai import ChatOpenAI
-
-        if getattr(settings, 'DEEPSEEK_API_KEY', None):
-            return ChatOpenAI(
-                openai_api_key=settings.DEEPSEEK_API_KEY,
-                openai_api_base=settings.DEEPSEEK_API_BASE,
-                model_name=getattr(settings, 'DEEPSEEK_MODEL', 'deepseek-chat'),
-                temperature=0.7,
-                max_tokens=4096,
-                timeout=120,
-            )
-        elif getattr(settings, 'OPENAI_API_KEY', None):
-            return ChatOpenAI(
-                openai_api_key=settings.OPENAI_API_KEY,
-                model_name=getattr(settings, 'MODEL_NAME', 'gpt-4o'),
-                temperature=0.7,
-                max_tokens=4096,
-                timeout=120,
-            )
-        return None
+        from app.utils.model_router import create_llm_client as _router_create
+        from app.utils.model_router import get_active_provider
+        import logging
+        logger = logging.getLogger(__name__)
+        llm = _router_create(prefer="deepseek", timeout=120.0)
+        if llm:
+            logger.info(f"CharacterDesign LLM provider: {get_active_provider()}")
+        return llm
     except Exception as e:
         logger.warning(f"创建 LLM 客户端失败: {e}")
         return None

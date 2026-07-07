@@ -28,6 +28,8 @@ from app.prompts import (
 )
 from app.schemas.novel_v2 import GlobalInfoResponse
 from app.utils.sse import format_sse_event, EVENT_STAGE, EVENT_ERROR, EVENT_DONE
+from app.services.quality_judge import QualityJudge
+from app.services.content_safety import get_safety_checker
 
 logger = logging.getLogger(__name__)
 
@@ -190,11 +192,21 @@ class Novel2ScriptV2Service:
     def split_chapters(novel_text: str) -> List[Dict[str, Any]]:
         """Split novel into chapters with de-duplicated markers.
 
+        #13: Supports Chinese (第X回/章/节) and English (Chapter N) formats.
         Returns list of {index, title, content}.
         """
-        pattern = r'(?:^|\n)\s*(?:#{1,6}\s*)?第\s*([一二三四五六七八九十百千\d]+)\s*[回章节]'
-        markers = [(m.start(), m.group(0).strip(), m.group(1))
-                    for m in re.finditer(pattern, novel_text, re.MULTILINE)]
+        markers = []
+
+        # Format 1: Chinese 第X回/章/节 (line-start, may have ## markdown)
+        pattern_cn = r'(?:^|\n)\s*(?:#{1,6}\s*)?第\s*([一二三四五六七八九十百千\d]+)\s*[回章节]'
+        for m in re.finditer(pattern_cn, novel_text, re.MULTILINE):
+            markers.append((m.start(), m.group(0).strip(), m.group(1)))
+
+        # Format 2: English Chapter N (fallback)
+        if len(markers) <= 1:
+            pattern_en = r'(?:^|\n)\s*(?:#{1,6}\s*)?Chapter\s+(\d+)'
+            for m in re.finditer(pattern_en, novel_text, re.IGNORECASE | re.MULTILINE):
+                markers.append((m.start(), m.group(0).strip(), m.group(1)))
 
         # De-duplicate by chapter number
         seen_nums = set()
@@ -219,7 +231,8 @@ class Novel2ScriptV2Service:
                     "content": content,
                 })
 
-        logger.info(f"Chapter split: {len(chapters)} chapters (from {len(markers)} raw markers)")
+        logger.info(f"Chapter split: {len(chapters)} chapters (from {len(markers)} raw markers, "
+                    f"format={'EN' if len(markers) > 0 and markers[0][0] == 0 else 'CN'})")
         return chapters
 
     # ================================================================
@@ -357,20 +370,47 @@ class Novel2ScriptV2Service:
         vector_store,
         style: str,
         scene_serial: str,
+        cumulative_context: str = "",
     ) -> dict:
-        """Generate script for one chapter with RAG context and storyboard."""
+        """Generate script for one chapter with RAG context, cross-chapter context, and storyboard.
+
+        #1: Long chapters (>6000 chars) get smart truncation: first 4000 + last 2000 chars.
+        #3: RAG query uses chapter summary (from cumulative_context) if available,
+            falling back to the first 500 chars of chapter content.
+        #5: cumulative_context provides previous-chapter summaries and next-chapter preview.
+        """
         chapter_name = chapter.get("title", f"第{chapter['index']+1}章")
         chapter_content = chapter.get("content", "")
         episode_hint = chapter.get("episode_hint", "")
 
-        # RAG: retrieve relevant context from the full novel
-        rag_query = f"检索相关人物性格、过往剧情、场景设定、道具伏笔：{chapter_content[:1000]}"
+        # #1: Smart truncation — preserve beginning AND ending for long chapters
+        max_chars = 8000  # Increased from 6000
+        if len(chapter_content) > max_chars:
+            first_part = chapter_content[:max_chars - 2000]  # First 6000
+            last_part = chapter_content[-2000:]               # Last 2000
+            chapter_content_trimmed = (
+                first_part +
+                f"\n\n...（中间{len(chapter_content) - max_chars}字内容已省略）...\n\n" +
+                last_part
+            )
+        else:
+            chapter_content_trimmed = chapter_content
+
+        # #3: Semantic RAG query — use character names + key events from global_info
+        characters_list = [c.get("name", "") for c in global_info.get("characters", [])[:5]]
+        scenes_list = [s.get("name", "") for s in global_info.get("key_scenes", [])[:3]]
+        rag_query = (
+            f"角色: {' '.join(characters_list) if characters_list else chapter_content[:200]}. "
+            f"场景: {' '.join(scenes_list) if scenes_list else '全文'}. "
+            f"情节: {chapter_content[:500]}"
+        )
         rag_context = self._rag_search(vector_store, rag_query)
 
         style_rule = self._get_style_instructions(style)
 
         logger.info(f"Generating script for {chapter_name}... "
-                    f"content_len={len(chapter_content)}, rag_ctx_len={len(rag_context)}"
+                    f"content_len={len(chapter_content)}, trimmed={len(chapter_content_trimmed)}, "
+                    f"rag_ctx_len={len(rag_context)}, cum_ctx_len={len(cumulative_context)}"
                     f"{', hint=' + episode_hint[:50] if episode_hint else ''}")
 
         if self.mock_mode:
@@ -396,9 +436,11 @@ class Novel2ScriptV2Service:
                 HumanMessage(content=HUMAN_GENERATE_CHAPTER_V2.format(
                     global_info=global_info,
                     story_framework=global_info.get("story_framework", ""),
+                    graphrag_context=global_info.get("graphrag_context", ""),
+                    cumulative_context=cumulative_context,
                     rag_context=rag_context,
                     chapter_name=chapter_name,
-                    chapter_content=chapter_content[:6000],
+                    chapter_content=chapter_content_trimmed,
                     style_rule=style_rule,
                     scene_serial=scene_serial,
                     episode_hint=episode_hint,
@@ -465,16 +507,65 @@ class Novel2ScriptV2Service:
         return result
 
     def _fallback_chapter_script(self, chapter: dict, scene_serial: str) -> dict:
-        """Fallback: return chapter content as basic script."""
+        """Fallback: programmatic conversion of chapter content to basic script format.
+
+        #11: Improved fallback — extracts dialogue lines and scene markers
+        instead of just returning raw text. Much better than the previous version
+        which just returned the first 2000 chars unchanged.
+        """
+        content = chapter.get("content", "")
+        chapter_title = chapter.get("title", f"章节{chapter.get('index', 0)+1}")
+        lines = content.split("\n")
+
+        # Try to extract dialogue (Chinese dialogue pattern: 角色名：台词)
+        dialogue_pattern = re.compile(r'^([^\s：:△【（(]{2,5})[：:](.+)$')
+        script_lines = []
+        extracted_chars = set()
+        current_scene = "未知场景"
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # Detect scene markers
+            if re.match(r'(第[一二三四五六七八九十百千\d]+[回章节集]|\*\*?\d+[-—])', line):
+                script_lines.append(f"\n△{line}")
+                continue
+            # Detect dialogue
+            m = dialogue_pattern.match(line)
+            if m:
+                char_name = m.group(1).strip()
+                dialogue = m.group(2).strip()
+                if not char_name.startswith(("第", "Chapter", "场景")):
+                    extracted_chars.add(char_name)
+                    # Infer emotion from keywords
+                    emotion = ""
+                    if any(kw in dialogue for kw in ["？", "什么", "怎么", "为何"]):
+                        emotion = "疑惑"
+                    elif any(kw in dialogue for kw in ["！", "不", "必须", "一定"]):
+                        emotion = "坚定"
+                    script_lines.append(f"{char_name}：（{emotion}）{dialogue}" if emotion else f"{char_name}：{dialogue}")
+                continue
+            # Narrative → action description
+            if len(line) > 10:
+                script_lines.append(f"△{line[:200]}")
+
+        script_body = "\n".join(script_lines[:100]) if script_lines else content[:3000]
+
         return {
-            "chapter_title": chapter.get("title", f"章节{chapter.get('index', 0)+1}"),
+            "chapter_title": chapter_title,
             "scene_number": scene_serial,
             "scene_type": "内景 白天",
             "location": "未知场景",
-            "characters": [],
+            "characters": list(extracted_chars)[:5],
             "props": [],
-            "storyboard": [],
-            "script_body": chapter.get("content", "")[:2000],
+            "storyboard": [
+                {"shot_number": 1, "camera_type": "中景", "camera_movement": "固定",
+                 "duration_seconds": 5.0, "description": "场景转换"},
+                {"shot_number": 2, "camera_type": "近景", "camera_movement": "固定",
+                 "duration_seconds": 4.0, "description": "角色对话"},
+            ],
+            "script_body": script_body,
         }
 
     # ================================================================
@@ -583,6 +674,59 @@ class Novel2ScriptV2Service:
         }
 
     # ================================================================
+    # #5: Chapter summarization + cumulative context
+    # ================================================================
+
+    async def _summarize_chapter(self, chapter: dict, chapter_index: int,
+                                  total_chapters: int) -> str:
+        """Generate a 100-200 char summary of a chapter for cross-chapter context.
+
+        This summary is injected into subsequent chapters as '前情提要'.
+        Uses a lightweight LLM call with short timeout.
+        """
+        chapter_content = chapter.get("content", "")
+        chapter_name = chapter.get("title", f"第{chapter_index+1}章")
+        text = chapter_content[:4000] if len(chapter_content) > 4000 else chapter_content
+
+        if self.mock_mode or self.llm is None:
+            return f"第{chapter_index+1}章: {chapter_name}"
+
+        try:
+            from langchain_core.messages import SystemMessage, HumanMessage
+            messages = [
+                SystemMessage(content="用一句话(不超过200字)总结以下章节的核心情节。只输出摘要文本，不要标题或编号。"),
+                HumanMessage(content=f"章节: {chapter_name}\n\n{text}"),
+            ]
+            response = await self.llm.ainvoke(messages, config={"timeout": 30})
+            summary = response.content.strip()[:250]
+            return f"第{chapter_index+1}章({chapter_name}): {summary}"
+        except Exception as e:
+            logger.debug(f"Chapter {chapter_index+1} summarization failed: {e}")
+            return f"第{chapter_index+1}章: {chapter_name}"
+
+    def _build_cumulative_context(self, chapter_summaries: list,
+                                   current_index: int) -> str:
+        """Build cumulative context from previous chapter summaries.
+
+        For chapter N, provides summaries of chapters 1 through N-1 plus
+        a preview of chapter N+1 (if available).
+        """
+        parts = []
+        # Previous chapters context (last 3 summaries to keep context focused)
+        start = max(0, current_index - 3)
+        if current_index > 0:
+            prev = chapter_summaries[start:current_index]
+            if prev:
+                parts.append("【前情提要】")
+                parts.extend(prev)
+
+        # Next chapter preview
+        if current_index + 1 < len(chapter_summaries):
+            parts.append(f"【下集预告】{chapter_summaries[current_index + 1][:150]}")
+
+        return "\n".join(parts) if parts else ""
+
+    # ================================================================
     # Full pipeline
     # ================================================================
 
@@ -592,6 +736,7 @@ class Novel2ScriptV2Service:
         style: str = "",
         progress_callback: Optional[Callable[[int, str], Any]] = None,
         target_episodes: int = 0,
+        user_context: str = "",
     ) -> Dict[str, Any]:
         """Execute the complete V2 novel-to-script pipeline.
 
@@ -600,6 +745,7 @@ class Novel2ScriptV2Service:
             style: Script style (ancient/suspense/comedy)
             progress_callback: Optional async callback(progress_pct, stage_name)
             target_episodes: Minimum episodes to produce (0=auto). Used for outlines.
+            user_context: Optional user preference context string injected into prompts.
 
         Returns:
             Dict with keys: script_scenes, final_script, characters, character_graph,
@@ -666,19 +812,57 @@ class Novel2ScriptV2Service:
             "relationships": len(result["character_graph"]["relationships"]),
         }
 
-        # --- Stage 3b: Story Development — expand outline into rich story framework ---
-        logger.info("=== V2 Stage 3b/5: Developing story framework ===")
-        if progress_callback:
-            await progress_callback(35, "扩展故事框架")
-        story_framework = await self._develop_story_framework(
-            story_input=novel_text,
-            target_episodes=max(target_episodes, len(chapters)),
-            style=style,
-        )
-        result["story_framework"] = story_framework
-        # Enrich global_info with the developed framework for per-chapter generation
+        # --- Stage 3b: Story Development — only for outlines, not full novels ---
+        is_full_novel = len(chapters) >= 5
+        if is_full_novel:
+            logger.info(f"=== V2 Stage 3b/5: Skipping story framework (full novel, {len(chapters)} chapters) ===")
+            story_framework = ""
+            result["stages"]["story_framework"] = {"skipped": True, "reason": "full_novel"}
+        else:
+            logger.info("=== V2 Stage 3b/5: Developing story framework (outline mode) ===")
+            if progress_callback:
+                await progress_callback(35, "扩展故事框架")
+            story_framework = await self._develop_story_framework(
+                story_input=novel_text,
+                target_episodes=max(target_episodes, len(chapters)),
+                style=style,
+            )
+            result["story_framework"] = story_framework
+            result["stages"]["story_framework"] = {"length": len(story_framework)}
+        # Enrich global_info with framework + user preferences
         global_info["story_framework"] = story_framework
-        result["stages"]["story_framework"] = {"length": len(story_framework)}
+        global_info["user_preferences"] = user_context
+
+        # --- GraphRAG: build cross-chapter context from knowledge graph ---
+        graphrag_context = ""
+        try:
+            from app.services.graphrag_service import get_graphrag_service
+            graphrag = await get_graphrag_service()
+            if graphrag._initialized:
+                # Extract key characters and build relationship context
+                key_characters = [c.get("name", "") for c in global_info.get("characters", [])[:5]]
+                if key_characters:
+                    graphrag_context = await graphrag.vector_store.get_context_for_entities(
+                        key_characters, script_id=text_hash,
+                    )
+                    if graphrag_context:
+                        logger.info(f"GraphRAG context built: {len(graphrag_context)} chars "
+                                    f"for {len(key_characters)} characters")
+        except Exception as e:
+            logger.warning(f"GraphRAG context building failed (non-critical): {e}")
+        global_info["graphrag_context"] = graphrag_context
+
+        # --- Stage 3c: Chapter summarization for cross-chapter context (#5 + #1) ---
+        chapter_summaries = []
+        if len(chapters) > 1 and not self.mock_mode:
+            logger.info(f"=== V2 Stage 3c/5: Summarizing {len(chapters)} chapters ===")
+            if progress_callback:
+                await progress_callback(37, "生成章节摘要")
+            # Serial: lightweight LLM calls (30s timeout each), necessary for coherence
+            for i, ch in enumerate(chapters):
+                summary = await self._summarize_chapter(ch, i, len(chapters))
+                chapter_summaries.append(summary)
+            logger.info(f"Chapter summaries complete: {len(chapter_summaries)} summaries")
 
         # --- Stage 4: Per-chapter script generation (parallel) ---
         logger.info(f"=== V2 Stage 4/5: Generating scripts for {len(chapters)} chapters "
@@ -691,11 +875,14 @@ class Novel2ScriptV2Service:
         async def generate_one(i: int, chapter: dict) -> tuple:
             nonlocal completed
             scene_serial = f"SCENE-{str(i + 1).zfill(3)}"
+            # Build cumulative context from previous chapter summaries (#5)
+            cum_ctx = self._build_cumulative_context(chapter_summaries, i)
             async with sem:
                 result_ch = await self._generate_chapter_script(
                     chapter=chapter, global_info=global_info,
                     vector_store=vector_store, style=style,
                     scene_serial=scene_serial,
+                    cumulative_context=cum_ctx,
                 )
             completed += 1
             if progress_callback and len(chapters) > 1:
@@ -736,14 +923,20 @@ class Novel2ScriptV2Service:
             ep_cn = cn_nums[ep_num] if ep_num < len(cn_nums) else str(ep_num)
             ep_title = f"第{ep_cn}集"
             chapter_title = ch.get('chapter_title', '')
+            script_body = ch.get('script_body', '')
 
-            episode_content = (
-                f"{ep_title}\n\n"
-                f"【场景编号】{ch.get('scene_number', '')}\n"
-                f"【场景类型】{ch.get('scene_type', '')}\n"
-                f"【场景地点】{ch.get('location', '')}\n\n"
-                f"{ch.get('script_body', '')}"
-            )
+            # #14: Don't duplicate episode markers if LLM already generated them
+            if re.match(r'\s*(?:\*\*)?第\s*[一二三四五六七八九十百千\d]+\s*集', script_body):
+                # LLM already included 第N集 — use script_body as-is
+                episode_content = script_body
+            else:
+                episode_content = (
+                    f"{ep_title}\n\n"
+                    f"【场景编号】{ch.get('scene_number', '')}\n"
+                    f"【场景类型】{ch.get('scene_type', '')}\n"
+                    f"【场景地点】{ch.get('location', '')}\n\n"
+                    f"{script_body}"
+                )
             parts.append(episode_content)
             episodes.append({
                 "episode_number": ep_num,
@@ -782,6 +975,80 @@ class Novel2ScriptV2Service:
                     f"{len(all_storyboard)} storyboard shots, "
                     f"{len(result['final_script'])} chars, "
                     f"elapsed={time.time()-t_total:.1f}s")
+
+        # --- Content safety check ---
+        try:
+            safety = get_safety_checker(enabled=True)
+            safety_report = safety.check_script(
+                content=result["final_script"],
+                title=result.get("stages", {}).get("script", {}).get("chapters_generated", ""),
+            )
+            result["safety_report"] = safety_report.to_dict()
+            if not safety_report.passed:
+                logger.warning(f"Content safety: REJECTED score={safety_report.score}")
+        except Exception as e:
+            logger.warning(f"Content safety check skipped: {e}")
+
+        # --- Stage 6: LLM-as-Judge quality evaluation ---
+        if not self.mock_mode and self.llm:
+            try:
+                logger.info("=== V2 Stage 6/6: Quality evaluation ===")
+                if progress_callback:
+                    await progress_callback(90, "质量评审")
+                judge = QualityJudge(self.llm, enabled=True)
+                report = await judge.judge_script(
+                    content=result["final_script"],
+                    title=result.get("stages", {}).get("script", {}).get("chapters_generated", ""),
+                )
+                result["quality_report"] = report.to_dict()
+                result["stages"]["quality"] = {
+                    "total_score": report.total_score,
+                    "verdict": report.verdict,
+                    "elapsed_ms": report.judge_elapsed_ms,
+                }
+                if not report.passed:
+                    logger.warning(
+                        f"QualityJudge: {report.verdict} score={report.total_score} "
+                        f"weaknesses={report.weaknesses}"
+                    )
+
+                # #7: Auto-retry on low quality
+                if report.needs_retry and len(chapters) <= 5:
+                    logger.info(
+                        f"QualityJudge retry triggered: "
+                        f"score={report.total_score} feedback={report.suggestions[:100]}"
+                    )
+                    if progress_callback:
+                        await progress_callback(92, "质量优化中(自动重试)")
+                    # Build optimization prompt with judge feedback
+                    optimization_prompt = (
+                        f"请根据以下评审意见优化剧本质量:\n\n"
+                        f"【需要改进的问题】\n{report.suggestions}\n"
+                        f"【具体弱项】\n" + "\n".join(f"- {w}" for w in report.weaknesses) + "\n\n"
+                        f"请重新生成完整的优化版剧本。"
+                    )
+                    # Apply optimization to each chapter
+                    for ch in all_chapters:
+                        try:
+                            optimize_messages = [
+                                SystemMessage(content="你是专业剧本编辑，请根据反馈优化以下剧本。保持原有场景结构，重点改进评审指出的弱项。直接返回优化后的完整剧本。"),
+                                HumanMessage(content=optimization_prompt + "\n\n原剧本:\n" + ch.get("script_body", "")[:6000]),
+                            ]
+                            optimize_resp = await self.llm.ainvoke(
+                                optimize_messages, config={"timeout": 120}
+                            )
+                            ch["script_body"] = optimize_resp.content
+                        except Exception as e2:
+                            logger.warning(f"Chapter optimization failed: {e2}")
+                    # Rebuild final script after optimization
+                    parts = []
+                    for i, ch in enumerate(all_chapters):
+                        parts.append(f"第{cn_nums[i+1] if i+1 < len(cn_nums) else i+1}集\n\n{ch.get('script_body', '')}")
+                    result["final_script"] = "\n\n" + "—" * 40 + "\n\n".join(parts)
+                    logger.info(f"QualityJudge retry completed: chapters optimized")
+            except Exception as e:
+                logger.warning(f"Quality evaluation skipped: {e}")
+
         return result
 
     async def run_full_pipeline_sse(
@@ -789,6 +1056,7 @@ class Novel2ScriptV2Service:
         novel_text: str,
         style: str = "",
         target_episodes: int = 0,
+        user_context: str = "",
     ) -> "AsyncGenerator[str, None]":
         """Execute V2 pipeline with SSE stage-progress streaming.
 
@@ -799,6 +1067,7 @@ class Novel2ScriptV2Service:
             novel_text: Full novel/outline content.
             style: Script style (ancient/suspense/comedy).
             target_episodes: Minimum episodes to produce (0=auto).
+            user_context: Optional user preference context string.
 
         Yields:
             SSE-formatted event strings (event: stage, event: done, event: error).
@@ -819,6 +1088,7 @@ class Novel2ScriptV2Service:
                 result = await self.run_full_pipeline(
                     novel_text=novel_text,
                     style=style,
+                    user_context=user_context,
                     progress_callback=progress_callback,
                     target_episodes=target_episodes,
                 )

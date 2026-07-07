@@ -28,6 +28,7 @@ def init_tracing(service_name: str, otlp_endpoint: str = None):
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+        from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
         from opentelemetry.instrumentation.redis import RedisInstrumentor
         from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
@@ -38,8 +39,9 @@ def init_tracing(service_name: str, otlp_endpoint: str = None):
         provider.add_span_processor(BatchSpanProcessor(exporter))
         trace.set_tracer_provider(provider)
 
-        # 自动探针
+        # 自动探针 — 覆盖所有 I/O 路径
         HTTPXClientInstrumentor().instrument()
+        AioHttpClientInstrumentor().instrument()  # 跨服务调用 trace 传播
         RedisInstrumentor().instrument()
         SQLAlchemyInstrumentor().instrument()
 

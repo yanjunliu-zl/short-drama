@@ -1,0 +1,135 @@
+# KEDA ScaledObjects — event-driven autoscaling for AI workloads
+# Requires: KEDA installed (kubectl apply -f https://github.com/kedacore/keda/releases)
+#
+# KEDA extends HPA with event sources: Kafka lag, Redis list length, Prometheus metrics.
+# This enables scaling from 0 when idle (save cost) to N when queue depth grows.
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: script-service-kafka-scaler
+  namespace: shortdrama
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: script-service
+  pollingInterval: 15  # Check every 15s
+  cooldownPeriod: 300   # 5min before scaling down
+  minReplicaCount: 1    # Scale to 1 when idle (was 2 with HPA)
+  maxReplicaCount: 30   # Higher ceiling than HPA (was 20)
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka:9092
+        consumerGroup: ai-workers-script
+        topic: ai-tasks-script
+        lagThreshold: "5"        # Scale up when >5 messages behind
+        activationLagThreshold: "0"  # Scale from 0 when any messages
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: "70"
+    - type: memory
+      metricType: Utilization
+      metadata:
+        value: "80"
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: storyboard-service-kafka-scaler
+  namespace: shortdrama
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: storyboard-service
+  pollingInterval: 15
+  cooldownPeriod: 300
+  minReplicaCount: 1
+  maxReplicaCount: 30
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka:9092
+        consumerGroup: ai-workers-storyboard
+        topic: ai-tasks-storyboard
+        lagThreshold: "5"
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: "70"
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: llmhua-service-kafka-scaler
+  namespace: shortdrama
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llmhua-service
+  pollingInterval: 15
+  cooldownPeriod: 300
+  minReplicaCount: 1
+  maxReplicaCount: 20
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka:9092
+        consumerGroup: ai-workers-llmhua
+        topic: ai-tasks-llmhua
+        lagThreshold: "3"
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: "70"
+---
+# Redis-based scaler for recommendation service (no Kafka needed)
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: recommendation-service-prometheus-scaler
+  namespace: shortdrama
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: recommendation-service
+  pollingInterval: 30
+  cooldownPeriod: 300
+  minReplicaCount: 2
+  maxReplicaCount: 20
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus:9090
+        metricName: http_requests_per_second
+        query: |
+          sum(rate(http_requests_total{service="recommendation-service"}[1m]))
+        threshold: "100"
+---
+# Cron scaler for batch pre-generation (scale up at scheduled times)
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: script-service-cron-scaler
+  namespace: shortdrama
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: script-service
+  pollingInterval: 60
+  cooldownPeriod: 600
+  minReplicaCount: 1
+  maxReplicaCount: 5
+  triggers:
+    - type: cron
+      metadata:
+        timezone: Asia/Shanghai
+        start: 0 2 * * *    # 2:00 AM — batch pre-generation window
+        end: 0 6 * * *      # 6:00 AM
+        desiredReplicas: "3"

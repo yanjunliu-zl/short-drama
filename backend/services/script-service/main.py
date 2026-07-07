@@ -62,6 +62,17 @@ from app.middleware.prometheus import PrometheusMiddleware
 app.add_middleware(PrometheusMiddleware, app_name=settings.PROJECT_NAME)
 MetricsEndpointMiddleware(app, settings.PROJECT_NAME)
 
+# 应用级分布式限流 (per-user, Redis 滑动窗口)
+try:
+    from app.middleware.rate_limit_middleware import RateLimitMiddleware
+    redis_dsn = f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}"
+    if settings.REDIS_PASSWORD:
+        redis_dsn = f"redis://:{settings.REDIS_PASSWORD}@{settings.REDIS_HOST}:{settings.REDIS_PORT}"
+    app.add_middleware(RateLimitMiddleware, redis_url=redis_dsn)
+except Exception as e:
+    import logging
+    logging.getLogger(__name__).warning(f"Rate limit middleware not loaded: {e}")
+
 # 健康检查端点
 @app.get("/health")
 async def health_check():

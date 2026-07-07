@@ -80,7 +80,7 @@ func (r *RabbitMQClient) Consume(queueName string, consumerName string) (<-chan 
 	return r.channel.Consume(
 		q.Name,
 		consumerName,
-		true,  // autoAck
+		false, // autoAck=false: manual ack after processing to prevent message loss on crash
 		false, // exclusive
 		false, // noLocal
 		false, // noWait

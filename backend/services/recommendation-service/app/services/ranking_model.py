@@ -168,9 +168,84 @@ class RankingService:
         logger.info("Wide&Deep 模型已初始化 (has_torch=%s)", HAS_TORCH)
 
     def rank(self, features_list: List[Dict]) -> List[float]:
+        """Score candidates using Wide&Deep model with feature normalization.
+
+        If the model or preprocessor is not ready, returns zeros
+        to trigger the fallback weighted formula in RankingLayer.
+
+        Args:
+            features_list: List of feature dicts from _extract_features().
+
+        Returns:
+            List of CTR scores (0.0-1.0) or zeros for fallback.
+        """
         if not HAS_TORCH or self.model is None:
             return [0.0] * len(features_list)
-        return [0.0] * len(features_list)  # 需要训练后才能给出有意义的分数
+
+        if not features_list:
+            return []
+
+        try:
+            # 1. Extract feature arrays
+            continuous_feats = []
+            categorical_feats = {k: [] for k in FEATURE_CONFIG["categorical"]}
+            binary_feats = []
+
+            for f in features_list:
+                cont = [float(f.get(name, 0)) for name in FEATURE_CONFIG["continuous"]]
+                continuous_feats.append(cont)
+
+                cat = {}
+                for name in FEATURE_CONFIG["categorical"]:
+                    raw_val = f.get(name, "unknown")
+                    # Map string to index for recall_source and genre
+                    if name == "recall_source":
+                        cat[name] = {"cf": 0, "content": 1, "hot": 2, "author": 3, "search": 4}.get(raw_val, 0)
+                    elif name == "genre":
+                        cat[name] = self.preprocessor.genre_map.get(raw_val, 0)
+                    else:
+                        cat[name] = 0
+                    categorical_feats[name].append(cat[name])
+
+                bin_vals = [float(f.get(name, 0)) for name in FEATURE_CONFIG["binary"]]
+                binary_feats.append(bin_vals)
+
+            # 2. Normalize continuous features
+            cont_arr = np.array(continuous_feats, dtype=np.float32)
+            if self.preprocessor.cont_mean is not None:
+                cont_arr = (cont_arr - self.preprocessor.cont_mean) / self.preprocessor.cont_std
+            cont_arr = np.nan_to_num(cont_arr, nan=0.0, posinf=0.0, neginf=0.0)
+
+            # 3. Convert to tensors
+            continuous_t = torch.tensor(cont_arr, dtype=torch.float32)
+            categorical_t = {
+                name: torch.tensor(vals, dtype=torch.long)
+                for name, vals in categorical_feats.items()
+            }
+            binary_t = torch.tensor(binary_feats, dtype=torch.float32)
+
+            # 4. Run model
+            with torch.no_grad():
+                scores = self.model.forward(continuous_t, categorical_t, binary_t)
+
+            # 5. Convert to Python floats, clamp to [0, 1]
+            result = scores.cpu().numpy().tolist()
+            if isinstance(result, float):
+                result = [result]
+            result = [max(0.0, min(1.0, float(s))) for s in result]
+
+            # Validate: if all scores are 0 or NaN, signal fallback
+            if all(s <= 1e-6 for s in result) or any(np.isnan(s) for s in result):
+                logger.debug("Model returned degenerate scores — using fallback")
+                return [0.0] * len(features_list)
+
+            logger.debug(f"Wide&Deep scored {len(result)} items, "
+                         f"range=[{min(result):.4f}, {max(result):.4f}]")
+            return result
+
+        except Exception as e:
+            logger.warning(f"Wide&Deep ranking failed: {e} — using fallback")
+            return [0.0] * len(features_list)
 
 
 _ranking_service: Optional[RankingService] = None

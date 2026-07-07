@@ -1,25 +1,35 @@
 import logging
 from typing import Dict, Any, Optional, AsyncGenerator
 import asyncio
-from langchain_openai import ChatOpenAI
+from contextlib import asynccontextmanager
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.callbacks.base import BaseCallbackHandler
 
 from app.core.config import settings
 from app.services.cache_service import get_cache_service
 from app.utils.sse import stream_tokens_from_llm
+from app.utils.model_router import create_llm_client, get_active_provider, provider_is_healthy
+from app.services.semantic_cache import get_semantic_cache
 
 logger = logging.getLogger(__name__)
 
 
-def _create_chat_openai(kwargs: dict):
-    """Create ChatOpenAI with real httpx clients to bypass wrapper class issue"""
-    import httpx
-    base = kwargs.get("openai_api_base", "https://api.openai.com/v1")
-    timeout = kwargs.get("timeout", 180.0)
-    kwargs["http_client"] = httpx.Client(base_url=base, timeout=timeout)
-    kwargs["http_async_client"] = httpx.AsyncClient(base_url=base, timeout=timeout)
-    return ChatOpenAI(**kwargs)
+@asynccontextmanager
+async def _trace_llm_call(operation: str, model: str = "", **attrs):
+    """Create an OpenTelemetry span wrapping an LLM call. Falls back to no-op if OTEL unavailable."""
+    try:
+        from opentelemetry import trace
+        tracer = trace.get_tracer(__name__)
+        span_name = f"llm.{operation}"
+        with tracer.start_as_current_span(span_name) as span:
+            span.set_attribute("llm.operation", operation)
+            if model:
+                span.set_attribute("llm.model", model)
+            for k, v in attrs.items():
+                span.set_attribute(f"llm.{k}", v)
+            yield
+    except Exception:
+        yield
 
 
 class ScriptAICallbackHandler(BaseCallbackHandler):
@@ -63,40 +73,18 @@ class AIService:
             # 初始化回调处理器
             self.callback_handler = ScriptAICallbackHandler()
 
-            # 配置AI模型 - 优先使用DeepSeek，其次OpenAI
-            llm_kwargs = {
-                "model_name": settings.MODEL_NAME,
-                "temperature": settings.OPENAI_TEMPERATURE,
-                "max_tokens": settings.OPENAI_MAX_TOKENS,
-                "timeout": 180.0,
-                "max_retries": 0,
-                "streaming": True,  # Enable both ainvoke() and astream()
-                "http_client": None,
-                "http_async_client": None,
-            }
-
-            # 优先使用DeepSeek，其次OpenAI，否则使用Mock模式
-            if settings.DEEPSEEK_API_KEY:
-                llm_kwargs["openai_api_key"] = settings.DEEPSEEK_API_KEY
-                llm_kwargs["openai_api_base"] = settings.DEEPSEEK_API_BASE
-                llm_kwargs["model_name"] = settings.DEEPSEEK_MODEL
-                # Enable prompt caching — DeepSeek caches the system+preamble prefix,
-                # saving ~50% on input token costs for repeated same-structure calls.
-                llm_kwargs["model_kwargs"] = {"extra_body": {"cache_prefix": True}}
-                logger.info(f"使用DeepSeek模型: {settings.DEEPSEEK_MODEL} (prompt caching enabled)")
-                self.llm = _create_chat_openai(llm_kwargs)
-                self._mock_mode = False
-            elif settings.OPENAI_API_KEY:
-                llm_kwargs["openai_api_key"] = settings.OPENAI_API_KEY
-                if settings.OPENAI_API_BASE:
-                    llm_kwargs["openai_api_base"] = settings.OPENAI_API_BASE
-                logger.info(f"使用OpenAI模型: {settings.MODEL_NAME}")
-                self.llm = _create_chat_openai(llm_kwargs)
-                self._mock_mode = False
+            # Use ModelRouter for automatic provider fallback
+            # Priority: DeepSeek → OpenAI → Anthropic → mock
+            self.llm = create_llm_client(
+                prefer="deepseek",
+                timeout=180.0,
+            )
+            self._mock_mode = not provider_is_healthy()
+            provider = get_active_provider()
+            if self._mock_mode:
+                logger.warning("所有 LLM provider 不可用，使用Mock模式")
             else:
-                logger.warning("未配置AI API密钥，使用Mock模式生成示例剧本")
-                self.llm = None
-                self._mock_mode = True
+                logger.info(f"LLM provider: {provider}")
 
             # 配置LangChain追踪
             if settings.LANGCHAIN_TRACING and settings.LANGCHAIN_API_KEY:
@@ -126,11 +114,18 @@ class AIService:
                 await asyncio.sleep(2)  # 模拟生成延迟
                 return self._generate_mock_script(request)
 
-            # 尝试从缓存获取
+            # 尝试从语义缓存获取 (FAISS similarity)
+            sem_cache = get_semantic_cache()
+            cached_script = await sem_cache.get(request)
+            if cached_script:
+                logger.info(f"语义缓存命中 (hit_rate={sem_cache.hit_rate:.1%})")
+                return cached_script
+
+            # 尝试从 Redis 缓存获取
             if self.cache_service:
                 cached_script = await self.cache_service.get_cached_script(request)
                 if cached_script:
-                    logger.info("缓存命中: 剧本生成结果")
+                    logger.info("Redis缓存命中: 剧本生成结果")
                     return cached_script
 
             logger.info("缓存未命中，调用AI生成...")
@@ -147,9 +142,15 @@ class AIService:
 
             # 调用LLM
             logger.info("调用LLM生成剧本...")
-            response = await self.llm.ainvoke(messages)
+            async with _trace_llm_call("generate_script", model=getattr(self.llm, 'provider', 'unknown'),
+                                       title=request.get('title', ''),
+                                       length=request.get('length', '')):
+                response = await self.llm.ainvoke(messages)
 
             script_content = response.content
+
+            # 存入语义缓存 (fire-and-forget)
+            asyncio.ensure_future(sem_cache.put(request, script_content))
 
             # 缓存结果
             if self.cache_service:

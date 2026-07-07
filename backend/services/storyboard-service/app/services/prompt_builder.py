@@ -10,7 +10,7 @@
   Layer 5: 视觉风格 (Style)
 """
 from typing import Optional, List, Dict
-from cinematography_profiles import CinematographyProfile
+from app.services.cinematography_profiles import CinematographyProfile
 
 
 # =============================================================
@@ -231,15 +231,20 @@ class PromptBuilder:
     # ---- Layer 2: 主体与焦点 ----
     @staticmethod
     def build_subject_layer(shot: ShotPromptInput) -> str:
-        """Layer 2: Subject and visual focus"""
+        """Layer 2: Subject, location, and visual focus"""
         parts = []
+
+        # #S12: Location/environment context for scene grounding
+        if shot.location:
+            parts.append(f"location: {shot.location}")
 
         if shot.characters:
             chars = "、".join(shot.characters)
             parts.append(f"characters: {chars}")
 
         if shot.dialogue:
-            parts.append(f"dialogue: {shot.dialogue[:100]}")
+            # #S17: Truncate dialogue to keep prompt focused on visual elements
+            parts.append(f"dialogue context: {shot.dialogue[:80]}")
 
         if shot.description:
             parts.append(shot.description[:300])
@@ -345,4 +350,45 @@ class PromptBuilder:
             "video_prompt": PromptBuilder.build_video_prompt(shot, profile),
             "end_frame_prompt": PromptBuilder.build_end_frame_prompt(shot, profile) if needs_end else None,
             "needs_end_frame": needs_end,
+            "negative_prompt": PromptBuilder.build_negative_prompt(shot, profile),
         }
+
+    # =============================================================
+    # #S16: Style-specific negative prompts
+    # =============================================================
+
+    # Base negatives (all styles)
+    _BASE_NEGATIVES = "blurry, low quality, deformed, watermark, text, multiple people, complex background, bad anatomy"
+
+    # Style-specific additional negatives
+    _STYLE_NEGATIVES = {
+        "classic-cinematic": "anime style, cartoon, 3D render, cel shading, flat lighting",
+        "film-noir": "bright lighting, colorful, pastel, cheerful atmosphere, daytime",
+        "documentary": "cinematic lighting, shallow depth of field, stylized, dramatic angle",
+        "wuxia-classic": "modern clothing, modern buildings, cars, technology, neon lights",
+        "suspense-thriller": "cheerful atmosphere, bright colors, cartoon style, comedy",
+        "romantic-comedy": "dark atmosphere, horror elements, gore, violence, gloomy",
+        "sci-fi-future": "medieval, ancient, historical, vintage, retro 1900s",
+        "ancient-palace": "modern architecture, cars, phones, watches, technology, neon",
+        "cyberpunk-neon": "natural lighting, countryside, nature, daylight, historical",
+        "japanese-fresh": "dark atmosphere, heavy shadows, dramatic, high contrast",
+        "republican-era": "modern technology, smartphones, modern cars, contemporary fashion",
+        "hk-retro-90s": "modern technology, 4K smartphones, contemporary fashion post-2000",
+        "family-warmth": "horror, dark, violence, gore, gloomy atmosphere, scary",
+    }
+
+    @staticmethod
+    def build_negative_prompt(shot: ShotPromptInput,
+                              profile: Optional[CinematographyProfile] = None) -> str:
+        """Build style-specific negative prompt for image generation.
+
+        Combines base negatives (blurry, low quality) with style-specific
+        exclusions to prevent anachronisms and style violations.
+        """
+        negatives = [PromptBuilder._BASE_NEGATIVES]
+
+        # Add style-specific negatives from profile
+        if profile and profile.id in PromptBuilder._STYLE_NEGATIVES:
+            negatives.append(PromptBuilder._STYLE_NEGATIVES[profile.id])
+
+        return ", ".join(negatives)

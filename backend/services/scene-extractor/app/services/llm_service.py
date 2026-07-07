@@ -8,6 +8,7 @@ from langchain_core.callbacks.base import BaseCallbackHandler
 
 from app.core.config import settings
 from app.utils.sse import stream_tokens_from_llm
+from app.utils.model_router import create_llm_client, get_active_provider
 
 logger = logging.getLogger(__name__)
 
@@ -49,25 +50,14 @@ class LLMService:
             # 初始化回调处理器
             self.callback_handler = SceneExtractorCallbackHandler()
 
-            # 配置AI模型 - 使用DeepSeek
-            llm_kwargs = {
-                "model_name": settings.DEEPSEEK_MODEL,
-                "temperature": settings.DEEPSEEK_TEMPERATURE,
-                "max_tokens": settings.DEEPSEEK_MAX_TOKENS,
-                "timeout": 60,
-                "streaming": True,  # Enable both ainvoke() and astream()
-            }
-
-            # 使用DeepSeek
-            if settings.DEEPSEEK_API_KEY:
-                llm_kwargs["openai_api_key"] = settings.DEEPSEEK_API_KEY
-                llm_kwargs["openai_api_base"] = settings.DEEPSEEK_API_BASE
-                logger.info(f"使用DeepSeek模型: {settings.DEEPSEEK_MODEL}")
-            else:
-                raise ValueError("未配置DEEPSEEK_API_KEY环境变量")
-
-            # 创建LLM实例
-            self.llm = ChatOpenAI(**llm_kwargs)
+            # Use ModelRouter for automatic provider fallback
+            self.llm = create_llm_client(
+                prefer="deepseek",
+                timeout=60.0,
+            )
+            if self.llm is None:
+                raise ValueError("未配置任何 LLM API Key (DEEPSEEK_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY)")
+            logger.info(f"LLM provider: {get_active_provider()}")
 
             # 配置LangChain追踪
             if settings.LANGCHAIN_TRACING and settings.LANGCHAIN_API_KEY:
