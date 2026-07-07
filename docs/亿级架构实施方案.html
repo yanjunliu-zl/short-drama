@@ -104,119 +104,170 @@ Traefik (:80)                                    ← API网关
 </tbody></table>
 <hr>
 <h2>二、核心API调用全链路</h2>
-<h3>2.1 剧本生成同步请求 (最重要路径)</h3>
+<h3>2.1 从大纲生成剧本 — 同步请求</h3>
 <p><strong>请求</strong>: <code>POST /api/v1/scripts/generate/from-outline-sync</code></p>
-<pre><code>时间轴 (总耗时 ~30-180s):
-─────────────────────────────────────────────────────────────────
-T+0ms   浏览器 POST → http://localhost/api/v1/scripts/generate/from-outline-sync
-        Body: {&quot;title&quot;:&quot;重生之都市修仙&quot;,&quot;outline&quot;:&quot;修真者重生...&quot;,&quot;theme&quot;:&quot;奇幻&quot;,&quot;length&quot;:&quot;短篇&quot;,&quot;style&quot;:&quot;古装风格&quot;,&quot;stream&quot;:false}
+<p><strong>业务场景</strong>: 用户输入简短创意（几十到几百字），AI 扩展为完整短剧剧本（含角色设定+分集大纲+分镜表）。</p>
+<p><strong>请求体</strong>:</p>
+<pre><code class="language-json">{
+  &quot;title&quot;: &quot;重生之都市修仙&quot;,
+  &quot;outline&quot;: &quot;修真者重生到现代都市，开启逆天修行之路，却发现这个世界的秘密远超想象...&quot;,
+  &quot;theme&quot;: &quot;奇幻&quot;,
+  &quot;length&quot;: &quot;短篇&quot;,
+  &quot;style&quot;: &quot;古装风格&quot;,
+  &quot;stream&quot;: false
+}
+</code></pre>
+<p><strong>完整处理流程</strong>:</p>
+<pre><code>T+0ms   浏览器 POST → Traefik(:80) → script-service:8000/.../from-outline-sync
 
-T+2ms   Traefik 接收, 执行中间件链:
-          cors → rate-limit-ai (50 req/s, burst 20) → security-headers → retry
-          路由匹配: PathPrefix(/api/v1/scripts) → script-service:8000
+T+2ms   Traefik 中间件链: cors → rate-limit-ai(50/s) → security-headers → retry
 
-T+5ms   script-service (FastAPI) 接收
-          ├── PrometheusMiddleware: 记录 http_requests_total, http_requests_inprogress++
-          ├── RateLimitMiddleware: Redis INCR ratelimit:ai_generate:{user}:{minute}
-          │    如果超过10次/分钟 → 429 + Retry-After
-          ├── AuthMiddleware: 从Header提取 Bearer token
-          │    调用 user-service:8080 GET /api/v1/auth/verify
-          │    (此调用带有 W3C traceparent header, OTEL传播trace)
+T+5ms   script-service 接收, FastAPI → PrometheusMiddleware → RateLimitMiddleware
+          ├── 限流检查: Redis INCR ratelimit:ai_generate:{user}:{minute}
+          │    超过10次/分钟 → 429 + Retry-After
           └── endpoint: generate_from_outline_sync()
 
-T+15ms  endpoint处理:
-          ├── 验证参数 (title/outline非空)
-          ├── 获取用户偏好画像 (查询user_preferences, 从scripts表提取历史风格/题材)
-          ├── 创建 Novel2ScriptV2Service 实例
-          │     ├── llm = ModelRouter 返回的 ResilientLLM (当前为DeepSeek)
-          │     ├── mock_mode = False
-          │     └── config = app_settings
-          └── 调用 run_full_pipeline()
+T+10ms  ┌── 参数处理 ─────────────────────────────────────┐
+        │ 1. 验证 title/outline 非空                      │
+        │ 2. 获取用户偏好画像:                              │
+        │    get_user_preference_service()                  │
+        │    → 查询 scripts 表 (用户历史风格/题材/长度)     │
+        │    → 构建 user_context: &quot;用户偏好风格:古装,偏好题材:奇幻&quot;│
+        │ 3. 确定目标集数:                                  │
+        │    length=&quot;短篇&quot; → target_eps=5                  │
+        │    (短片5集, 中篇8集, 长篇12集, 最多50)          │
+        │ 4. 解析大纲中的显式集数要求:                      │
+        │    regex提取 &quot;20集&quot; &quot;二十集&quot; → target_eps=20     │
+        │ 5. 创建 Novel2ScriptV2Service:                   │
+        │    llm = ResilientLLM(deepseek-chat)             │
+        │    config = app_settings (chunk_size=4096...)     │
+        └──────────────────────────────────────────────────┘
 
-        ┌── V2 Pipeline (5阶段) ────────────────────────────┐
-        │                                                    │
-        │ Stage 1: 构建知识库 (T+15ms ~ T+2s)                │
-        │   ├── RecursiveCharacterTextSplitter 分块          │
-        │   │     chunk_size=4096, overlap=512               │
-        │   │     separators=[&quot;\n\n&quot;,&quot;\n&quot;,&quot;。&quot;,&quot;！&quot;,&quot;？&quot;]    │
-        │   ├── HuggingFaceEmbeddings(bge-large-zh-v1.5)    │
-        │   │     向量化所有chunks                            │
-        │   ├── FAISS.from_texts() 构建索引                  │
-        │   └── 磁盘缓存: {OUTPUT_DIR}/faiss_cache/{md5}.faiss│
-        │                                                    │
-        │ Stage 2: 章节检测 (T+2s ~ T+2.1s)                  │
-        │   ├── regex提取 &quot;第X回/章/节&quot; 标记                 │
-        │   ├── 去重计数                                     │
-        │   └── 大纲模式: 单章节复制N份 (N=target_episodes)  │
-        │                                                    │
-        │ Stage 3: 全局角色提取 (T+2.1s ~ T+10s)             │
-        │   ├── SYSTEM_EXTRACT_GLOBAL_V2 prompt              │
-        │   ├── 结构化输出: GlobalInfoResponse (Pydantic)     │
-        │   │   {characters, relationships, key_scenes,      │
-        │   │    key_props}                                  │
-        │   └── 输入截断: novel_text[:80000]                 │
-        │                                                    │
-        │ Stage 3b: 故事框架开发 (T+10s ~ T+25s)              │
-        │   ├── 仅大纲/短小说执行 (chapters&lt;5)               │
-        │   ├── 完整小说跳过 (避免与原文冲突)                 │
-        │   └── 输出: 梗概+角色设定+分集大纲+核心场景+道具    │
-        │                                                    │
-        │ Stage 3c: 章节摘要 (T+25s ~ T+35s)                  │
-        │   ├── 逐章串行调用 LLM (30s timeout each)           │
-        │   ├── 每章生成100-200字摘要                         │
-        │   └── _build_cumulative_context():                  │
-        │       第N章获得第1~(N-1)章摘要+下章预告             │
-        │                                                    │
-        │ Stage 4: 逐章剧本生成 (T+35s ~ T+120s)             │
-        │   ├── asyncio.Semaphore(3) 并发控制                 │
-        │   ├── 每章调用:                                      │
-        │   │   ├── RAG检索 (FAISS.top_k=5)                   │
-        │   │   │   query = &quot;角色: {names} 场景: {scenes}&quot;    │
-        │   │   ├── GraphRAG上下文 (知识图谱角色关系)         │
-        │   │   ├── 前情提要 (前面章节摘要)                   │
-        │   │   ├── 用户偏好 (历史风格/题材)                  │
-        │   │   └── LLM生成 (180s timeout)                   │
-        │   │       智能截断: first 6000 + last 2000 chars    │
-        │   └── asyncio.gather 并行, results.sort 保序       │
-        │                                                    │
-        │ Stage 5: 主体提取 (T+120s ~ T+130s)                │
-        │   ├── 从final_script提取角色/地点/道具              │
-        │   ├── 结构化输出: ExtractEntitiesResponse           │
-        │   └── fallback: _aggregate_chapter_entities()       │
-        │                                                    │
-        │ Stage 6: 质量评审 (T+130s ~ T+140s)                │
-        │   ├── 内容安全检测 (敏感词匹配)                     │
-        │   ├── QualityJudge 4维度评分:                      │
-        │   │   coherence, character_consistency,            │
-        │   │   dialogue_naturalness, short_video_fitness    │
-        │   └── verdict=retry → 注入评委反馈自动重试         │
-        │                                                    │
-        └────────────────────────────────────────────────────┘
+T+15ms  ┌── V2 Pipeline (大纲模式) ────────────────────────┐
+        │                                                   │
+        │ Stage 1: 知识库 (T+15ms ~ T+200ms)               │
+        │   大纲很短(几十到几百字), FAISS只分1-2个chunk     │
+        │   但大纲模式下RAG基本不用(章节内容=大纲全文)        │
+        │                                                   │
+        │ Stage 2: 章节检测 (T+200ms)                       │
+        │   大纲无&quot;第X章&quot;标记 → 检测到1章(&quot;全文&quot;)           │
+        │   len(chapters)==1 &amp;&amp; target_eps(5)&gt;1             │
+        │   → 大纲扩展模式: 创建5个虚拟章节                  │
+        │   每个虚拟章节都包含完整大纲+序数提示               │
+        │   chapter.episode_hint = &quot;这是第1集,共5集,请创作本集&quot;│
+        │                                                   │
+        │ Stage 3: 角色提取 (T+200ms ~ T+5s)               │
+        │   LLM从大纲提取潜在角色/关系/场景/道具              │
+        │   (大纲短, 提取很快)                               │
+        │                                                   │
+        │ Stage 3b: 故事框架开发 ★ 大纲核心步骤 (T+5s ~ T+20s)│
+        │   chapters&lt;5 → 执行! (完整小说则跳过)             │
+        │   LLM将简短大纲扩展为完整故事框架:                 │
+        │   【故事梗概】200-500字                            │
+        │   【角色设定】每个角色: 性格+动机+弧线+关系        │
+        │   【分集大纲】5集中每集的: 标题+冲突+关键事件+钩子  │
+        │   【核心场景】5-10个地点                           │
+        │   【核心道具】3-5个关键道具                        │
+        │   → 这些内容注入到后续每章的prompt中                │
+        │                                                   │
+        │ Stage 3c: 章节摘要 (跳过)                          │
+        │   大纲只有1章→摘要无意义                           │
+        │                                                   │
+        │ Stage 4: 逐集剧本生成 (T+20s ~ T+100s)            │
+        │   asyncio.Semaphore(3) 并发, 5集并行处理          │
+        │   每集调用LLM, prompt包含:                         │
+        │     global_info (角色关系图谱)                     │
+        │     story_framework (分集大纲中的该集内容)          │
+        │     graphrag_context (如有知识图谱上下文)           │
+        │     user_preferences (用户偏好风格/题材)            │
+        │     chapter_content = 大纲原文                     │
+        │     episode_hint = &quot;这是第N集,共5集&quot;               │
+        │     style_rule = 古风台词风格                      │
+        │   输出: 场景编号+类型+地点+角色+道具+分镜表+剧本正文│
+        │                                                   │
+        │ Stage 5: 主体提取 (T+100s ~ T+110s)               │
+        │   从生成的5集剧本中提取角色/地点/道具               │
+        │                                                   │
+        │ Stage 6: 质量保障 (T+110s ~ T+120s)               │
+        │   内容安全检查 (敏感词-&gt;reject)                    │
+        │   QualityJudge 4维度评分                          │
+        │   verdict=retry → 注入反馈自动重试                 │
+        └──────────────────────────────────────────────────┘
 
-T+145s  构建响应:
-          ├── 组装 EpisodeItem[] (每集编号+标题+内容)
-          ├── 组装 ShotEpisode[] (分镜数据)
-          ├── 记录用量: track_llm_usage(response=llm_response)
-          │    从 response.response_metadata.token_usage 提取真实token数
-          │    成本 = tokens*provider定价 (DeepSeek: ¥1/M in, ¥2/M out)
-          └── 上报到 content-service:8081 POST /api/v1/usage/record
+T+125s  组装响应 → 5集EpisodeItem[] + ShotEpisode[]
+T+130s  用量上报: tokens(真实从LLM response提取) × DeepSeek定价
+T+135s  返回 JSON 给浏览器
+</code></pre>
+<p><strong>返回结果</strong>:</p>
+<pre><code class="language-json">{
+  &quot;script_id&quot;: 0,
+  &quot;title&quot;: &quot;重生之都市修仙&quot;,
+  &quot;episodes&quot;: [
+    {&quot;episode_number&quot;: 1, &quot;title&quot;: &quot;第一集&quot;, &quot;content&quot;: &quot;第一集\n\n【场景编号】SCENE-001\n...&quot;},
+    {&quot;episode_number&quot;: 2, &quot;title&quot;: &quot;第二集&quot;, &quot;content&quot;: &quot;...&quot;},
+    ...
+  ],
+  &quot;total_episodes&quot;: 5,
+  &quot;storyboard&quot;: [{&quot;shot_number&quot;:1, &quot;camera_type&quot;:&quot;全景&quot;, ...}, ...],
+  &quot;quality_report&quot;: {&quot;total_score&quot;: 82, &quot;verdict&quot;: &quot;pass&quot;, ...},
+  &quot;safety_report&quot;: {&quot;passed&quot;: true, &quot;score&quot;: 100}
+}
+</code></pre>
+<h3>2.2 从小说生成剧本 — 异步请求</h3>
+<p><strong>请求</strong>: <code>POST /api/v1/scripts/generate/from-novel</code></p>
+<p><strong>业务场景</strong>: 用户上传完整小说文本（几万~几十万字），AI 识别章节后逐章改编为剧本。</p>
+<p><strong>与大纲模式的关键差异</strong>:</p>
+<ul>
+<li>大纲模式：内容短，重点在 LLM 扩展创造</li>
+<li>小说模式：内容长，重点在 RAG 检索+忠实改编</li>
+</ul>
+<pre><code>T+0ms   POST → script-service:8000
+        返回: {&quot;task_id&quot;:&quot;uuid&quot;,&quot;status&quot;:&quot;processing&quot;}
+        BackgroundTasks 触发异步处理
 
-T+150s  返回 JSON:
-          {
-            &quot;script_id&quot;: 0,
-            &quot;title&quot;: &quot;重生之都市修仙&quot;,
-            &quot;episodes&quot;: [{episode_number:1, title:&quot;第一集&quot;, content:&quot;...&quot;}, ...],
-            &quot;total_episodes&quot;: 5,
-            &quot;storyboard&quot;: [{...分镜数据...}],
-            &quot;quality_report&quot;: {total_score:82, verdict:&quot;pass&quot;, ...},
-            &quot;safety_report&quot;: {passed:true, score:100}
-          }
+T+5ms   ┌── V2 Pipeline (小说模式) ────────────────────────┐
+        │                                                   │
+        │ Stage 1: FAISS 知识库 (T+5ms ~ T+30s)             │
+        │   小说分块 (chunk=4096, overlap=512)              │
+        │   bge-large-zh-v1.5 embedding 全部chunks          │
+        │   磁盘缓存: faiss_cache/{md5}.faiss               │
+        │   下次相同小说直接加载缓存                          │
+        │                                                   │
+        │ Stage 2: 章节检测 (T+30s)                          │
+        │   regex: &quot;第X回/章/节&quot; or &quot;Chapter N&quot;             │
+        │   例: 50章 → 50个独立章节片段                      │
+        │   chapters&gt;=5 → 完整小说模式                       │
+        │                                                   │
+        │ Stage 3: 角色关系图谱 (T+30s ~ T+40s)             │
+        │   LLM提取全局角色/关系/场景/道具                   │
+        │   输入截断: novel[:80000] (长篇小说只看前8万字)     │
+        │                                                   │
+        │ Stage 3b: 故事框架 (跳过!)                         │
+        │   chapters&gt;=5 → 完整小说, 不需要AI扩展             │
+        │   直接用小说原文的章节结构                          │
+        │                                                   │
+        │ Stage 3c: 章节摘要 (T+40s ~ T+70s) ★ 核心差异     │
+        │   逐章串行调用LLM (30s/chapter)                   │
+        │   每章生成100-200字摘要                            │
+        │   构建跨章上下文:                                   │
+        │     第5章获得第2-4章摘要 (最近3章) + 第6章预告     │
+        │   保证50章长篇的角色/伏笔/事件连贯性                │
+        │                                                   │
+        │ Stage 4: 逐章剧本生成 (T+70s ~ T+300s)            │
+        │   每章:                                            │
+        │     ├── RAG检索: FAISS.top_k=5                   │
+        │     │   语义query: &quot;角色:张三 李四 场景:京城 王府&quot; │
+        │     │   从全文50章中检索最相关的前文片段            │
+        │     ├── 智能截断: 首6000+尾2000 (保留首尾剧情)    │
+        │     ├── 注入跨章上下文 (前情提要)                  │
+        │     └── LLM生成 (180s timeout)                   │
+        │   asyncio.Semaphore(3) 并行, 50章→~17批           │
+        │                                                   │
+        │ Stage 5-6: 同上 (主体提取+质量评审)                │
+        └──────────────────────────────────────────────────┘
 
-T+152s  PrometheusMiddleware: http_requests_inprogress--
-        记录 http_request_duration_seconds, http_requests_total
-        记录 script_generation_total{type=&quot;outline&quot;,status=&quot;success&quot;}
-
-T+155s  浏览器收到响应, 渲染剧本内容
+T+310s  TaskStore.update(task_id, {status:&quot;completed&quot;, result:{...}})
+        前端轮询 GET /{task_id}/status → completed → 获取结果
 </code></pre>
 <h3>2.2 流式生成 (SSE)</h3>
 <p><strong>相同请求, stream=true</strong>:</p>
