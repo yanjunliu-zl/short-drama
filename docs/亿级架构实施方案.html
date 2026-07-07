@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+  body { font-family: 'Microsoft YaHei', sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; font-size: 14px; line-height: 1.8; color: #333; }
+  h1 { font-size: 24px; border-bottom: 2px solid #333; padding-bottom: 10px; }
+  h2 { font-size: 20px; border-bottom: 1px solid #ddd; padding-bottom: 8px; margin-top: 30px; }
+  h3 { font-size: 16px; margin-top: 20px; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 13px; }
+  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+  th { background: #f5f5f5; font-weight: 600; }
+  code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+  pre { background: #f5f5f5; padding: 12px 16px; border-radius: 6px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  strong { color: #1a1a1a; }
+</style></head><body><h1>Short Drama Platform — 亿级用户架构实施方案</h1>
+<blockquote>
+<p>内部评审文档 | 2026年7月 | 技术细节版</p>
+</blockquote>
+<hr>
+<h2>目录</h2>
+<ol>
+<li><a href="#%E4%B8%80%E9%A1%B9%E7%9B%AE%E6%A6%82%E5%86%B5">项目概况</a></li>
+<li><a href="#%E4%BA%8C%E6%A0%B8%E5%BF%83api%E8%B0%83%E7%94%A8%E5%85%A8%E9%93%BE%E8%B7%AF">核心API调用全链路</a></li>
+<li><a href="#%E4%B8%89%E5%BC%82%E6%AD%A5%E4%BB%BB%E5%8A%A1%E5%A4%84%E7%90%86%E6%B5%81%E7%A8%8B">异步任务处理流程</a></li>
+<li><a href="#%E5%9B%9B%E5%A4%9A%E6%A8%A1%E5%9E%8B%E5%AE%B9%E9%94%99%E4%B8%8E%E8%B7%AF%E7%94%B1">多模型容错与路由</a></li>
+<li><a href="#%E4%BA%94%E7%BC%93%E5%AD%98%E4%BD%93%E7%B3%BB">缓存体系</a></li>
+<li><a href="#%E5%85%ADsse%E6%B5%81%E5%BC%8F%E8%BE%93%E5%87%BA">SSE流式输出</a></li>
+<li><a href="#%E4%B8%83%E6%95%B0%E6%8D%AE%E5%BA%93%E6%B2%BB%E7%90%86">数据库治理</a></li>
+<li><a href="#%E5%85%AB%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97%E4%B8%8E%E5%89%8A%E5%B3%B0">消息队列与削峰</a></li>
+<li><a href="#%E4%B9%9D%E9%99%90%E6%B5%81%E4%B8%8E%E7%86%94%E6%96%AD%E9%99%8D%E7%BA%A7">限流与熔断降级</a></li>
+<li><a href="#%E5%8D%81%E5%8F%AF%E8%A7%82%E6%B5%8B%E6%80%A7">可观测性</a></li>
+<li><a href="#%E5%8D%81%E4%B8%80ai%E8%B4%A8%E9%87%8F%E4%BF%9D%E9%9A%9C">AI质量保障</a></li>
+<li><a href="#%E5%8D%81%E4%BA%8C%E9%83%A8%E7%BD%B2%E6%8B%93%E6%89%91">部署拓扑</a></li>
+<li><a href="#%E5%8D%81%E4%B8%89%E4%BB%A3%E7%A0%81%E5%8F%98%E6%9B%B4%E6%B8%85%E5%8D%95">代码变更清单</a></li>
+</ol>
+<hr>
+<h2>一、项目概况</h2>
+<h3>1.1 服务架构</h3>
+<pre><code>浏览器 (React :3000)
+  │  Vite proxy: /api → localhost:80
+  ▼
+Traefik (:80)                                    ← API网关
+  │  middleware: cors → rate-limit → security → retry
+  ├── /api/v1/users/*        → user-service:8080           (Go/go-zero)
+  ├── /api/v1/cases/*        → content-service:8081         (Go/go-zero)
+  ├── /api/v1/works/*        → content-service:8081
+  ├── /api/v1/comments/*     → script-service:8000          (Python/FastAPI)
+  ├── /api/v1/scripts/*      → script-service:8000
+  ├── /api/v1/storyboard/*   → storyboard-service:8001      (Python/FastAPI)
+  ├── /api/v1/llmhua/*       → llmhua-service:8002          (Python/FastAPI)
+  ├── /api/v1/videos/*       → video-service:8000           (Python/FastAPI+Celery)
+  ├── /api/v1/final-cut/*    → final-cut-service:8085       (Go/go-zero/gRPC)
+  └── /api/v1/recommendations/* → recommendation-service:8004 (Python/FastAPI)
+
+基础设施:
+  MySQL 8.0 (:3306)     Redis 7 (:6379)    RabbitMQ 3 (:5672)
+  MinIO (:9000)         Kafka 3.9 (:9092)  Elasticsearch 8.17 (:9200)
+  Consul 1.20 (:8500)   Prometheus (:9090) Grafana (:3001)
+  Jaeger (:16686)
+</code></pre>
+<h3>1.2 技术栈</h3>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>技术</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>前端</td>
+<td>React 18 + TypeScript + Vite + Ant Design 5</td>
+<td>Redux Toolkit, React Router 6</td>
+</tr>
+<tr>
+<td>Go服务</td>
+<td>go-zero v1.10 + gRPC</td>
+<td>DBResolver读写分离, Consul服务发现</td>
+</tr>
+<tr>
+<td>Python服务</td>
+<td>FastAPI + Uvicorn + Gunicorn</td>
+<td>LangChain + LangGraph + FAISS</td>
+</tr>
+<tr>
+<td>LLM</td>
+<td>DeepSeek/OpenAI/Anthropic/vLLM</td>
+<td>多模型路由, prompt caching</td>
+</tr>
+<tr>
+<td>图像/视频</td>
+<td>Seedream 4.5 / Seedance 2.0</td>
+<td>火山引擎Ark API</td>
+</tr>
+<tr>
+<td>Embedding</td>
+<td>bge-large-zh-v1.5 / TEI</td>
+<td>1.3GB CPU / GPU服务化</td>
+</tr>
+<tr>
+<td>ML</td>
+<td>PyTorch Wide&amp;Deep + LinUCB Bandit</td>
+<td>CTR预估 + 在线学习</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>二、核心API调用全链路</h2>
+<h3>2.1 剧本生成同步请求 (最重要路径)</h3>
+<p><strong>请求</strong>: <code>POST /api/v1/scripts/generate/from-outline-sync</code></p>
+<pre><code>时间轴 (总耗时 ~30-180s):
+─────────────────────────────────────────────────────────────────
+T+0ms   浏览器 POST → http://localhost/api/v1/scripts/generate/from-outline-sync
+        Body: {&quot;title&quot;:&quot;重生之都市修仙&quot;,&quot;outline&quot;:&quot;修真者重生...&quot;,&quot;theme&quot;:&quot;奇幻&quot;,&quot;length&quot;:&quot;短篇&quot;,&quot;style&quot;:&quot;古装风格&quot;,&quot;stream&quot;:false}
+
+T+2ms   Traefik 接收, 执行中间件链:
+          cors → rate-limit-ai (50 req/s, burst 20) → security-headers → retry
+          路由匹配: PathPrefix(/api/v1/scripts) → script-service:8000
+
+T+5ms   script-service (FastAPI) 接收
+          ├── PrometheusMiddleware: 记录 http_requests_total, http_requests_inprogress++
+          ├── RateLimitMiddleware: Redis INCR ratelimit:ai_generate:{user}:{minute}
+          │    如果超过10次/分钟 → 429 + Retry-After
+          ├── AuthMiddleware: 从Header提取 Bearer token
+          │    调用 user-service:8080 GET /api/v1/auth/verify
+          │    (此调用带有 W3C traceparent header, OTEL传播trace)
+          └── endpoint: generate_from_outline_sync()
+
+T+15ms  endpoint处理:
+          ├── 验证参数 (title/outline非空)
+          ├── 获取用户偏好画像 (查询user_preferences, 从scripts表提取历史风格/题材)
+          ├── 创建 Novel2ScriptV2Service 实例
+          │     ├── llm = ModelRouter 返回的 ResilientLLM (当前为DeepSeek)
+          │     ├── mock_mode = False
+          │     └── config = app_settings
+          └── 调用 run_full_pipeline()
+
+        ┌── V2 Pipeline (5阶段) ────────────────────────────┐
+        │                                                    │
+        │ Stage 1: 构建知识库 (T+15ms ~ T+2s)                │
+        │   ├── RecursiveCharacterTextSplitter 分块          │
+        │   │     chunk_size=4096, overlap=512               │
+        │   │     separators=[&quot;\n\n&quot;,&quot;\n&quot;,&quot;。&quot;,&quot;！&quot;,&quot;？&quot;]    │
+        │   ├── HuggingFaceEmbeddings(bge-large-zh-v1.5)    │
+        │   │     向量化所有chunks                            │
+        │   ├── FAISS.from_texts() 构建索引                  │
+        │   └── 磁盘缓存: {OUTPUT_DIR}/faiss_cache/{md5}.faiss│
+        │                                                    │
+        │ Stage 2: 章节检测 (T+2s ~ T+2.1s)                  │
+        │   ├── regex提取 &quot;第X回/章/节&quot; 标记                 │
+        │   ├── 去重计数                                     │
+        │   └── 大纲模式: 单章节复制N份 (N=target_episodes)  │
+        │                                                    │
+        │ Stage 3: 全局角色提取 (T+2.1s ~ T+10s)             │
+        │   ├── SYSTEM_EXTRACT_GLOBAL_V2 prompt              │
+        │   ├── 结构化输出: GlobalInfoResponse (Pydantic)     │
+        │   │   {characters, relationships, key_scenes,      │
+        │   │    key_props}                                  │
+        │   └── 输入截断: novel_text[:80000]                 │
+        │                                                    │
+        │ Stage 3b: 故事框架开发 (T+10s ~ T+25s)              │
+        │   ├── 仅大纲/短小说执行 (chapters&lt;5)               │
+        │   ├── 完整小说跳过 (避免与原文冲突)                 │
+        │   └── 输出: 梗概+角色设定+分集大纲+核心场景+道具    │
+        │                                                    │
+        │ Stage 3c: 章节摘要 (T+25s ~ T+35s)                  │
+        │   ├── 逐章串行调用 LLM (30s timeout each)           │
+        │   ├── 每章生成100-200字摘要                         │
+        │   └── _build_cumulative_context():                  │
+        │       第N章获得第1~(N-1)章摘要+下章预告             │
+        │                                                    │
+        │ Stage 4: 逐章剧本生成 (T+35s ~ T+120s)             │
+        │   ├── asyncio.Semaphore(3) 并发控制                 │
+        │   ├── 每章调用:                                      │
+        │   │   ├── RAG检索 (FAISS.top_k=5)                   │
+        │   │   │   query = &quot;角色: {names} 场景: {scenes}&quot;    │
+        │   │   ├── GraphRAG上下文 (知识图谱角色关系)         │
+        │   │   ├── 前情提要 (前面章节摘要)                   │
+        │   │   ├── 用户偏好 (历史风格/题材)                  │
+        │   │   └── LLM生成 (180s timeout)                   │
+        │   │       智能截断: first 6000 + last 2000 chars    │
+        │   └── asyncio.gather 并行, results.sort 保序       │
+        │                                                    │
+        │ Stage 5: 主体提取 (T+120s ~ T+130s)                │
+        │   ├── 从final_script提取角色/地点/道具              │
+        │   ├── 结构化输出: ExtractEntitiesResponse           │
+        │   └── fallback: _aggregate_chapter_entities()       │
+        │                                                    │
+        │ Stage 6: 质量评审 (T+130s ~ T+140s)                │
+        │   ├── 内容安全检测 (敏感词匹配)                     │
+        │   ├── QualityJudge 4维度评分:                      │
+        │   │   coherence, character_consistency,            │
+        │   │   dialogue_naturalness, short_video_fitness    │
+        │   └── verdict=retry → 注入评委反馈自动重试         │
+        │                                                    │
+        └────────────────────────────────────────────────────┘
+
+T+145s  构建响应:
+          ├── 组装 EpisodeItem[] (每集编号+标题+内容)
+          ├── 组装 ShotEpisode[] (分镜数据)
+          ├── 记录用量: track_llm_usage(response=llm_response)
+          │    从 response.response_metadata.token_usage 提取真实token数
+          │    成本 = tokens*provider定价 (DeepSeek: ¥1/M in, ¥2/M out)
+          └── 上报到 content-service:8081 POST /api/v1/usage/record
+
+T+150s  返回 JSON:
+          {
+            &quot;script_id&quot;: 0,
+            &quot;title&quot;: &quot;重生之都市修仙&quot;,
+            &quot;episodes&quot;: [{episode_number:1, title:&quot;第一集&quot;, content:&quot;...&quot;}, ...],
+            &quot;total_episodes&quot;: 5,
+            &quot;storyboard&quot;: [{...分镜数据...}],
+            &quot;quality_report&quot;: {total_score:82, verdict:&quot;pass&quot;, ...},
+            &quot;safety_report&quot;: {passed:true, score:100}
+          }
+
+T+152s  PrometheusMiddleware: http_requests_inprogress--
+        记录 http_request_duration_seconds, http_requests_total
+        记录 script_generation_total{type=&quot;outline&quot;,status=&quot;success&quot;}
+
+T+155s  浏览器收到响应, 渲染剧本内容
+</code></pre>
+<h3>2.2 流式生成 (SSE)</h3>
+<p><strong>相同请求, stream=true</strong>:</p>
+<pre><code>浏览器                                   服务端
+  │ POST /generate/from-outline-sync       │
+  │ {&quot;stream&quot;:true, ...}                  │
+  │                                        │
+  │◄── event: stage ──────────────────────┤ T+2s   data:{&quot;stage&quot;:&quot;构建知识库&quot;,&quot;progress&quot;:10}
+  │◄── event: stage ──────────────────────┤ T+10s  data:{&quot;stage&quot;:&quot;提取角色关系图谱&quot;,&quot;progress&quot;:30}
+  │◄── event: stage ──────────────────────┤ T+25s  data:{&quot;stage&quot;:&quot;扩展故事框架&quot;,&quot;progress&quot;:35}
+  │◄── event: stage ──────────────────────┤ T+35s  data:{&quot;stage&quot;:&quot;生成N章剧本&quot;,&quot;progress&quot;:40}
+  │                                        │
+  │   每章完成后:                           │
+  │◄── event: stage ──────────────────────┤        data:{&quot;stage&quot;:&quot;剧本生成 3/8&quot;,&quot;progress&quot;:55}
+  │                                        │
+  │◄── event: stage ──────────────────────┤ T+120s data:{&quot;stage&quot;:&quot;提取场景角色道具&quot;,&quot;progress&quot;:80}
+  │◄── event: stage ──────────────────────┤ T+130s data:{&quot;stage&quot;:&quot;质量评审&quot;,&quot;progress&quot;:90}
+  │◄── event: done ───────────────────────┤ T+140s data:{&quot;status&quot;:&quot;completed&quot;,&quot;result&quot;:{...}}
+  │                                        │
+  │ 连接关闭                                │
+</code></pre>
+<h3>2.3 图像/视频生成请求</h3>
+<p><strong>请求</strong>: <code>POST /api/v1/llmhua/images/generate</code></p>
+<pre><code>T+0ms   前端 POST → Traefik → llmhua-service:8002
+        Body: {&quot;scene_description&quot;:&quot;古代宫殿&quot;,&quot;storyboard_id&quot;:&quot;sb-1&quot;,&quot;scene_number&quot;:1,&quot;style&quot;:&quot;古装风格&quot;}
+
+T+2ms   非流式: 返回 {&quot;task_id&quot;:&quot;uuid&quot;,&quot;status&quot;:&quot;processing&quot;}
+        BackgroundTasks.add_task(_generate_image_task)
+
+T+3ms   _generate_image_task:
+          ├── TaskStore.create(task_id, {status:&quot;processing&quot;, progress:10})
+          ├── PromptEnhancer.enhance(description, style):
+          │     用LLM将&quot;古代宫殿&quot;翻译为:
+          │     &quot;ancient Chinese palace interior, golden morning light
+          │      streaming through carved window lattice, warm color
+          │      temperature 3200K, shallow depth of field,
+          │      symmetrical composition, 8k, cinematic lighting,
+          │      historical drama set design, ornate dragon motifs&quot;
+          │
+          ├── SeedanceService.generate_image():
+          │     POST https://ark.cn-beijing.volces.com/api/v3/images/generations
+          │     Body: {&quot;model&quot;:&quot;doubao-seedream-4-5-251128&quot;,&quot;prompt&quot;:&quot;...&quot;,
+          │            &quot;size&quot;:&quot;1920x1080&quot;,&quot;n&quot;:1,&quot;response_format&quot;:&quot;url&quot;}
+          │     (带重试: 429→指数退避, 5xx→最多3次)
+          │
+          ├── 获取 image_url → StorageService.upload_to_ceph()
+          │     object_key = &quot;image/2026/07/07/scene/sb-1/{uuid}.png&quot;
+          │     存到 MinIO, 返回 presigned URL (7天有效)
+          │
+          └── TaskStore.set(task_id, {status:&quot;completed&quot;, progress:100,
+                result: {image_url: &quot;http://minio:9000/short-drama/...&quot;}})
+
+T+15s   前端轮询 GET /api/v1/llmhua/images/{task_id}/status
+          直到 status=completed → 获取 image_url → 渲染图片
+
+流式模式 (stream=true):
+  T+0ms   event: progress → {&quot;stage&quot;:&quot;starting&quot;,&quot;progress&quot;:0}
+  T+1ms   event: progress → {&quot;stage&quot;:&quot;submitting_job&quot;,&quot;progress&quot;:10}
+  T+12s   event: progress → {&quot;stage&quot;:&quot;processing&quot;,&quot;progress&quot;:80}
+  T+15s   event: done → {image_url:&quot;...&quot;,&quot;original_url&quot;:&quot;...&quot;}
+</code></pre>
+<h3>2.4 推荐请求全链路</h3>
+<p><strong>请求</strong>: <code>GET /api/v1/recommendations/recommend?user_id=1&amp;limit=6</code></p>
+<pre><code>T+0ms   Traefik → recommendation-service:8004
+
+T+2ms   RecommendationPipeline.run():
+          ├── Layer 1: 5路并行召回 (asyncio.gather)
+          │     ├── _collaborative(user_id):
+          │     │     SELECT cases FROM users_who_interacted_with_same_cases
+          │     │     → 50 items, recall_score=0.9, source=&quot;cf&quot;
+          │     ├── _content_based(user_id):
+          │     │     提取用户历史标签 → FIND_IN_SET匹配 → 60 items, source=&quot;content&quot;
+          │     ├── _hot():
+          │     │     (like_count*3+view_count)*time_decay → 50 items, source=&quot;hot&quot;
+          │     ├── _author_based(user_id):
+          │     │     用户关注作者的新作品 → 30 items, source=&quot;author&quot;
+          │     └── _search(query): (如果存在)
+          │           SQL LIKE 匹配 → 30 items, source=&quot;search&quot;
+          │     → 合并去重, 按recall_score排序, 截取前200
+          │
+          ├── Layer 2: 过滤
+          │     ├── 查询 user_case_interactions (已看的case_id)
+          │     └── 去掉已看 + 去重 → ~150 items
+          │
+          ├── _get_user_profile(user_id):
+          │     SELECT 用户历史行为统计 (view/like/share counts)
+          │     SELECT 用户top-5标签
+          │     SELECT 用户最喜欢的genre
+          │     SELECT 用户top-3作者
+          │     SELECT 用户最近活跃时间+活跃时段
+          │
+          ├── Layer 3: Wide&amp;Deep 排序
+          │     ├── 提取13维特征 (10连续+2类别+1二元)
+          │     │     user_view_count, user_like_count, tag_diversity,
+          │     │     item_view_count, item_like_count, item_age_days,
+          │     │     tag_match_count, recall_source (embedding), genre (embedding),
+          │     │     genre_match, author_match, hour_of_day
+          │     ├── FeaturePreprocessor: Z-score归一化
+          │     ├── WideAndDeep.forward():
+          │     │     Deep: (13→256→128→64) + BatchNorm + ReLU + Dropout
+          │     │     Wide: Linear(13→1) + 类别embedding
+          │     │     Final: sigmoid(Wide⊕Deep)
+          │     ├── 模型不可用 → 降级为加权公式:
+          │     │     ctr = 0.3*like_rate + 0.1*view_rate
+          │     │         + 0.2*recall_score*(0.5+bandit_weight)
+          │     │         + 0.05*random (exploration noise)
+          │     └── Bandit: LinUCB per-user per-source 在线调整权重
+          │
+          └── Layer 4: MMR重排
+                λ=0.7, Jaccard tag相似度
+                贪心选择 top-6, 保证多样性
+
+T+50ms  返回: {items:[...], reason:&quot;personalized (cf,content,hot)&quot;, total:6}
+</code></pre>
+<hr>
+<h2>三、异步任务处理流程</h2>
+<h3>3.1 任务生命周期</h3>
+<pre><code>                   ┌──────────────────────────────┐
+                   │     POST /xxx/generate        │
+                   │     → 返回 task_id            │
+                   └──────────┬───────────────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              │               │               │
+         MemoryQueue    KafkaQueue      BackgroundTasks
+         (开发环境)     (生产环境)       (Celery worker)
+              │               │               │
+              ▼               ▼               ▼
+         ┌──────────────────────────────────────┐
+         │  Worker消费 → 执行AI生成 → 更新状态    │
+         │  TaskStore (Redis):                   │
+         │    {status, progress, result, error,  │
+         │     start_time, end_time}             │
+         └──────────────────────────────────────┘
+                              │
+              ┌───────────────┴───────────────┐
+              │                               │
+         前端轮询                          SSE推送
+    GET /{id}/status                  event: progress
+    (2s间隔)                          event: done
+</code></pre>
+<h3>3.2 Kafka Topic 设计</h3>
+<pre><code>ai-tasks-p1-realtime   6 partitions   保留1h   实时AI请求 (延迟&lt;2s)
+ai-tasks-p2-video      12 partitions  保留2h   视频生成 (延迟&lt;5min)
+ai-tasks-p3-batch      24 partitions  保留24h  批量离线
+ai-tasks-dlq           3 partitions   保留7天   死信队列
+</code></pre>
+<h3>3.3 KEDA 自动扩缩</h3>
+<pre><code>Kafka lag &gt; 5 messages (ai-tasks-script topic)
+  → KEDA triggers script-service Deployment
+  → scale from 1 → up to 30 pods
+  → 每15s检查一次lag
+  → lag降到0后, 冷却5分钟再缩容
+
+Cron trigger:
+  → 每天凌晨2-6点, 维持3个pod跑离线预生成
+</code></pre>
+<hr>
+<h2>四、多模型容错与路由</h2>
+<h3>4.1 ModelRouter 初始化</h3>
+<pre><code>create_llm_client(prefer=&quot;deepseek&quot;)
+  │
+  ├── _try_create_deepseek()
+  │     ├── 读 DEEPSEEK_API_KEY (env)
+  │     ├── 创建 httpx.AsyncClient(base_url=&quot;https://api.deepseek.com&quot;)
+  │     ├── ChatOpenAI(model=&quot;deepseek-chat&quot;, streaming=True, max_tokens=16000)
+  │     └── ✓ → 返回 ResilientLLM(llm, provider=&quot;deepseek&quot;)
+  │
+  ├── (fallback) _try_create_openai()
+  │     └── ChatOpenAI(model=&quot;gpt-4o&quot;, streaming=True)
+  │
+  ├── (fallback) _try_create_anthropic()
+  │     ├── 优先: ANTHROPIC_API_BASE (OpenAI兼容代理)
+  │     └── 备选: langchain_anthropic ChatAnthropic (直连)
+  │
+  └── (fallback) _try_create_vllm()
+        ├── 读 VLLM_API_BASE (env, 如 http://vllm-server:8000/v1)
+        ├── ChatOpenAI(model=Qwen/Qwen2.5-7B-Instruct)
+        └── 自托管GPU推理, 零API成本
+
+返回: ResilientLLM (包装器, 运行时故障转移)
+</code></pre>
+<h3>4.2 ResilientLLM 运行时切换</h3>
+<pre><code>async def ainvoke(messages):
+    breaker = get_circuit_breaker(&quot;llm-deepseek&quot;)  # 熔断器
+
+    for attempt in range(3):
+        try:
+            result = await breaker.call(self._llm.ainvoke, messages)
+            self._mark_healthy()
+            return result
+        except CircuitOpenError:            # 熔断器已打开
+            logger.warning(&quot;breaker OPEN → switching provider&quot;)
+            self._mark_unhealthy()
+            self._switch_provider()           # deepseek → openai
+            breaker = get_circuit_breaker(&quot;llm-openai&quot;)
+        except Exception as e:
+            if is_retryable(429/5xx):
+                self._mark_unhealthy()
+                self._switch_provider()
+            else:
+                raise
+
+    raise RuntimeError(&quot;all providers exhausted&quot;)
+
+故障场景:
+  DeepSeek 频繁429 → 5次错误/30s → CircuitBreaker OPEN
+  → 自动切到 OpenAI → OpenAI 正常 → 继续服务
+  → 30s后探测 DeepSeek → 恢复正常 → 切回
+</code></pre>
+<h3>4.3 三级模型调度 (P2+)</h3>
+<pre><code>TieredModelRouter.get_llm(tier):
+
+  &quot;simple&quot; (短篇大纲):
+    → vLLM Qwen2.5-7B-AWQ-int4 (本地GPU, 6GB VRAM, 1s延迟)
+    → fallback: DeepSeek
+
+  &quot;medium&quot; (中篇):
+    → vLLM Qwen2.5-14B (本地GPU, 28GB VRAM, 2s延迟)
+    → fallback: Qwen2.5-7B → DeepSeek
+
+  &quot;complex&quot; (长篇/小说):
+    → DeepSeek (云API, 最高质量)
+    → fallback: vLLM 14B → OpenAI
+
+  &quot;auto&quot; (默认):
+    → DeepSeek → vLLM 14B → vLLM 7B
+
+成本: 80%请求走本地GPU (免费), 20%走云API
+</code></pre>
+<hr>
+<h2>五、缓存体系</h2>
+<h3>5.1 三级缓存</h3>
+<pre><code>请求到达
+  │
+  ├── L1: 内存LRU (cache_layers.py)
+  │     OrderedDict, 1000 entries, 60s TTL
+  │     O(1) 查找, &lt;0.1ms
+  │     hit → 返回 (70%命中率)
+  │
+  ├── L2: Redis (cache_service.py)
+  │     MD5(request)→JSON, TTL 2h
+  │     网络往返 ~1ms
+  │     hit → 返回 + 晋升到L1 (20%命中率)
+  │
+  └── L3: 语义缓存 (semantic_cache.py)
+        FAISS 向量索引, bge-large-zh-v1.5
+        余弦相似度&gt;0.92 → 返回缓存
+        命中率: 60-80% (热点请求)
+        例: &quot;重生修仙&quot;和&quot;穿越修仙&quot;相似度0.94 → 复用结果
+</code></pre>
+<h3>5.2 缓存键设计</h3>
+<pre><code class="language-python"># Redis 缓存键
+storyboard:md5(title+theme+style+scene_count+script_hash[:16])
+shots:md5(title+theme+style+episode_count+episode_contents_hash[:8])
+script:md5(title+theme+length+style+setting+content_hash[:12])
+
+# 语义缓存键
+FAISS: {request_text_embedding} → {similarity_score} → cached_result
+</code></pre>
+<h3>5.3 缓存失效</h3>
+<pre><code>- 流式请求 (stream=true): 跳过所有缓存, 直接调LLM
+- TTL自动过期: 剧本2h, 分镜2h, 工作流3h
+- 手动清除: POST /api/v1/scripts/clear-cache → Redis FLUSHDB
+- 语义缓存: evict oldest when &gt; 10000 entries
+</code></pre>
+<hr>
+<h2>六、SSE流式输出</h2>
+<h3>6.1 协议</h3>
+<pre><code>SSE (Server-Sent Events)
+Content-Type: text/event-stream
+Headers: Cache-Control:no-cache, Connection:keep-alive, X-Accel-Buffering:no
+
+事件类型:
+  event: token     LLM token级流式输出
+  event: stage     多阶段流水线进度
+  event: progress  图片/视频生成进度
+  event: done      完成(含最终结果)
+  event: error     错误(含code)
+
+心跳: : heartbeat\n\n (每15s, 仅progress类型使用)
+</code></pre>
+<h3>6.2 启用方式</h3>
+<pre><code class="language-bash"># 单端点双模: stream参数 (默认false, 向后兼容)
+POST /api/v1/scripts/generate/from-outline-sync
+{&quot;stream&quot;:true, &quot;title&quot;:&quot;...&quot;, ...}
+
+# 全局关闭: 环境变量
+SSE_STREAMING_ENABLED=false  # 即使传stream=true也不启用
+</code></pre>
+<h3>6.3 服务端实现</h3>
+<pre><code class="language-python"># 端点层 (script.py)
+use_streaming = getattr(request, &quot;stream&quot;, False) and settings.SSE_STREAMING_ENABLED
+if use_streaming:
+    return StreamingResponse(event_generator(), media_type=&quot;text/event-stream&quot;)
+
+# 服务层 (ai_service.py)
+async def _stream_llm_response(system, human):
+    messages = [SystemMessage(system), HumanMessage(human)]
+    async for sse_event in stream_tokens_from_llm(self.llm, messages):
+        yield sse_event  # 每token一个event: token
+
+# 工具层 (sse.py)
+async def stream_tokens_from_llm(llm, messages):
+    async for chunk in llm.astream(messages):
+        yield format_sse_event({&quot;text&quot;: token, &quot;accumulated&quot;: full}, event=&quot;token&quot;)
+    yield format_sse_event({&quot;text&quot;: &quot;&quot;, &quot;complete&quot;: True}, event=&quot;token&quot;)
+</code></pre>
+<hr>
+<h2>七、数据库治理</h2>
+<h3>7.1 连接池配置</h3>
+<pre><code>生产环境 (HPA max=20):
+  script-service:        pool_size=10, max_overflow=5 → 15/pod × 20 = 300
+  storyboard-service:    pool_size=8,  max_overflow=3 → 11/pod × 20 = 220
+  llmhua-service:        pool_size=8,  max_overflow=5 → 13/pod × 20 = 260
+  recommendation-service: pool_size=8, max_overflow=3 → 11/pod × 20 = 220
+  Go services:           MaxOpenConns=20 × 5服务 × 2副本 = 200
+  ─────────────────────────────────────────────────────
+  总计: 1200 (主库) + 1500 (3×500 读副本) = 2700
+
+MySQL max_connections = 1000 (主) + 500×3 (读副本)
+  安全余量: 主库 (1200&lt;1000 需注意), 读副本 (1500&lt;1500 刚好)
+
+P2 分库分表后:
+  4 shards × 50/pool = 200 连接/shard
+  总计: 800 (远低于1000上限)
+</code></pre>
+<h3>7.2 ShardingSphere 分片规则</h3>
+<pre><code class="language-yaml">tables:
+  scripts:
+    actualDataNodes: ds_${0..3}.scripts
+    databaseStrategy:
+      shardingColumn: user_id
+      shardingAlgorithm: MOD(user_id, 4)
+  user_case_interactions:
+    (同上, 按user_id分片)
+  generation_tasks:
+    (同上)
+
+keyGenerator: SNOWFLAKE (分布式ID, 保证全局唯一)
+</code></pre>
+<hr>
+<h2>八、消息队列与削峰</h2>
+<h3>8.1 Kafka 拓扑</h3>
+<pre><code>Producer (script-service):
+  task = Task(queue_name=&quot;script&quot;, payload=request)
+  await queue.enqueue(task)
+  → Kafka topic: ai-tasks-script, partition = hash(user_id) % 6
+
+Consumer (独立worker pods):
+  KafkaQueue.start_consumer(&quot;script&quot;, handler=process_script, concurrency=4)
+  → 每个pod消费多个partition
+  → 处理完成后 ack (commit offset)
+  → 失败 → nack → 进入 dlq topic
+
+死信处理:
+  ai-tasks-dlq (保留7天)
+  → 人工排查或自动重试
+</code></pre>
+<h3>8.2 削峰效果</h3>
+<pre><code>场景: 1000用户同时点击&quot;生成剧本&quot;
+  无队列: 1000个并发LLM调用 → DeepSeek 限流 → 900失败
+  有队列: 1000条消息入Kafka → worker以10/s速度消费
+         → 用户先收到 task_id, SSE推送完成通知
+         → 100%成功率 (仅排队时间增加)
+</code></pre>
+<hr>
+<h2>九、限流与熔断降级</h2>
+<h3>9.1 多层限流</h3>
+<pre><code>Layer 1 — Traefik 网关:
+  rate-limit-ai:    50 req/s, burst 20   (脚本/分镜/图像)
+  rate-limit-public: 2000 req/s, burst 500 (浏览/搜索)
+  rate-limit-video:  100 req/s, burst 30  (视频处理)
+
+Layer 2 — 应用中间件 (RateLimitMiddleware):
+  Redis 滑动窗口, per-user 粒度
+  ai_generate:  10 req/min
+  image_gen:     5 req/min
+  video_gen:     3 req/min
+  recommend:    60 req/min
+  browse:      300 req/min
+  auth:         20 req/min
+
+Layer 3 — 熔断器 (AsyncCircuitBreaker):
+  LLM调用: 5次错误/30s → OPEN
+  跨服务调用: CircuitOpenError → 降级响应
+</code></pre>
+<h3>9.2 降级策略</h3>
+<pre><code>场景: video-service 宕机
+  script-service 调用 process_video():
+    _safe_call(retry_client.post(...), service_name=&quot;video-service&quot;)
+    → 捕获 aiohttp.ClientError
+    → 返回 {&quot;status&quot;:&quot;degraded&quot;,&quot;degraded&quot;:true}  (不抛500)
+    → 前端展示 &quot;视频服务暂时不可用&quot;
+
+场景: Redis 宕机
+  RateLimitMiddleware: 跳过限流 (degraded mode)
+  CacheService: 跳过缓存 (cache miss → 直接调LLM)
+  TaskStore: 无法创建任务 → 返回503
+
+场景: DeepSeek + OpenAI 全挂
+  ModelRouter → Anthropic → vLLM → 全部失败
+  → RuntimeError(&quot;all providers exhausted&quot;)
+  → endpoint捕获 → 返回503 &quot;AI服务暂时不可用&quot;
+</code></pre>
+<hr>
+<h2>十、可观测性</h2>
+<h3>10.1 日志格式</h3>
+<pre><code class="language-json">{
+  &quot;timestamp&quot;: &quot;2026-07-07T14:30:00.123Z&quot;,
+  &quot;level&quot;: &quot;INFO&quot;,
+  &quot;logger&quot;: &quot;app.services.ai_service&quot;,
+  &quot;message&quot;: &quot;调用LLM生成剧本...&quot;,
+  &quot;service&quot;: &quot;script-service&quot;,
+  &quot;trace_id&quot;: &quot;a1b2c3d4e5f6789012345678abcdef01&quot;,
+  &quot;span_id&quot;: &quot;1234567890abcdef&quot;,
+  &quot;request_id&quot;: &quot;uuid-xxx&quot;,
+  &quot;module&quot;: &quot;ai_service&quot;,
+  &quot;function&quot;: &quot;generate_script&quot;,
+  &quot;line&quot;: 118,
+  &quot;thread_id&quot;: 140234567890
+}
+</code></pre>
+<p><strong>trace_id/span_id</strong>: 从 OpenTelemetry <code>get_current_span()</code> 自动提取, 与 Jaeger 链路一一对应。</p>
+<h3>10.2 Jaeger 完整链路示例</h3>
+<pre><code>Jaeger Timeline (一次剧本生成请求):
+┌─────────────────────────────────────────────────────────────┐
+│ Traefik: POST /api/v1/scripts/generate/from-outline-sync    │
+│ Duration: 150.2s                                            │
+├─────────────────────────────────────────────────────────────┤
+│  ├─ Traefik → script-service (3ms)                         │
+│  ├─ script-service: FastAPI dispatch (2ms)                 │
+│  │   ├─ aiohttp: GET user-service:8080/auth/verify (8ms)  │ ← 修复前断裂
+│  │   ├─ Redis: GET cache:script:xxx (2ms)                  │
+│  │   ├─ llm.generate_script [DeepSeek] (95s)               │ ← 修复前无此span
+│  │   │   ├─ httpx: POST api.deepseek.com/chat (94.8s)     │
+│  │   │   └─ [手动span: model=deepseek-chat, title=..., ...]│
+│  │   ├─ llm.extract_global [DeepSeek] (12s)               │
+│  │   ├─ llm.generate_chapter × 8 [DeepSeek] (parallel×3)  │
+│  │   ├─ Redis: SETEX cache:script:xxx (1ms)               │
+│  │   └─ MySQL: INSERT INTO scripts (6ms)                   │
+│  └─ script-service → Response (1ms)                        │
+└─────────────────────────────────────────────────────────────┘
+</code></pre>
+<h3>10.3 告警规则</h3>
+<pre><code class="language-yaml">ServiceDown:        health_status==0, 持续2min → CRITICAL
+HighErrorRate:      http_exceptions &gt; 0.1/s, 持续5min → WARNING
+HighLatency:        P90 &gt; 5s, 持续5min → WARNING
+LLMTimeout:         P90(generate/extract) &gt; 60s, 持续10min → WARNING
+HighCPUUsage:       &gt; 90%, 持续10min → WARNING
+HighMemoryUsage:    &gt; 92%, 持续5min → CRITICAL
+MySQLDown/RedisDown/RabbitMQDown:  持续2min → CRITICAL
+ContainerOOM:       1h内出现OOM → CRITICAL
+</code></pre>
+<hr>
+<h2>十一、AI质量保障</h2>
+<h3>11.1 剧本质量自动评审</h3>
+<pre><code>QualityJudge.judge_script(content):
+  ┌─────────────────────────────────────────┐
+  │ LLM评审 (独立调用, 不影响主流程)          │
+  │                                         │
+  │ 评分维度:                                │
+  │   连贯性 (coherence)                     │
+  │   角色一致性 (character_consistency)      │
+  │   对白自然度 (dialogue_naturalness)       │
+  │   短视频适配度 (short_video_fitness)      │
+  │                                         │
+  │ 判定:                                    │
+  │   total ≥ 60  → pass (通过)             │
+  │   40 ≤ total &lt; 60 → retry (自动重试)     │
+  │   total &lt; 40 → reject (拒绝, 人工审核)   │
+  └─────────────────────────────────────────┘
+
+retry流程:
+  1. 提取评委反馈 (weaknesses + suggestions)
+  2. 构建优化prompt: &quot;请根据以下评审意见优化剧本...&quot;
+  3. 逐章调用LLM优化 (120s timeout)
+  4. 重新组装final_script
+  5. 再次评审 (最多1次重试)
+</code></pre>
+<h3>11.2 角色视觉一致性</h3>
+<pre><code>shots-to-video 批量处理:
+  │
+  ├── 1. 角色参考图查询
+  │     ReferenceImages.characters = {&quot;张三&quot;: &quot;http://minio/char_zhang.png&quot;}
+  │     每个shot的characters列表匹配参考图
+  │
+  ├── 2. 同场景seed共享
+  │     scene_seeds[sceneRef] = hash(sceneRef + shot_number) % 2^31
+  │     同一场景的所有shot使用相同seed
+  │     → 光线/色彩/角色位置保持一致
+  │
+  ├── 3. 图像生成
+  │     prompt = shot.imagePromptZh (PromptBuilder 5层输出)
+  │     如果无enriched prompt → 使用原始shot.description
+  │     seed = scene_seeds[sceneRef]
+  │     style = &quot;写实风格&quot;
+  │     negative = build_negative_prompt(style)  # 风格专属
+  │     例: 古装 → negative += &quot;modern buildings, cars, phones, technology&quot;
+  │
+  ├── 4. 并行处理 (Semaphore=3)
+  │     asyncio.gather(*[process_one(shot) for shot in episode.shots])
+  │
+  └── 5. 视频生成
+        prompt = _build_shot_video_prompt(shot) (5层中文)
+        duration = max(3, min(15, shot.duration, len(dialogue)/3 + 3))
+        图像→base64→POST Seedance API → 轮询(120×2s) → video_url
+        失败 → status=&quot;image_only&quot; (显式标记, 不伪装completed)
+</code></pre>
+<hr>
+<h2>十二、部署拓扑</h2>
+<h3>12.1 开发环境 (docker-compose)</h3>
+<pre><code class="language-yaml">services:
+  mysql:        image:mysql:8.0,   port:3307,  healthcheck:mysqladmin ping
+  redis:        image:redis:7,     port:6380,  healthcheck:redis-cli ping
+  rabbitmq:     image:rabbitmq:3,  port:5672,  healthcheck:rabbitmq-diagnostics
+  kafka:        image:kafka:3.9.0, port:9092,  Kraft模式 (单节点, 无ZK)
+  minio:        image:minio,       port:9000
+  traefik:      image:traefik:v3,  port:80
+  user-service:        Go,   port:8080
+  content-service:     Go,   port:8081
+  script-service:      Python, port:8000, workers:8, threads:4
+  storyboard-service:  Python, port:8001, workers:2
+  llmhua-service:      Python, port:8002, workers:2
+  recommendation:      Python, port:8004, workers:2
+  video-service:       Python+Celery,  port:8000
+  final-cut-service:   Go+gRPC, port:8085
+  prometheus+grafana+jaeger+ELK: 监控全套
+</code></pre>
+<h3>12.2 K8s 生产部署</h3>
+<pre><code>Global (多区域):
+  us-east-1 (主区域, AWS N. Virginia)
+  ap-southeast-1 (亚洲, AWS Singapore)
+  eu-west-1 (欧洲, AWS Ireland)
+
+每区域:
+  K8s Cluster × 1
+    ├── HPA: script-service 2-20, storyboard 2-20, llmhua 2-20
+    ├── KEDA: Kafka lag → 1-30 pods
+    ├── Volcano GPU: P1(8×A100), P2(16×L40S), P3(32×Spot)
+    ├── ShardingSphere: 4-shard MySQL
+    ├── Linkerd: ServiceProfile (timeout, retry)
+    └── Karpenter: GPU NodePool auto-scaling
+
+跨区域同步:
+  TiDB CDC: us → sg, us → eu (async)
+  MinIO CRR: media跨区域复制
+  Redis Active-Active CRDT: 会话/缓存同步
+  Kafka MirrorMaker 2: 事件流复制
+</code></pre>
+<hr>
+<h2>十三、代码变更清单</h2>
+<h3>13.1 新增文件 (26个)</h3>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>功能</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>shared/python/model_router.py</code></td>
+<td>多模型路由 + ResilientLLM + vLLM + TieredModelRouter</td>
+</tr>
+<tr>
+<td><code>shared/python/model_tiers.py</code></td>
+<td>4级模型调度 (1.5B AWQ→7B AWQ→14B→Cloud)</td>
+</tr>
+<tr>
+<td><code>shared/python/sse.py</code></td>
+<td>SSE事件格式化 + LLM token流式</td>
+</tr>
+<tr>
+<td><code>shared/python/cache_layers.py</code></td>
+<td>L1/L2/L3多级缓存</td>
+</tr>
+<tr>
+<td><code>shared/python/task_queue.py</code></td>
+<td>Kafka/内存队列抽象</td>
+</tr>
+<tr>
+<td><code>shared/python/async_circuit_breaker.py</code></td>
+<td>异步3态熔断器</td>
+</tr>
+<tr>
+<td><code>shared/python/rate_limit_middleware.py</code></td>
+<td>分布式限流中间件</td>
+</tr>
+<tr>
+<td><code>shared/python/usage_tracker.py</code></td>
+<td>真实token追踪+成本计算</td>
+</tr>
+<tr>
+<td><code>shared/python/embedding_client.py</code></td>
+<td>TEI/OpenAI/本地embedding客户端</td>
+</tr>
+<tr>
+<td><code>shared/python/cost_optimizer.py</code></td>
+<td>成本追踪+峰谷调度</td>
+</tr>
+<tr>
+<td><code>shared/python/pipeline_orchestrator.py</code></td>
+<td>跨服务流水线编排</td>
+</tr>
+<tr>
+<td><code>shared/golang/db/dbresolver.go</code></td>
+<td>Go服务读写分离</td>
+</tr>
+<tr>
+<td><code>script-service/.../quality_judge.py</code></td>
+<td>LLM-as-Judge质量评审</td>
+</tr>
+<tr>
+<td><code>script-service/.../semantic_cache.py</code></td>
+<td>FAISS语义缓存</td>
+</tr>
+<tr>
+<td><code>script-service/.../batch_pregen.py</code></td>
+<td>离线预生成</td>
+</tr>
+<tr>
+<td><code>script-service/.../content_safety.py</code></td>
+<td>内容安全审核</td>
+</tr>
+<tr>
+<td><code>script-service/.../user_preferences.py</code></td>
+<td>用户偏好记忆</td>
+</tr>
+<tr>
+<td><code>script-service/.../rate_limit_middleware.py</code></td>
+<td>限流中间件(script)</td>
+</tr>
+<tr>
+<td><code>script-service/.../async_circuit_breaker.py</code></td>
+<td>熔断器(script)</td>
+</tr>
+<tr>
+<td><code>llmhua-service/.../prompt_enhancer.py</code></td>
+<td>图像prompt增强</td>
+</tr>
+<tr>
+<td><code>llmhua-service/.../task_store.py</code></td>
+<td>任务状态存储</td>
+</tr>
+<tr>
+<td><code>frontend/.../ProtectedRoute.tsx</code></td>
+<td>路由守卫</td>
+</tr>
+<tr>
+<td><code>k8s/services/keda-scaledobjects.yaml</code></td>
+<td>KEDA配置</td>
+</tr>
+<tr>
+<td><code>k8s/infra/shardingsphere-proxy.yaml</code></td>
+<td>分库分表代理</td>
+</tr>
+<tr>
+<td><code>k8s/gpu/gpu-deployments.yaml</code></td>
+<td>GPU服务部署</td>
+</tr>
+<tr>
+<td><code>k8s/overlays/global/multi-region-sync.yaml</code></td>
+<td>多区域同步</td>
+</tr>
+<tr>
+<td><code>tests/load/locustfile.py</code></td>
+<td>全链路压测</td>
+</tr>
+</tbody></table>
+<h3>13.2 关键修改文件</h3>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>改动</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>script-service/.../ai_service.py</code></td>
+<td>streaming→True, 多provider, 语义缓存集成, LLM trace span</td>
+</tr>
+<tr>
+<td><code>script-service/.../novel2script_v2_service.py</code></td>
+<td>前情提要+章节摘要+smart截断+质量评审+重试+安全检测+用户偏好+GraphRAG注入</td>
+</tr>
+<tr>
+<td><code>script-service/.../graphrag_service.py</code></td>
+<td>FAISS真实embedding替代MD5伪实现</td>
+</tr>
+<tr>
+<td><code>script-service/.../usage_tracker.py</code></td>
+<td>extract_real_usage + 多provider定价</td>
+</tr>
+<tr>
+<td><code>script-service/.../prompts/__init__.py</code></td>
+<td>多场景+角色对白+钩子+比例指导+跨章上下文</td>
+</tr>
+<tr>
+<td><code>script-service/.../config.py</code></td>
+<td>SSE_STREAMING_ENABLED, WORKERS=8, embedding=bge-large-zh</td>
+</tr>
+<tr>
+<td><code>storyboard-service/.../storyboard_service.py</code></td>
+<td>PromptBuilder集成+提示增强+流式SSE</td>
+</tr>
+<tr>
+<td><code>storyboard-service/.../prompt_builder.py</code></td>
+<td>13种风格negative prompt + location注入 + generate_all_prompts</td>
+</tr>
+<tr>
+<td><code>storyboard-service/.../cache_service.py</code></td>
+<td>shot/storyboard缓存key分离</td>
+</tr>
+<tr>
+<td><code>llmhua-service/.../seedance_service.py</code></td>
+<td>16:9默认+PromptEnhancer集成</td>
+</tr>
+<tr>
+<td><code>llmhua-service/.../llmhua.py</code></td>
+<td>角色一致性+并发+重试+自适应时长+seed共享</td>
+</tr>
+<tr>
+<td><code>recommendation-service/.../ranking_model.py</code></td>
+<td>rank()真正推理+特征归一化</td>
+</tr>
+<tr>
+<td><code>recommendation-service/.../recommendation_engine.py</code></td>
+<td>用户画像+真实特征+降级逻辑</td>
+</tr>
+<tr>
+<td><code>recommendation-service/.../database.py</code></td>
+<td>连接池env可配</td>
+</tr>
+<tr>
+<td><code>routers.yaml</code></td>
+<td>分级限流绑定</td>
+</tr>
+<tr>
+<td><code>middlewares.yaml</code></td>
+<td>AI/Public/Video分级限流值调整</td>
+</tr>
+<tr>
+<td><code>docker-compose.yml</code></td>
+<td>Kafka服务+worker配置</td>
+</tr>
+<tr>
+<td><code>final-cut-service/.../rabbitmq.go</code></td>
+<td>autoAck=false</td>
+</tr>
+</tbody></table>
+<hr>
+<p><em>文档版本: v2.0 | 最后更新: 2026-07-08</em></p>
+</body></html>
