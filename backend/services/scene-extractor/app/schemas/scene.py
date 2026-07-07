@@ -9,6 +9,7 @@ class SceneExtractionRequest(BaseModel):
     script_content: str = Field(..., description="剧本内容")
     extract_type: Optional[str] = Field(default="all", description="抽取类型: all, scenes, characters, props")
     style: Optional[str] = Field(default="写实风格", description="图像生成风格")
+    stream: bool = Field(default=False, description="是否启用SSE流式输出")
 
 
 class SceneRequest(BaseModel):

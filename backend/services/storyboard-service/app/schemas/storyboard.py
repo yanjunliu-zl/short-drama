@@ -22,6 +22,7 @@ class StoryboardGenerationRequest(BaseModel):
     style: Optional[str] = Field(default="写实风格", description="分镜风格")
     scene_count: Optional[int] = Field(default=0, description="预期场景数量，0表示自动")
     user_id: Optional[str] = Field(default=None, description="用户ID")
+    stream: bool = Field(default=False, description="是否启用SSE流式输出")
 
 
 class StoryboardResponse(BaseModel):
@@ -116,6 +117,7 @@ class ShotGenerationRequest(BaseModel):
     sceneRefs: Optional[List[str]] = Field(default=[], description="可用的场景名称列表")
     characterNames: Optional[List[str]] = Field(default=[], description="可用的角色名称列表")
     user_id: Optional[str] = Field(default=None, description="用户ID")
+    stream: bool = Field(default=False, description="是否启用SSE流式输出")
 
 
 class ShotGenerationResponse(BaseModel):

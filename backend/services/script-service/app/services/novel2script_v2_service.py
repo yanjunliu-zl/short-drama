@@ -27,6 +27,7 @@ from app.prompts import (
     SYSTEM_DEVELOP_STORY_V2, HUMAN_DEVELOP_STORY_V2,
 )
 from app.schemas.novel_v2 import GlobalInfoResponse
+from app.utils.sse import format_sse_event, EVENT_STAGE, EVENT_ERROR, EVENT_DONE
 
 logger = logging.getLogger(__name__)
 
@@ -782,3 +783,72 @@ class Novel2ScriptV2Service:
                     f"{len(result['final_script'])} chars, "
                     f"elapsed={time.time()-t_total:.1f}s")
         return result
+
+    async def run_full_pipeline_sse(
+        self,
+        novel_text: str,
+        style: str = "",
+        target_episodes: int = 0,
+    ) -> "AsyncGenerator[str, None]":
+        """Execute V2 pipeline with SSE stage-progress streaming.
+
+        Uses an asyncio.Queue to bridge the synchronous progress_callback
+        to the async SSE generator. Each pipeline stage emits a 'stage' event.
+
+        Args:
+            novel_text: Full novel/outline content.
+            style: Script style (ancient/suspense/comedy).
+            target_episodes: Minimum episodes to produce (0=auto).
+
+        Yields:
+            SSE-formatted event strings (event: stage, event: done, event: error).
+        """
+        import asyncio
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def progress_callback(pct: int, stage_name: str):
+            """Bridge: push progress updates into the async queue."""
+            await queue.put(format_sse_event(
+                {"stage": stage_name, "progress": pct},
+                event=EVENT_STAGE,
+            ))
+
+        async def run_pipeline():
+            """Run the actual pipeline in background, push result/error to queue."""
+            try:
+                result = await self.run_full_pipeline(
+                    novel_text=novel_text,
+                    style=style,
+                    progress_callback=progress_callback,
+                    target_episodes=target_episodes,
+                )
+                await queue.put(("__result__", result))
+            except Exception as e:
+                logger.error(f"V2 pipeline SSE error: {e}", exc_info=True)
+                await queue.put(("__error__", str(e)))
+
+        task = asyncio.create_task(run_pipeline())
+
+        # Yield SSE events from the queue until result or error
+        while True:
+            item = await queue.get()
+            if isinstance(item, tuple):
+                kind, payload = item[0], item[1]
+                if kind == "__result__":
+                    yield format_sse_event(
+                        {"status": "completed", "result": payload},
+                        event=EVENT_DONE,
+                    )
+                    break
+                elif kind == "__error__":
+                    yield format_sse_event(
+                        {"error": payload, "code": "PIPELINE_ERROR"},
+                        event=EVENT_ERROR,
+                    )
+                    break
+            else:
+                # Already-formatted SSE string from progress_callback
+                yield item
+
+        # Ensure the background task is done
+        await task

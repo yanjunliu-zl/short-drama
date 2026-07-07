@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     STORAGE_LOCAL_BASE_PATH: str = os.getenv("STORAGE_LOCAL_BASE_PATH", "/app/storage")
     STORAGE_PUBLIC_ENDPOINT: str = os.getenv("STORAGE_PUBLIC_ENDPOINT", "http://localhost:9000")
 
+    # SSE streaming configuration
+    SSE_STREAMING_ENABLED: bool = os.getenv("SSE_STREAMING_ENABLED", "True").lower() == "true"
+    SSE_HEARTBEAT_INTERVAL: int = int(os.getenv("SSE_HEARTBEAT_INTERVAL", 15))
+
     # 日志配置
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

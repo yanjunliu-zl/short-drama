@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi.responses import StreamingResponse
 from typing import List, Optional
 import uuid
 import time
@@ -17,6 +18,8 @@ from app.schemas.storyboard import (
 from app.services.storyboard_service import StoryboardAIService
 from app.services.task_store import get_task_store, TaskStore
 from app.core.deps import get_storyboard_service
+from app.core.config import settings
+from app.utils.sse import format_sse_event, EVENT_ERROR, EVENT_DONE
 
 router = APIRouter()
 
@@ -34,8 +37,33 @@ async def generate_storyboard(
     """
     生成分镜
 
-    使用AI模型根据剧本生成分镜脚本
+    使用AI模型根据剧本生成分镜脚本。
+    设置 stream=true 启用 SSE 流式输出 (token 事件)。
     """
+    use_streaming = getattr(request, "stream", False) and settings.SSE_STREAMING_ENABLED
+
+    if use_streaming:
+        script_len = len(request.script) if request.script else 0
+        logger.info(f"[API] POST /generate (stream) title={request.title} script_len={script_len}")
+
+        async def event_generator():
+            try:
+                async for sse_event in storyboard_service.generate_storyboard_stream(
+                    request.dict()
+                ):
+                    yield sse_event
+                yield format_sse_event({"status": "completed"}, event=EVENT_DONE)
+            except Exception as e:
+                logger.error(f"[API] Stream error: {e}")
+                yield format_sse_event({"error": str(e), "code": type(e).__name__}, event=EVENT_ERROR)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
+    # Legacy non-streaming path
     task_id = str(uuid.uuid4())
     script_len = len(request.script) if request.script else 0
     logger.info(f"[API] POST /generate task_id={task_id} title={request.title} script_len={script_len}")
@@ -213,8 +241,32 @@ async def generate_shots(
     """
     智能分镜：使用AI模型将剧本拆分为镜头级分镜
 
-    根据剧本内容自动分析并划分每个镜头，包括镜头类型、时长、摄像机角度等
+    根据剧本内容自动分析并划分每个镜头，包括镜头类型、时长、摄像机角度等。
+    设置 stream=true 启用 SSE 流式输出 (stage 事件按集推送 + done 结果)。
     """
+    use_streaming = getattr(request, "stream", False) and settings.SSE_STREAMING_ENABLED
+
+    if use_streaming:
+        script_len = len(request.script) if request.script else 0
+        logger.info(f"[API] POST /shots/generate (stream) title={request.title} script_len={script_len}")
+
+        async def event_generator():
+            try:
+                async for sse_event in storyboard_service.generate_shots_stream(
+                    request.dict()
+                ):
+                    yield sse_event
+            except Exception as e:
+                logger.error(f"[API] Stream error: {e}")
+                yield format_sse_event({"error": str(e), "code": type(e).__name__}, event=EVENT_ERROR)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
+    # Legacy non-streaming path
     task_id = str(uuid.uuid4())
     script_len = len(request.script) if request.script else 0
     ep_count = request.episodeCount or 0

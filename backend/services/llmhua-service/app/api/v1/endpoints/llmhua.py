@@ -2,6 +2,7 @@ import logging
 from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services.usage_tracker import track_image_usage, track_video_usage
@@ -26,6 +27,8 @@ from app.schemas.llmhua import (
     PreviewImageResponse,
 )
 from app.services.seedance_service import get_seedance_service, close_seedance_service
+from app.core.config import settings
+from app.utils.sse import format_sse_event, EVENT_PROGRESS, EVENT_ERROR, EVENT_DONE
 
 router = APIRouter()
 
@@ -41,8 +44,43 @@ async def generate_image_from_scene(
     seedance_service=Depends(get_seedance_service)
 ):
     """
-    根据分镜镜头描述生成单个镜头图像
+    根据分镜镜头描述生成单个镜头图像。
+    设置 stream=true 启用 SSE 流式输出 (progress 事件)。
     """
+    use_streaming = getattr(request, "stream", False) and settings.SSE_STREAMING_ENABLED
+
+    if use_streaming:
+        logger.info(f"[API] POST /images/generate (stream)")
+
+        async def event_generator():
+            try:
+                yield format_sse_event({"stage": "starting", "progress": 0}, event=EVENT_PROGRESS)
+                yield format_sse_event({"stage": "submitting_job", "progress": 10}, event=EVENT_PROGRESS)
+
+                result = await seedance_service.generate_image_from_scene(
+                    scene_description=request.scene_description,
+                    style=request.style or "写实风格",
+                    width=request.width or 1920,
+                    height=request.height or 1920,
+                    seed=request.seed,
+                )
+
+                if result and result.get("status") == "completed":
+                    yield format_sse_event({"stage": "processing", "progress": 80}, event=EVENT_PROGRESS)
+                    yield format_sse_event(result, event=EVENT_DONE)
+                else:
+                    yield format_sse_event({"error": "Image generation failed", "detail": result}, event=EVENT_ERROR)
+            except Exception as e:
+                logger.error(f"[API] Stream error: {e}")
+                yield format_sse_event({"error": str(e), "code": type(e).__name__}, event=EVENT_ERROR)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
+    # Legacy non-streaming path
     try:
         task_id = str(uuid.uuid4())
 
@@ -297,7 +335,38 @@ async def generate_preview_image(
     为场景/角色/道具生成预览图像。
 
     根据描述和类别（scene/character/prop）构建合适的提示词，调用 Seedance 生成图像。
+    设置 stream=true 启用 SSE 流式输出 (progress 事件)。
     """
+    use_streaming = getattr(request, "stream", False) and settings.SSE_STREAMING_ENABLED
+
+    if use_streaming:
+        prompt = _build_preview_prompt(request.description, request.category, request.style or "写实风格")
+        logger.info(f"[API] POST /preview-image (stream) category={request.category}")
+
+        async def event_generator():
+            try:
+                yield format_sse_event({"stage": "starting", "progress": 0}, event=EVENT_PROGRESS)
+                result = await seedance_service.generate_image_from_scene(
+                    scene_description=prompt,
+                    style=request.style or "写实风格",
+                    width=request.width or 1024,
+                    height=request.height or 1024,
+                )
+                if result and result.get("status") == "completed":
+                    yield format_sse_event({"stage": "completed", "progress": 100}, event=EVENT_PROGRESS)
+                    yield format_sse_event(result, event=EVENT_DONE)
+                else:
+                    yield format_sse_event({"error": "Preview generation failed"}, event=EVENT_ERROR)
+            except Exception as e:
+                yield format_sse_event({"error": str(e), "code": type(e).__name__}, event=EVENT_ERROR)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
+    # Legacy non-streaming path
     try:
         task_id = str(uuid.uuid4())
 
@@ -409,8 +478,42 @@ async def generate_video_from_image(
     seedance_service=Depends(get_seedance_service)
 ):
     """
-    根据图像生成对应视频
+    根据图像生成对应视频。
+    设置 stream=true 启用 SSE 流式输出 (progress 事件)。
     """
+    use_streaming = getattr(request, "stream", False) and settings.SSE_STREAMING_ENABLED
+
+    if use_streaming:
+        logger.info(f"[API] POST /videos/generate (stream)")
+
+        async def event_generator():
+            try:
+                yield format_sse_event({"stage": "starting", "progress": 0}, event=EVENT_PROGRESS)
+                yield format_sse_event({"stage": "submitting_task", "progress": 5}, event=EVENT_PROGRESS)
+
+                result = await seedance_service.generate_video_from_image(
+                    image_url=request.image_url,
+                    prompt=request.prompt or request.image_url,
+                    duration=request.duration,
+                    seed=request.seed,
+                )
+
+                if result and result.get("status") == "completed":
+                    yield format_sse_event({"stage": "completed", "progress": 100}, event=EVENT_PROGRESS)
+                    yield format_sse_event(result, event=EVENT_DONE)
+                else:
+                    yield format_sse_event({"error": "Video generation failed", "detail": result}, event=EVENT_ERROR)
+            except Exception as e:
+                logger.error(f"[API] Stream error: {e}")
+                yield format_sse_event({"error": str(e), "code": type(e).__name__}, event=EVENT_ERROR)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
+    # Legacy non-streaming path
     try:
         task_id = str(uuid.uuid4())
 
@@ -542,8 +645,57 @@ async def generate_complete_storyboard(
     seedance_service=Depends(get_seedance_service)
 ):
     """
-    根据分镜生成所有镜头图像并转换为视频（完整流程）
+    根据分镜生成所有镜头图像并转换为视频（完整流程）。
+    设置 stream=true 启用 SSE 流式输出 (progress 事件逐场景推送)。
     """
+    use_streaming = getattr(request, "stream", False) and settings.SSE_STREAMING_ENABLED
+
+    if use_streaming:
+        total_scenes = len(request.scenes)
+        logger.info(f"[API] POST /storyboard/generate-complete (stream) scenes={total_scenes}")
+
+        async def event_generator():
+            try:
+                yield format_sse_event({"stage": "starting", "total_scenes": total_scenes, "progress": 0}, event=EVENT_PROGRESS)
+                results = []
+                for idx, scene in enumerate(request.scenes):
+                    scene_number = scene.get("scene_number", idx + 1)
+                    desc = scene.get("description", "")
+                    yield format_sse_event({"stage": "scene_start", "scene_number": scene_number, "progress": int(idx / total_scenes * 90)}, event=EVENT_PROGRESS)
+
+                    img_result = await seedance_service.generate_image_from_scene(
+                        scene_description=desc, style=request.style or "写实风格",
+                    )
+                    if request.generate_video and img_result and img_result.get("image_url"):
+                        yield format_sse_event({"stage": "video_start", "scene_number": scene_number, "progress": int((idx + 0.5) / total_scenes * 90)}, event=EVENT_PROGRESS)
+                        vid_result = await seedance_service.generate_video_from_image(
+                            image_url=img_result["image_url"],
+                            prompt=desc,
+                        )
+                        results.append(SceneResult(
+                            scene_number=scene_number,
+                            image_url=img_result.get("image_url"),
+                            video_url=vid_result.get("video_url") if vid_result else None,
+                            status="completed" if vid_result else "partial",
+                        ))
+                    elif img_result:
+                        results.append(SceneResult(
+                            scene_number=scene_number,
+                            image_url=img_result.get("image_url"),
+                            status="completed",
+                        ))
+                    else:
+                        results.append(SceneResult(scene_number=scene_number, status="failed", error="Image generation failed"))
+
+                yield format_sse_event({"stage": "completed", "progress": 100}, event=EVENT_PROGRESS)
+                yield format_sse_event({"storyboard_id": request.storyboard_id, "total_scenes": total_scenes, "successful_scenes": sum(1 for r in results if r.status == "completed"), "results": [r.dict() for r in results]}, event=EVENT_DONE)
+            except Exception as e:
+                yield format_sse_event({"error": str(e), "code": type(e).__name__}, event=EVENT_ERROR)
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
+
+    # Legacy non-streaming path
     try:
         task_id = str(uuid.uuid4())
 
@@ -792,7 +944,51 @@ async def generate_shots_to_video(
     为每个分镜头批量生成视频。
 
     对每个 shot：构建视频提示词 -> 生成图像 -> 生成视频 -> 存储到 Ceph。
+    设置 stream=true 启用 SSE 流式输出 (progress 事件逐镜头推送)。
     """
+    use_streaming = getattr(request, "stream", False) and settings.SSE_STREAMING_ENABLED
+
+    if use_streaming:
+        total_shots = sum(len(ep.shots) for ep in request.episodes)
+        logger.info(f"[API] POST /shots-to-video (stream) shots={total_shots}")
+
+        async def event_generator():
+            try:
+                yield format_sse_event({"stage": "starting", "total_shots": total_shots, "progress": 0}, event=EVENT_PROGRESS)
+                completed = 0
+                results = []
+                for ep in request.episodes:
+                    for shot in ep.shots:
+                        yield format_sse_event({"stage": "shot_start", "shot_number": shot.number, "completed": completed, "total": total_shots, "progress": int(5 + (completed / total_shots) * 95)}, event=EVENT_PROGRESS)
+                        prompt = _build_shot_video_prompt(shot, request.style or "写实风格", request.referenceImages)
+                        img_result = await seedance_service.generate_image_from_scene(
+                            scene_description=shot.description, style=request.style or "写实风格",
+                            width=request.width or 1920, height=request.height or 1920,
+                        )
+                        video_url = None
+                        if img_result and img_result.get("image_url"):
+                            vid_result = await seedance_service.generate_video_from_image(
+                                image_url=img_result["image_url"], prompt=prompt,
+                                duration=shot.duration or 5,
+                            )
+                            video_url = vid_result.get("video_url") if vid_result else None
+                        completed += 1
+                        results.append(ShotVideoResult(
+                            shot_id=shot.id, shot_number=shot.number,
+                            episode_id=ep.id, episode_title=ep.title,
+                            status="completed" if video_url else "failed",
+                            video_url=video_url,
+                            image_url=img_result.get("image_url") if img_result else None,
+                        ).dict())
+                yield format_sse_event({"stage": "completed", "progress": 100}, event=EVENT_PROGRESS)
+                yield format_sse_event({"results": results, "total_shots": total_shots, "completed_shots": completed}, event=EVENT_DONE)
+            except Exception as e:
+                yield format_sse_event({"error": str(e), "code": type(e).__name__}, event=EVENT_ERROR)
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
+
+    # Legacy non-streaming path
     try:
         task_id = str(uuid.uuid4())
 

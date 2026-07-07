@@ -12,9 +12,7 @@ class ScriptGenerationRequest(BaseModel):
     setting: Optional[str] = Field(default="现代都市", description="故事背景")
     style: Optional[str] = Field(default="浪漫喜剧", description="剧本风格")
     user_id: Optional[str] = Field(default="", description="用户ID")
-
-
-# 剧本生成请求 - 从剧本大纲
+    stream: bool = Field(default=False, description="是否启用SSE流式输出")
 class ScriptFromOutlineRequest(BaseModel):
     """从剧本大纲生成剧本"""
     title: str = Field(..., description="剧本标题")
@@ -25,6 +23,7 @@ class ScriptFromOutlineRequest(BaseModel):
     setting: Optional[str] = Field(default="现代都市", description="故事背景")
     style: Optional[str] = Field(default="浪漫喜剧", description="剧本风格")
     user_id: Optional[str] = Field(default="", description="用户ID")
+    stream: bool = Field(default=False, description="是否启用SSE流式输出")
 
 
 # 剧本生成请求 - 从小说
@@ -40,6 +39,7 @@ class ScriptFromNovelRequest(BaseModel):
     user_id: Optional[str] = Field(default="", description="用户ID")
     excerpt_ratio: Optional[float] = Field(default=0.3, description="抽取比例(0-1)，用于长小说")
     pipeline_version: Optional[str] = Field(default="v2", description="Pipeline版本: 'v1' (ViMax) or 'v2' (RAG-based)")
+    stream: bool = Field(default=False, description="是否启用SSE流式输出")
 
 
 # 剧本创建请求

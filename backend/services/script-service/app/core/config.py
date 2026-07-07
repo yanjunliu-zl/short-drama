@@ -158,6 +158,10 @@ class Settings(BaseSettings):
     N2S_V2_OUTPUT_DIR: str = os.getenv("N2S_V2_OUTPUT_DIR", "/app/data/output")
     N2S_V2_LLM_PROVIDER: str = os.getenv("N2S_V2_LLM_PROVIDER", "deepseek")
 
+    # SSE streaming configuration
+    SSE_STREAMING_ENABLED: bool = os.getenv("SSE_STREAMING_ENABLED", "True").lower() == "true"
+    SSE_HEARTBEAT_INTERVAL: int = int(os.getenv("SSE_HEARTBEAT_INTERVAL", 15))
+
     class Config:
         case_sensitive = True
         env_file = ".env"

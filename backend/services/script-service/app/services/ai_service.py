@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, AsyncGenerator
 import asyncio
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -7,6 +7,7 @@ from langchain_core.callbacks.base import BaseCallbackHandler
 
 from app.core.config import settings
 from app.services.cache_service import get_cache_service
+from app.utils.sse import stream_tokens_from_llm
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ class AIService:
                 "max_tokens": settings.OPENAI_MAX_TOKENS,
                 "timeout": 180.0,
                 "max_retries": 0,
-                "streaming": False,
+                "streaming": True,  # Enable both ainvoke() and astream()
                 "http_client": None,
                 "http_async_client": None,
             }
@@ -563,6 +564,57 @@ class AIService:
         except Exception as e:
             logger.error(f"剧本生成失败: {e}")
             raise
+
+    # ================================================================
+    # Streaming methods (SSE token-by-token output)
+    # ================================================================
+
+    async def _stream_llm_response(self, system_prompt: str, human_prompt: str,
+                                   timeout: int = 180) -> AsyncGenerator[str, None]:
+        """Generic helper: stream LLM response as SSE 'token' events.
+
+        Args:
+            system_prompt: System message content.
+            human_prompt: Human message content.
+            timeout: LLM call timeout in seconds.
+
+        Yields:
+            SSE-formatted 'token' event strings.
+        """
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=human_prompt),
+        ]
+        config = {"timeout": timeout}
+        async for sse_event in stream_tokens_from_llm(self.llm, messages, config=config):
+            yield sse_event
+
+    async def generate_script_stream(self, request: Dict[str, Any]) -> AsyncGenerator[str, None]:
+        """Stream script generation tokens as SSE events."""
+        if not self._initialized:
+            await self.initialize()
+        system_prompt = self._build_system_prompt(request)
+        human_prompt = self._build_human_prompt(request)
+        async for event in self._stream_llm_response(system_prompt, human_prompt):
+            yield event
+
+    async def generate_script_from_outline_stream(self, request: Dict[str, Any]) -> AsyncGenerator[str, None]:
+        """Stream outline-to-script generation tokens as SSE events."""
+        if not self._initialized:
+            await self.initialize()
+        system_prompt = self._build_outline_to_script_system_prompt(request)
+        human_prompt = self._build_outline_to_script_human_prompt(request)
+        async for event in self._stream_llm_response(system_prompt, human_prompt, timeout=600):
+            yield event
+
+    async def novel_to_script_stream(self, request: Dict[str, Any]) -> AsyncGenerator[str, None]:
+        """Stream novel-to-script generation tokens as SSE events."""
+        if not self._initialized:
+            await self.initialize()
+        system_prompt = self._build_novel_to_script_system_prompt(request)
+        human_prompt = self._build_novel_to_script_human_prompt(request)
+        async for event in self._stream_llm_response(system_prompt, human_prompt):
+            yield event
 
     def _build_outline_to_script_system_prompt(self, request: Dict[str, Any]) -> str:
         """构建大纲生成剧本的系统提示（移植自 moyin-creator 的专业格式规范）"""

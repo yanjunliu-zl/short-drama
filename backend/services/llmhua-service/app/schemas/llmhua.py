@@ -23,6 +23,7 @@ class StoryboardToImageRequest(BaseModel):
     width: Optional[int] = Field(default=None, description="图像宽度")
     height: Optional[int] = Field(default=None, description="图像高度")
     user_id: Optional[str] = Field(default=None, description="用户ID")
+    stream: bool = Field(default=False, description="是否启用SSE流式输出")
 
 
 class ImageToVideoRequest(BaseModel):
@@ -34,6 +35,7 @@ class ImageToVideoRequest(BaseModel):
     seed: Optional[int] = Field(default=None, description="随机种子")
     strength: Optional[float] = Field(default=None, description="图像强度")
     user_id: Optional[str] = Field(default=None, description="用户ID")
+    stream: bool = Field(default=False, description="是否启用SSE流式输出")
 
 
 class StoryboardGenerationRequest(BaseModel):
@@ -43,6 +45,7 @@ class StoryboardGenerationRequest(BaseModel):
     style: Optional[str] = Field(default="写实风格", description="整体风格")
     generate_video: Optional[bool] = Field(default=True, description="是否生成视频")
     user_id: Optional[str] = Field(default=None, description="用户ID")
+    stream: bool = Field(default=False, description="是否启用SSE流式输出")
 
 
 # ==================== 响应模型 ====================
@@ -144,7 +147,9 @@ class ShotsToVideoRequest(BaseModel):
     width: Optional[int] = Field(default=1920, description="视频宽度")
     height: Optional[int] = Field(default=1920, description="视频高度")
     fps: Optional[int] = Field(default=24, description="帧率")
+    fps: Optional[int] = Field(default=24, description="帧率")
     user_id: Optional[str] = Field(default=None, description="用户ID")
+    stream: bool = Field(default=False, description="是否启用SSE流式输出")
 
 
 class ShotVideoResult(BaseModel):
@@ -179,6 +184,7 @@ class PreviewImageRequest(BaseModel):
     style: Optional[str] = Field(default="写实风格", description="图像风格")
     width: Optional[int] = Field(default=1920, description="图像宽度")
     height: Optional[int] = Field(default=1920, description="图像高度")
+    stream: bool = Field(default=False, description="是否启用SSE流式输出")
 
 
 class PreviewImageResponse(BaseModel):

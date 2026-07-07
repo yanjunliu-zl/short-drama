@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi.responses import StreamingResponse
 from typing import List, Optional
 import os
 import uuid
@@ -23,6 +24,8 @@ from app.schemas.script import (
 from app.services.script_service import ScriptService
 from app.services.novel2script_service import Novel2ScriptService
 from app.core.deps import get_script_service
+from app.core.config import settings
+from app.utils.sse import format_sse_event, EVENT_ERROR, EVENT_DONE
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +41,32 @@ async def generate_script(
     """
     生成剧本
 
-    使用AI模型生成新的漫剧剧本
+    使用AI模型生成新的漫剧剧本。
+    设置 stream=true 启用 SSE 流式输出。
     """
+    use_streaming = getattr(request, "stream", False) and settings.SSE_STREAMING_ENABLED
+
+    if use_streaming:
+        logger.info(f"[API] POST /generate (stream) title={request.title}")
+
+        async def event_generator():
+            try:
+                async for sse_event in script_service.ai_service.generate_script_stream(
+                    request.dict()
+                ):
+                    yield sse_event
+                yield format_sse_event({"status": "completed"}, event=EVENT_DONE)
+            except Exception as e:
+                logger.error(f"[API] Stream error: {e}")
+                yield format_sse_event({"error": str(e), "code": type(e).__name__}, event=EVENT_ERROR)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
+    # Legacy non-streaming path
     task_id = str(uuid.uuid4())
     logger.info(f"[API] POST /generate task_id={task_id} title={request.title}")
     try:
@@ -207,8 +234,33 @@ async def generate_script_from_novel(
     """
     从小说生成剧本
 
-    使用AI模型将小说内容转换为剧本
+    使用AI模型将小说内容转换为剧本。
+    设置 stream=true 启用 SSE 流式输出。
     """
+    use_streaming = getattr(request, "stream", False) and settings.SSE_STREAMING_ENABLED
+
+    if use_streaming:
+        novel_len = len(getattr(request, 'novel_content', '') or '')
+        logger.info(f"[API] POST /generate/from-novel (stream) title={request.title} novel_len={novel_len}")
+
+        async def event_generator():
+            try:
+                async for sse_event in script_service.ai_service.novel_to_script_stream(
+                    request.dict()
+                ):
+                    yield sse_event
+                yield format_sse_event({"status": "completed"}, event=EVENT_DONE)
+            except Exception as e:
+                logger.error(f"[API] Stream error: {e}")
+                yield format_sse_event({"error": str(e), "code": type(e).__name__}, event=EVENT_ERROR)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
+    # Legacy non-streaming path
     task_id = str(uuid.uuid4())
     novel_len = len(getattr(request, 'novel_content', '') or '')
     logger.info(f"[API] POST /generate/from-novel task_id={task_id} title={request.title} "
@@ -240,8 +292,33 @@ async def generate_script_from_outline(
     """
     从大纲生成剧本
 
-    使用AI模型根据剧本大纲扩展成完整剧本
+    使用AI模型根据剧本大纲扩展成完整剧本。
+    设置 stream=true 启用 SSE 流式输出。
     """
+    use_streaming = getattr(request, "stream", False) and settings.SSE_STREAMING_ENABLED
+
+    if use_streaming:
+        outline_len = len(getattr(request, 'outline', '') or '')
+        logger.info(f"[API] POST /generate/from-outline (stream) title={request.title} outline_len={outline_len}")
+
+        async def event_generator():
+            try:
+                async for sse_event in script_service.ai_service.generate_script_from_outline_stream(
+                    request.dict()
+                ):
+                    yield sse_event
+                yield format_sse_event({"status": "completed"}, event=EVENT_DONE)
+            except Exception as e:
+                logger.error(f"[API] Stream error: {e}")
+                yield format_sse_event({"error": str(e), "code": type(e).__name__}, event=EVENT_ERROR)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+
+    # Legacy non-streaming path
     task_id = str(uuid.uuid4())
     outline_len = len(getattr(request, 'outline', '') or '')
     logger.info(f"[API] POST /generate/from-outline task_id={task_id} title={request.title} "
@@ -420,13 +497,16 @@ async def generate_from_outline_sync(
     request: ScriptFromOutlineRequest,
     script_service: ScriptService = Depends(get_script_service)
 ):
-    """从大纲/想法同步生成剧本 — 使用 V2 管线，统一输出格式"""
+    """从大纲/想法同步生成剧本 — 使用 V2 管线，统一输出格式。
+    设置 stream=true 启用 SSE 流式输出（stage 事件 + done 结果）。"""
     import asyncio as _asyncio
     from app.services.novel2script_v2_service import Novel2ScriptV2Service
     from app.core.config import settings as app_settings
 
     outline_len = len(getattr(request, 'outline', '') or '')
-    logger.info(f"[API] POST /generate/from-outline-sync title={request.title} outline_len={outline_len}")
+    use_streaming = getattr(request, "stream", False) and settings.SSE_STREAMING_ENABLED
+    logger.info(f"[API] POST /generate/from-outline-sync title={request.title} "
+                f"outline_len={outline_len} stream={use_streaming}")
     t0 = time.time()
     try:
         if not request.outline or not request.outline.strip():
@@ -446,9 +526,7 @@ async def generate_from_outline_sync(
             config=app_settings,
         )
 
-        length_to_eps = {"短篇": 5, "中篇": 8, "长篇": 12}
-
-        # Try to parse explicit episode count from user's request text
+        # Parse episode count for both paths
         import re as _re
         cn_num_map = {c: i for i, c in enumerate(
             ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
@@ -458,7 +536,6 @@ async def generate_from_outline_sync(
              '四十一', '四十二', '四十三', '四十四', '四十五', '四十六', '四十七', '四十八', '四十九', '五十'], start=0)}
         def _parse_ep_count(text: str) -> int:
             if not text: return 0
-            # Match "二十集", "20集", "20 集" etc
             for m in _re.finditer(r'([一二三四五六七八九十百千\d]+)\s*集', text):
                 num_str = m.group(1)
                 if num_str.isdigit(): return int(num_str)
@@ -468,8 +545,22 @@ async def generate_from_outline_sync(
 
         user_ep_count = _parse_ep_count(request.outline) or _parse_ep_count(request.title)
         target_eps = user_ep_count if user_ep_count > 0 else length_to_eps.get(getattr(request, 'length', '短篇'), 5)
-        target_eps = min(target_eps, 50)  # cap at 50
+        target_eps = min(target_eps, 50)
 
+        # ---- SSE streaming path ----
+        if use_streaming:
+            async def event_generator():
+                async for sse_event in n2s_v2.run_full_pipeline_sse(
+                    novel_text=request.outline, style=style, target_episodes=target_eps,
+                ):
+                    yield sse_event
+            return StreamingResponse(
+                event_generator(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+            )
+
+        # ---- Non-streaming path (existing code) ----
         result = await _asyncio.wait_for(
             n2s_v2.run_full_pipeline(novel_text=request.outline, style=style,
                                       target_episodes=target_eps),

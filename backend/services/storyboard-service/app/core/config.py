@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     LANGCHAIN_API_KEY: Optional[str] = os.getenv("LANGCHAIN_API_KEY", None)
     LANGCHAIN_PROJECT: Optional[str] = os.getenv("LANGCHAIN_PROJECT", None)
 
+    # SSE streaming configuration
+    SSE_STREAMING_ENABLED: bool = os.getenv("SSE_STREAMING_ENABLED", "True").lower() == "true"
+    SSE_HEARTBEAT_INTERVAL: int = int(os.getenv("SSE_HEARTBEAT_INTERVAL", 15))
+
     # 日志配置
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

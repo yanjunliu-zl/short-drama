@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, AsyncGenerator
 import asyncio
 
 from langchain_openai import ChatOpenAI
@@ -7,6 +7,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.callbacks.base import BaseCallbackHandler
 
 from app.core.config import settings
+from app.utils.sse import stream_tokens_from_llm
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class LLMService:
                 "temperature": settings.DEEPSEEK_TEMPERATURE,
                 "max_tokens": settings.DEEPSEEK_MAX_TOKENS,
                 "timeout": 60,
-                "streaming": False,
+                "streaming": True,  # Enable both ainvoke() and astream()
             }
 
             # 使用DeepSeek
@@ -311,6 +312,66 @@ class LLMService:
         except Exception as e:
             logger.error(f"全面抽取失败: {e}")
             raise
+
+    # ================================================================
+    # Streaming methods (SSE token-by-token output)
+    # ================================================================
+
+    async def extract_all_stream(self, script_content: str) -> AsyncGenerator[str, None]:
+        """Stream full entity extraction as SSE 'token' events.
+
+        LLM returns JSON; tokens are streamed so the client can parse
+        incrementally. A 'done' event with the complete parsed result
+        is sent at the end.
+        """
+        if not self._initialized:
+            await self.initialize()
+        prompt = f"""请从以下剧本内容中识别所有场景、角色和道具信息，以JSON格式返回：
+
+剧本内容：
+{script_content[:8000]}
+
+请返回JSON格式：
+{{
+  "scenes": [
+    {{"scene_id": 1, "location": "地点名", "time_of_day": "白天/黑夜", "description": "场景描述", "characters": ["角色"], "props": ["道具"], "action_summary": "动作概述"}}
+  ],
+  "characters": [
+    {{"character_id": 1, "name": "角色名", "description": "外貌描述", "age": 25, "personality": "性格", "clothing": "服装", "role": "主角/配角/反派"}}
+  ],
+  "props": [
+    {{"prop_id": 1, "name": "道具名", "description": "道具描述", "category": "类别", "usage": "用途说明", "scenes": [1, 2]}}
+  ]
+}}
+
+重要：请只返回JSON对象，不要添加任何解释。"""
+        messages = [
+            SystemMessage(content="你是一个专业的剧本分析师，擅长从剧本中抽取场景、角色和道具信息。请以JSON格式返回结果。"),
+            HumanMessage(content=prompt),
+        ]
+        accumulated = []
+        async for sse_event in stream_tokens_from_llm(self.llm, messages):
+            yield sse_event
+
+    async def extract_scenes_stream(self, script_content: str) -> AsyncGenerator[str, None]:
+        """Stream scene extraction as SSE 'token' events."""
+        if not self._initialized:
+            await self.initialize()
+        prompt = f"""请从以下剧本内容中识别所有场景，以JSON格式返回：
+
+剧本内容：
+{script_content[:8000]}
+
+请返回JSON格式：
+{{"scenes": [{{"scene_id": 1, "location": "地点名", "time_of_day": "白天/黑夜", "description": "场景描述", "characters": ["角色"], "props": ["道具"], "action_summary": "动作概述"}}]}}
+
+只返回JSON，不要其他内容。"""
+        messages = [
+            SystemMessage(content="你是一个专业的剧本分场师，擅长从剧本中识别场景信息。请以JSON格式返回结果。"),
+            HumanMessage(content=prompt),
+        ]
+        async for sse_event in stream_tokens_from_llm(self.llm, messages):
+            yield sse_event
 
     def _parse_extraction_result(self, result_text: str) -> Dict[str, Any]:
         """解析抽取结果"""

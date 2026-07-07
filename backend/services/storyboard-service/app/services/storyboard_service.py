@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, AsyncGenerator
 import re
 import json
 import asyncio
@@ -11,6 +11,7 @@ from langchain_core.callbacks.base import BaseCallbackHandler
 from app.core.config import settings
 from app.services.cache_service import get_storyboard_cache_service
 from app.services.usage_tracker import track_llm_usage
+from app.utils.sse import stream_tokens_from_llm, format_sse_event, EVENT_STAGE, EVENT_DONE
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ class StoryboardAIService:
                 "temperature": settings.STORYBOARD_TEMPERATURE,
                 "max_tokens": settings.STORYBOARD_MAX_TOKENS,
                 "timeout": settings.STORYBOARD_TIMEOUT,
-                "streaming": False,
+                "streaming": True,  # Enable both ainvoke() and astream()
                 "openai_api_key": settings.DEEPSEEK_API_KEY,
                 "openai_api_base": settings.DEEPSEEK_API_BASE,
             }
@@ -254,6 +255,71 @@ class StoryboardAIService:
             elapsed = time.time() - t0
             logger.error(f"镜头分镜生成失败 (耗时={elapsed:.1f}s): {e}")
             raise
+
+    # ================================================================
+    # Streaming methods (SSE token-by-token / stage-by-stage output)
+    # ================================================================
+
+    async def generate_storyboard_stream(self, request: Dict[str, Any]) -> AsyncGenerator[str, None]:
+        """Stream storyboard generation as SSE 'token' events."""
+        if not self._initialized:
+            await self.initialize()
+        system_prompt = self._build_system_prompt(request)
+        human_prompt = self._build_human_prompt(request)
+        messages = [SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)]
+        async for sse_event in stream_tokens_from_llm(self.llm, messages):
+            yield sse_event
+
+    async def generate_shots_stream(self, request: Dict[str, Any]) -> AsyncGenerator[str, None]:
+        """Stream shot-level storyboard generation with per-episode 'stage' events.
+
+        Each episode emits a 'stage' event on start and completion.
+        Final result emitted as a 'done' event.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        title = request.get('title', '未命名剧本')
+        episode_texts = request.get('episodeContents', [])
+        if not episode_texts:
+            episode_texts = self._split_script_to_episodes(request.get('script', ''))
+
+        max_chars = settings.STORYBOARD_MAX_SCRIPT_CHARS
+        all_episodes = []
+        global_shot_id = 0
+
+        for ep_idx, ep_text in enumerate(episode_texts):
+            ep_num = ep_idx + 1
+            yield format_sse_event(
+                {"episode": ep_num, "total": len(episode_texts), "stage": "generating_shots"},
+                event=EVENT_STAGE,
+            )
+
+            ep_request = {**request, 'script': ep_text, 'episodeCount': 1, 'maxScriptChars': max_chars}
+            try:
+                response = await self.llm.ainvoke([
+                    SystemMessage(content=self._build_shot_system_prompt(ep_request)),
+                    HumanMessage(content=self._build_shot_human_prompt(ep_request))
+                ])
+                shot_data = self._parse_single_episode_shots(response.content, ep_num, global_shot_id, request)
+            except Exception as e:
+                logger.warning(f"第{ep_num}集AI生成失败: {e}，使用程序化分镜")
+                shot_data = self._programmatic_shots(ep_text, ep_num, global_shot_id)
+
+            if shot_data.get("episodes"):
+                ep = shot_data["episodes"][0]
+                global_shot_id += len(ep.get("shots", []))
+                all_episodes.append(ep)
+
+            yield format_sse_event(
+                {"episode": ep_num, "shots": len(ep.get("shots", [])), "stage": "episode_done"},
+                event=EVENT_STAGE,
+            )
+
+        yield format_sse_event(
+            {"status": "completed", "episodes": all_episodes},
+            event=EVENT_DONE,
+        )
 
     def _split_script_to_episodes(self, script: str) -> list:
         """按第N集标记拆分剧本（仅精确匹配集标题）"""
