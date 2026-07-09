@@ -1,155 +1,147 @@
-# 短剧平台 (Short Drama Platform)
+# Short Drama Platform
 
-AI 驱动的短剧全流程创作平台，支持从创意到成片的端到端自动化生产。
+AI-powered short drama creation platform — end-to-end automated production from idea to final cut.
 
-## 快速开始
+## Quick Start
 
-### 1. 配置
+### 1. Configuration
 
 ```bash
 cp .env.example .env
 ```
 
-编辑 `.env`，填入 API Key：
+Edit `.env` with your API keys:
 
 ```env
-DEEPSEEK_API_KEY=sk-xxx          # 剧本生成/分镜 (platform.deepseek.com)
-SEEDANCE_API_KEY=ark-xxx         # 图像/视频生成 (console.volcengine.com/ark)
+DEEPSEEK_API_KEY=sk-xxx          # Script generation / Storyboard (platform.deepseek.com)
+SEEDANCE_API_KEY=ark-xxx         # Image / Video generation (console.volcengine.com/ark)
 ```
 
-### 2. 启动后端
+### 2. Start Backend
 
 ```bash
 docker compose up -d
 ```
 
-首次启动会自动拉取镜像并初始化数据库。等待所有服务变为 `healthy`：
+Wait for all services to become `healthy`:
 
 ```bash
 docker compose ps
 ```
 
-### 3. 启动前端
+### 3. Start Frontend
 
 ```bash
 cd frontend && npm install && npm run dev
 ```
 
-打开 http://localhost:3000，前端通过 Traefik 网关 (:80) 代理到后端。
+Open http://localhost:3000. The Vite dev server proxies `/api` to the Traefik gateway (`:80`).
 
-### 4. 初始化数据
+### 4. Initialize Database
 
 ```bash
 docker exec -i shortdrama-mysql mysql -uadmin -padmin123 shortdrama < backend/config/mysql/init.sql
 ```
 
-## AI 创作流程
+## AI Creation Pipeline
 
-平台提供完整的 AI 创作管线，从前端页面顺序操作即可：
+The platform provides a complete AI creation pipeline, accessible from the frontend pages in order:
 
 ```
-案例广场 → 剧本生成 → 场景提取 → 分镜脚本 → 分镜视频 → 成片
+Case Square → Script Generation → Scene Extraction → Storyboard → Video → Final Cut
 ```
 
-**剧本生成** — 支持三种方式：
-- 从大纲生成：输入简短创意，AI 扩展为完整剧本（含角色设定 + 分集大纲 + 分镜表）
-- 从小说改编：上传小说文本，自动识别章节并逐章生成剧本
-- 自由创作：填写标题/主题/风格，AI 自主创作
+**Script Generation** — three modes:
+- From Outline: Input a brief idea, AI expands into a full script (characters, episode outlines, storyboard)
+- From Novel: Upload novel text, AI detects chapters and adapts each one
+- Free Creation: Fill in title/theme/style, AI creates from scratch
 
-**流式输出**：所有生成 API 支持 `stream=true` 参数启用 SSE 实时输出。
+**Streaming**: All generation APIs support `stream=true` for real-time SSE output.
 
-## API 概览
+## API Overview
 
-### 剧本生成
+### Script Generation
 ```bash
-# 从大纲同步生成 (V2 pipeline)
+# Sync generation from outline (V2 pipeline)
 curl -X POST http://localhost/api/v1/scripts/generate/from-outline-sync \
   -H "Content-Type: application/json" \
-  -d '{"title":"重生之都市修仙","outline":"修真者重生到现代都市","theme":"奇幻","length":"短篇","style":"古装风格"}'
+  -d '{"title":"Rebirth in the City","outline":"A cultivator reborn in modern city","theme":"Fantasy","length":"Short","style":"Ancient"}'
 
-# 小说转剧本
+# Novel to script
 curl -X POST http://localhost/api/v1/scripts/generate/from-novel \
   -H "Content-Type: application/json" \
-  -d '{"title":"改编剧本","novel_content":"...","theme":"爱情","length":"长篇"}'
+  -d '{"title":"Adaptation","novel_content":"...","theme":"Romance","length":"Long"}'
 
-# 流式生成 (SSE)
+# Stream (SSE)
 curl -X POST http://localhost/api/v1/scripts/generate/from-outline-sync \
-  -d '{"stream":true, "title":"...","outline":"...","theme":"...","length":"短篇"}'
+  -d '{"stream":true, "title":"...","outline":"...","theme":"...","length":"Short"}'
 ```
 
-### 分镜生成
+### Storyboard
 ```bash
-# 镜头级分镜
 curl -X POST http://localhost/api/v1/storyboard/shots/generate \
   -H "Content-Type: application/json" \
-  -d '{"title":"测试","script":"...","episodeCount":1,"style":"写实风格"}'
+  -d '{"title":"Test","script":"...","episodeCount":1,"style":"Realistic"}'
 ```
 
-### 图像/视频生成
+### Image / Video
 ```bash
-# 场景图像
+# Scene image
 curl -X POST http://localhost/api/v1/llmhua/images/generate \
-  -d '{"scene_description":"古代宫殿金碧辉煌","storyboard_id":"sb-1","scene_number":1,"style":"古装风格"}'
+  -d '{"scene_description":"Ancient palace interior","storyboard_id":"sb-1","scene_number":1,"style":"Ancient"}'
 
-# 图像转视频
+# Image to video
 curl -X POST http://localhost/api/v1/llmhua/videos/generate \
-  -d '{"image_url":"http://...","prompt":"镜头缓慢推进","duration":5.0}'
+  -d '{"image_url":"http://...","prompt":"Slow camera push-in","duration":5.0}'
 
-# 批量镜头转视频
+# Batch shots to video
 curl -X POST http://localhost/api/v1/llmhua/shots-to-video \
-  -d '{"episodes":[...],"style":"写实风格"}'
+  -d '{"episodes":[...],"style":"Realistic"}'
 ```
 
-### 其他
+### Other
 ```bash
-# 案例广场
 GET  /api/v1/cases?page=1&pageSize=10&sortBy=views
-
-# 个性化推荐
 GET  /api/v1/recommendations/recommend?user_id=1&limit=6
-
-# 场景提取
 POST /api/v1/scenes/ -d '{"script_content":"...","extract_type":"all"}'
-
-# 评论区
 GET  /api/v1/comments/:case_id
 POST /api/v1/comments/:case_id
 ```
 
-## 架构概览
+## Architecture
 
 ```
-Frontend (:3000) → Traefik (:80) → 微服务集群
-                                    ├── user-service      (Go, 认证)
-                                    ├── content-service   (Go, 案例/作品/搜索)
-                                    ├── script-service    (Python, AI剧本)
-                                    ├── storyboard-service(Python, AI分镜)
-                                    ├── llmhua-service    (Python, AI图像/视频)
-                                    ├── video-service     (Python, 视频处理)
-                                    ├── final-cut-service (Go, 成片)
-                                    └── recommendation    (Python, 推荐)
+Frontend (:3000) → Traefik (:80) → Microservices
+                                    ├── user-service      (Go, Auth)
+                                    ├── content-service   (Go, Cases/Works/Search)
+                                    ├── script-service    (Python, AI Script)
+                                    ├── storyboard-service(Python, AI Storyboard)
+                                    ├── llmhua-service    (Python, AI Image/Video)
+                                    ├── video-service     (Python, Video Processing)
+                                    ├── final-cut-service (Go, Final Cut)
+                                    └── recommendation    (Python, Recommendations)
 
-基础设施: MySQL 8.0 + Redis 7 + RabbitMQ + MinIO + Kafka + Elasticsearch
-监控追踪: Prometheus + Grafana + Jaeger + OpenTelemetry
+Infrastructure: MySQL 8.0 + Redis 7 + RabbitMQ + MinIO + Kafka + Elasticsearch
+Observability: Prometheus + Grafana + Jaeger + OpenTelemetry
 ```
 
-## 部署
+## Deployment
 
-### 单机
+### Single Machine
 ```bash
 docker compose up -d
-docker compose up -d --scale script-service=3   # 水平扩展
+docker compose up -d --scale script-service=3
 ```
 
-### 多机
+### Multi-Machine
 ```bash
-# 机器 A (数据库)
+# Machine A (Databases)
 docker compose up -d mysql redis rabbitmq
 
-# 机器 B (AI 服务，.env 指向机器 A)
+# Machine B (AI Services, .env pointing to A)
 docker compose up -d script-service storyboard-service llmhua-service
 
-# 机器 C (网关)
+# Machine C (Gateway)
 docker compose up -d traefik
 ```
 
@@ -158,52 +150,52 @@ docker compose up -d traefik
 kubectl apply -k k8s/overlays/us-east-1
 ```
 
-支持 3 区域部署 (us-east-1 / ap-southeast-1 / eu-west-1)，HPA 自动扩缩 (max 20 pods)，GPU 池化调度 (Volcano)。
+Supports 3-region deployment (us-east-1 / ap-southeast-1 / eu-west-1), HPA autoscaling (max 20 pods), GPU scheduling (Volcano).
 
-## 开发
+## Development
 
 ```bash
-# 前端
-cd frontend && npm run dev          # Vite 热更新, :3000
+# Frontend
+cd frontend && npm run dev              # Vite HMR, :3000
 
-# Python 服务
+# Python service
 cd backend/services/script-service
 pip install -r requirements.txt
 uvicorn main:app --port 8000 --reload
 
-# Go 服务 (交叉编译)
+# Go service (cross-compile for Docker)
 cd backend/services/user-service
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o user-service ./cmd
 docker compose up -d user-service
 
-# 测试
-go test ./...          # Go
-pytest                 # Python
-curl localhost/api/v1/cases | python -m json.tool   # 集成测试
+# Testing
+go test ./...              # Go
+pytest                     # Python
+curl localhost/api/v1/cases | python -m json.tool
 ```
 
-## 访问入口
+## Access Points
 
-| 入口 | 地址 | 凭据 |
-|------|------|------|
-| 前端 | http://localhost:3000 | — |
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Frontend | http://localhost:3000 | — |
 | Traefik | http://localhost:8080 | — |
 | Grafana | http://localhost:3001 | admin/admin |
 | RabbitMQ | http://localhost:15672 | admin/admin123 |
 | MinIO | http://localhost:9001 | minioadmin/minioadmin |
 | Jaeger | http://localhost:16686 | — |
 
-## 运维
+## Operations
 
 ```bash
-docker compose ps                        # 状态
-docker compose logs -f script-service    # 日志
-docker compose restart script-service    # 重启
-docker compose build script-service && docker compose up -d script-service  # 更新
-docker compose down                      # 停止
-docker compose down -v                   # 停止+清数据
+docker compose ps                        # Status
+docker compose logs -f script-service    # Logs
+docker compose restart script-service    # Restart
+docker compose build script-service && docker compose up -d script-service
+docker compose down                      # Stop
+docker compose down -v                   # Stop + clear data
 ```
 
-## 许可证
+## License
 
 MIT
