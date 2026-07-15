@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from typing import List, Optional
 import os
 import uuid
 import time
 import logging
+import re as _re_module
 
 from sqlalchemy import select
 
@@ -440,6 +441,77 @@ async def extract_entities(
     except Exception as e:
         logger.error(f"[API] POST /extract-entities 异常 script_id={script_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/upload", response_model=ScriptSplitResponse)
+async def upload_script_file(
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    script_service: ScriptService = Depends(get_script_service),
+):
+    """上传剧本文件 — 服务端解析 + 自动分集。
+
+    支持 .txt / .md / .docx 文件。
+    解析后按「第N集」标记自动拆分为结构化分集列表，持久化到数据库。
+    """
+    logger.info(f"[API] POST /upload title={title} filename={file.filename} "
+                f"size={file.size} content_type={file.content_type}")
+    t0 = time.time()
+
+    # 限制文件大小 (10MB)
+    max_size = 10 * 1024 * 1024
+    if file.size and file.size > max_size:
+        raise HTTPException(status_code=400, detail=f"文件过大，最大支持 10MB")
+
+    # 解析文件内容
+    content = ""
+    filename = file.filename or ""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    try:
+        raw_bytes = await file.read()
+
+        if ext in ("txt", "md", ""):
+            content = raw_bytes.decode("utf-8", errors="replace")
+        elif ext == "docx":
+            try:
+                from io import BytesIO
+                from docx import Document
+                doc = Document(BytesIO(raw_bytes))
+                paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                content = "\n\n".join(paragraphs)
+            except ImportError:
+                raise HTTPException(status_code=400, detail="服务端不支持 .docx 解析，请使用 .txt 格式")
+        else:
+            raise HTTPException(status_code=400, detail=f"不支持的文件格式: .{ext}，支持 .txt / .md / .docx")
+    except UnicodeDecodeError:
+        # Try other encodings
+        try:
+            content = raw_bytes.decode("gbk", errors="replace")
+        except Exception:
+            raise HTTPException(status_code=400, detail="文件编码无法识别，请使用 UTF-8 编码")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"文件解析失败: {e}")
+        raise HTTPException(status_code=400, detail=f"文件解析失败: {str(e)}")
+
+    if not content or not content.strip():
+        raise HTTPException(status_code=400, detail="文件内容为空")
+
+    # 构造 split 请求并复用分集逻辑
+    split_request = ScriptSplitRequest(
+        title=title,
+        content=content,
+        user_id="",  # 文件上传不绑定用户
+    )
+    result = await script_service.upload_and_split_script(split_request)
+
+    elapsed = time.time() - t0
+    logger.info(f"[API] POST /upload 完成 title={title} "
+                f"episodes={result.get('total_episodes')} filename={filename} "
+                f"size={len(content)} chars elapsed={elapsed:.1f}s")
+    return result
 
 
 @router.post("/split", response_model=ScriptSplitResponse)

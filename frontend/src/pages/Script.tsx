@@ -934,7 +934,7 @@ const Script: React.FC = () => {
               inputTab === 'novel'
                 ? '在此粘贴您的小说内容，或使用下方的文件上传功能...'
                 : inputTab === 'script'
-                ? '在此粘贴您的剧本内容...'
+                ? '在此粘贴剧本内容，或直接拖拽文件到下方上传区（上传后自动分集）...'
                 : '在此描述您的创意想法或剧本大纲...'
             }
             rows={12}
@@ -949,15 +949,52 @@ const Script: React.FC = () => {
             <Dragger
               accept={inputTab === 'novel' ? '.txt,.md,.doc,.docx,.pdf' : '.txt,.md,.doc,.docx'}
               multiple={false}
-              beforeUpload={handleFileUpload}
               maxCount={1}
+              {...(inputTab === 'script'
+                ? {
+                    // 剧本模式: 直接上传到后端, 自动分集
+                    customRequest: async (options: any) => {
+                      const { file, onSuccess, onError } = options
+                      try {
+                        const result = await scriptService.uploadScriptFile(file as File, formTitle || '未命名剧本')
+                        const parsedEpisodes: Episode[] = result.episodes.map((ep: any) => ({
+                          id: `ep-${ep.episode_number}-${Date.now().toString(36)}`,
+                          title: ep.title,
+                          number: ep.episode_number,
+                          scenes: [],
+                          characters: [],
+                          description: ep.content || '',
+                        }))
+                        setScriptId(result.script_id)
+                        setEpisodes(parsedEpisodes)
+                        setGeneratedScriptTitle(result.title)
+                        setGenerationStatus('completed')
+                        setGenerationProgress(100)
+                        setFormContent('')  // 清空 TextArea
+                        message.success(`剧本上传成功，已拆分为 ${result.total_episodes} 集`)
+                        onSuccess(result, file)
+                      } catch (err: any) {
+                        const msg = err?.response?.data?.detail || err?.message || '上传失败'
+                        message.error(msg)
+                        onError(err)
+                      }
+                    },
+                    showUploadList: false,
+                  }
+                : {
+                    // 小说/想法模式: 客户端读取, 填入 TextArea
+                    beforeUpload: handleFileUpload,
+                  }
+              )}
             >
               <p className="ant-upload-drag-icon">
                 <InboxOutlined />
               </p>
               <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
               <p className="ant-upload-hint">
-                {inputTab === 'novel' ? '支持 .txt, .md, .doc, .docx, .pdf 文件' : '支持 .txt, .md, .doc, .docx 文件'}
+                {inputTab === 'script'
+                  ? '支持 .txt, .md, .docx 文件，上传后自动分集'
+                  : `支持 ${inputTab === 'novel' ? '.txt, .md, .doc, .docx, .pdf' : '.txt, .md, .doc, .docx'} 文件`}
               </p>
             </Dragger>
           </Form.Item>
@@ -1012,16 +1049,21 @@ const Script: React.FC = () => {
 
         <div style={{ textAlign: 'center', marginTop: 32 }}>
           {inputTab === 'script' ? (
-            <Button
-              type="primary"
-              size="large"
-              icon={<FileTextOutlined />}
-              onClick={handleUploadAndSplit}
-              loading={generationStatus === 'generating'}
-              style={{ minWidth: 200, height: 48, fontSize: 16 }}
-            >
-              {generationStatus === 'generating' ? '处理中...' : '上传并分集'}
-            </Button>
+            <Space direction="vertical" size="middle">
+              <Text type="secondary">方式一：点击下方按钮将已粘贴的剧本内容分集</Text>
+              <Button
+                type="primary"
+                size="large"
+                icon={<FileTextOutlined />}
+                onClick={handleUploadAndSplit}
+                loading={generationStatus === 'generating'}
+                disabled={!formContent.trim()}
+                style={{ minWidth: 200, height: 48, fontSize: 16 }}
+              >
+                {generationStatus === 'generating' ? '处理中...' : '上传并分集'}
+              </Button>
+              <Text type="secondary">方式二：直接拖拽文件到上方上传区，自动上传并分集</Text>
+            </Space>
           ) : (
             <Button
               type="primary"

@@ -133,12 +133,28 @@ export const scriptService = {
     return response.data
   },
 
-  /** 上传完整剧本并自动分集 */
+  /** 上传完整剧本并自动分集 (JSON) */
   uploadAndSplitScript: async (data: {
     title: string
     content: string
   }): Promise<import('@/types').ScriptSplitResponse> => {
     const response = await api.post<import('@/types').ScriptSplitResponse>('/v1/scripts/split', data)
+    return response.data
+  },
+
+  /** 上传剧本文件 — 服务端解析 + 自动分集 (multipart/form-data) */
+  uploadScriptFile: async (
+    file: File,
+    title: string,
+  ): Promise<import('@/types').ScriptSplitResponse> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('title', title)
+    const response = await api.post<import('@/types').ScriptSplitResponse>(
+      '/v1/scripts/upload',
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    )
     return response.data
   },
 
