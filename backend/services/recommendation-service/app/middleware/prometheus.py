@@ -11,10 +11,10 @@ logger = logging.getLogger(__name__)
 registry = CollectorRegistry()
 
 # HTTP 指标
-REQUEST_COUNT = Counter("http_requests_total", "Total HTTP requests", ["method", "endpoint", "status_code", "service"], registry=registry)
-REQUEST_DURATION = Histogram("http_request_duration_seconds", "Request duration", ["method", "endpoint", "service"], buckets=[0.1, 0.5, 1, 2, 5, 10, float("inf")], registry=registry)
+REQUEST_COUNT = Counter("http_requests_total", "Total HTTP requests", ["method", "endpoint", "status_code"], registry=registry)
+REQUEST_DURATION = Histogram("http_request_duration_seconds", "Request duration", ["method", "endpoint"], buckets=[0.1, 0.5, 1, 2, 5, 10, float("inf")], registry=registry)
 INPROGRESS_REQUESTS = Gauge("http_requests_inprogress", "Requests in progress", ["method", "endpoint"], registry=registry)
-EXCEPTIONS = Counter("http_exceptions_total", "Total exceptions", ["exception_type", "endpoint", "service"], registry=registry)
+EXCEPTIONS = Counter("http_exceptions_total", "Total exceptions", ["exception_type", "endpoint"], registry=registry)
 
 # 推荐业务指标
 RECOMMENDATION_COUNT = Counter("recommendation_total", "Recommendation requests", ["reason", "status"], registry=registry)
@@ -47,7 +47,7 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
-def setup_metrics(app: FastAPI, app_name: str = "storyboard-service"):
+def setup_metrics(app: FastAPI, app_name: str = "recommendation-service"):
     """注册 /metrics 端点和中间件"""
     app.add_middleware(PrometheusMiddleware, app_name=app_name)
 
