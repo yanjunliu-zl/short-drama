@@ -69,6 +69,10 @@ class Novel2ScriptV2Service:
         self._bm25 = None
         self._bm25_chunks = []
 
+        # LlamaIndex hierarchical RAG (optional, falls back to existing)
+        self._llama_rag = None
+        self._use_llama = False
+
     # ================================================================
     # FAISS disk cache helpers
     # ================================================================
@@ -227,11 +231,33 @@ class Novel2ScriptV2Service:
     # Stage 1: Build industrial-standard knowledge base (FAISS + BM25 + Metadata)
     # ================================================================
 
-    def _build_knowledge_base(self, novel_text: str, global_info: dict = None):
-        """Build FAISS dense index + BM25 sparse index with metadata-tagged chunks.
+    async def _build_knowledge_base(self, novel_text: str, global_info: dict = None,
+                              progress_callback=None):
+        """Build knowledge base — LlamaIndex (preferred) or FAISS+BM25 (fallback).
 
-        Returns (faiss_index, chunk_dicts) where chunk_dicts have {text, metadata}.
+        Returns (index, chunk_dicts_or_nodes).
         """
+        # Try LlamaIndex first
+        try:
+            from app.services.llama_rag_service import HierarchicalRAG
+            self._llama_rag = HierarchicalRAG(
+                embedding_model=getattr(self.config, 'N2S_V2_EMBEDDING_MODEL', 'BAAI/bge-large-zh-v1.5') if self.config else 'BAAI/bge-large-zh-v1.5',
+                cache_dir=self._cache_dir,
+            )
+            llama_result = await self._llama_rag.build_index(
+                novel_text, global_info=global_info, progress_callback=progress_callback,
+            )
+            self._use_llama = True
+            logger.info(f"LlamaIndex KB built: L1={llama_result['l1_chapter_summaries']} "
+                       f"L2={llama_result['l2_scene_nodes']} chapters={llama_result['chapters']}")
+            # Return placeholder — _rag_search will use LlamaIndex directly
+            return None, [{"text": "", "metadata": {}}]  # stub
+        except ImportError:
+            logger.info("LlamaIndex not installed — using FAISS+BM25 fallback")
+        except Exception as e:
+            logger.warning(f"LlamaIndex build failed ({e}) — falling back to FAISS+BM25")
+
+        # Fallback: existing FAISS + BM25 implementation
         text_hash = self._text_hash(novel_text)
 
         # Try disk cache first
@@ -563,16 +589,27 @@ class Novel2ScriptV2Service:
     # #2 + #3: Hybrid search (BM25 + Dense + RRF + Metadata filter)
     # ================================================================
 
-    def _rag_search(self, vector_store, query: str, k: int = None,
+    async def _rag_search(self, vector_store, query: str, k: int = None,
                     filter_characters: list = None, filter_chapter: int = None) -> str:
-        """Hybrid search: BM25 sparse + FAISS dense, RRF fusion, metadata filter.
-
-        #2: BM25 for exact name/location matching
-        #3: Metadata filter for cross-chapter isolation (optional)
-        RRF fusion for ranking (k=60).
+        """Hybrid search — LlamaIndex (preferred) or BM25+Dense+RRF (fallback).
 
         Returns formatted context string with source annotations.
         """
+        # Try LlamaIndex hierarchical RAG first
+        if self._use_llama and self._llama_rag:
+            try:
+                result = await self._llama_rag.retrieve(
+                    query=query,
+                    filter_chapter=filter_chapter,
+                    filter_characters=filter_characters,
+                    top_k=k or self.top_k,
+                )
+                if result and len(result) > 100:
+                    return result
+            except Exception as e:
+                logger.warning(f"LlamaIndex retrieve failed ({e}) — falling back")
+
+        # Fallback: existing BM25+Dense+RRF
         if k is None:
             k = self.top_k
 
@@ -697,7 +734,7 @@ class Novel2ScriptV2Service:
         )
 
         # #2: Hybrid search (BM25 + Dense + RRF) with character filter
-        rag_context = self._rag_search(
+        rag_context = await self._rag_search(
             vector_store,
             query=rewritten_query,
             filter_characters=characters_list if characters_list else None,
@@ -1072,11 +1109,11 @@ class Novel2ScriptV2Service:
         t_total = time.time()
 
         # --- Stage 1: Build knowledge base ---
-        logger.info("=== V2 Stage 1/5: Building FAISS knowledge base ===")
+        logger.info("=== V2 Stage 1/5: Building knowledge base ===")
         if progress_callback:
             await progress_callback(10, "构建知识库")
-        vector_store, chunks = await asyncio.to_thread(
-            self._build_knowledge_base, novel_text
+        vector_store, chunks = await self._build_knowledge_base(
+            novel_text, global_info=None, progress_callback=progress_callback,
         )
         result["stages"]["knowledge_base"] = {"chunks": len(chunks)}
 

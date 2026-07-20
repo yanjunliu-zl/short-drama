@@ -31,6 +31,10 @@ sentence-transformers>=2.2.0
 faiss-cpu>=1.7.4
 langchain-community>=0.3.0
 langchain-huggingface>=0.1.0
+# Industrial RAG — LlamaIndex
+llama-index-core>=0.12.0
+llama-index-embeddings-huggingface>=0.3.0
+llama-index-vector-stores-faiss>=0.2.0
 langgraph==1.0.9
 aiohttp
 openai
