@@ -154,6 +154,18 @@ class RankingService:
         if not HAS_TORCH:
             logger.info("PyTorch 不可用 — 使用降级 CTR 加权公式")
             return
+
+        # Auto-detect trained model in default dir
+        default_dir = "/app/data/models"
+        if not model_path:
+            candidate = os.path.join(default_dir, "wide_and_deep.pt")
+            if os.path.exists(candidate):
+                model_path = candidate
+        if not preprocessor_path:
+            candidate = os.path.join(default_dir, "preprocessor.pkl")
+            if os.path.exists(candidate):
+                preprocessor_path = candidate
+
         self.model = WideAndDeep(
             num_continuous=NUM_CONTINUOUS,
             categorical_vocabs={k: v for k, v in FEATURE_CONFIG["categorical"].items()},
@@ -161,10 +173,15 @@ class RankingService:
         )
         if model_path and os.path.exists(model_path):
             self.model.load(model_path)
+            logger.info(f"模型已加载: {model_path}")
         else:
             self.model.eval()
+            logger.info("使用随机初始化模型 (待训练)")
         if preprocessor_path and os.path.exists(preprocessor_path):
             self.preprocessor.load(preprocessor_path)
+            logger.info(f"预处理器已加载: {preprocessor_path}")
+        else:
+            logger.info("预处理器未找到 — 特征不做归一化")
         logger.info("Wide&Deep 模型已初始化 (has_torch=%s)", HAS_TORCH)
 
     def rank(self, features_list: List[Dict]) -> List[float]:

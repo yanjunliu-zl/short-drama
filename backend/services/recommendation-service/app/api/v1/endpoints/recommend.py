@@ -124,6 +124,19 @@ async def submit_feedback(
         return {"status": "error", "message": str(e)}
 
 
+@router.post("/train")
+async def trigger_training():
+    """触发推荐模型离线训练 — 供 K8s CronJob 或手动调用"""
+    import asyncio
+    try:
+        from app.services.train_model import run_scheduled_training
+        result = await run_scheduled_training()
+        return result
+    except Exception as e:
+        logger.error(f"Training trigger failed: {e}")
+        return {"status": "failed", "error": str(e)}
+
+
 @router.get("/health")
 async def health():
     return {"status": "ok", "service": "recommendation-service"}
