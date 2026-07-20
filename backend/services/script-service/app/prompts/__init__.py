@@ -382,6 +382,9 @@ HUMAN_GENERATE_CHAPTER_V2 = """全局人物/场景/道具设定：
 【故事框架与分集规划】
 {story_framework}
 
+【角色档案库】
+{char_profiles}
+
 【跨章节知识图谱上下文】
 {graphrag_context}
 

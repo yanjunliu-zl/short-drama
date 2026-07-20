@@ -87,3 +87,4 @@ grpcio>=1.64.0
 protobuf>=3.20.0,<6.0.0
 aio-pika>=9.4.0
 aiokafka>=0.10.0
+rank-bm25>=0.2.2
