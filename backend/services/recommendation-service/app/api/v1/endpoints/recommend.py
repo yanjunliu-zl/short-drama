@@ -1,5 +1,7 @@
 """推荐 API — 独立微服务 (Contextual Bandit enhanced)"""
+import json
 import logging
+import os
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -125,16 +127,73 @@ async def submit_feedback(
 
 
 @router.post("/train")
-async def trigger_training():
-    """触发推荐模型离线训练 — 供 K8s CronJob 或手动调用"""
-    import asyncio
+async def trigger_training(limit: int = 200000):
+    """Trigger model training. POST /recommendations/train?limit=500000"""
     try:
-        from app.services.train_model import run_scheduled_training
-        result = await run_scheduled_training()
-        return result
+        from app.services.train_model import TrainingPipeline
+        from app.core.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            pipeline = TrainingPipeline(db_session=db)
+            result = await pipeline.run(sample_limit=limit)
+            return result
     except Exception as e:
-        logger.error(f"Training trigger failed: {e}")
+        logger.error(f"Training failed: {e}")
         return {"status": "failed", "error": str(e)}
+
+
+@router.get("/model-info")
+async def get_model_info():
+    """Return active model version and metrics."""
+    from app.services.train_model import DEFAULT_MODEL_DIR
+    metrics_path = os.path.join(DEFAULT_MODEL_DIR, "metrics.json")
+    version_path = os.path.join(DEFAULT_MODEL_DIR, "version_history.json")
+    info = {"active_version": None, "versions": [], "latest_metrics": None}
+    if os.path.exists(metrics_path):
+        with open(metrics_path) as f:
+            info["latest_metrics"] = json.load(f)
+    if os.path.exists(version_path):
+        with open(version_path) as f:
+            versions = json.load(f)
+            info["versions"] = versions
+            if versions:
+                info["active_version"] = versions[-1]["version"]
+    return info
+
+
+@router.post("/rollback")
+async def rollback_model(version: str = None):
+    """Rollback to a specific version or to the best previous version."""
+    try:
+        from app.services.train_model import TrainingPipeline, DEFAULT_MODEL_DIR
+        import shutil
+        pipeline = TrainingPipeline(model_dir=DEFAULT_MODEL_DIR)
+        pipeline._load_version_history()
+        if not pipeline._versions:
+            return {"status": "error", "reason": "no versions available"}
+
+        if version:
+            target = next((v for v in pipeline._versions if v.version == version), None)
+        else:
+            target = pipeline._get_best_version()
+
+        if not target:
+            return {"status": "error", "reason": "version not found"}
+
+        # Copy versioned files to "latest"
+        for src, dst_name in [(target.model_path, "wide_and_deep.pt"),
+                               (target.preproc_path, "preprocessor.pkl")]:
+            shutil.copy(src, os.path.join(DEFAULT_MODEL_DIR, dst_name))
+
+        # Reload model
+        from app.services.ranking_model import get_ranking_service
+        svc = get_ranking_service()
+        svc.initialize()
+
+        logger.info(f"Rolled back to version {target.version} (AUC={target.metrics.get('best_auc')})")
+        return {"status": "ok", "version": target.version,
+                "metrics": target.metrics}
+    except Exception as e:
+        return {"status": "error", "reason": str(e)}
 
 
 @router.get("/health")
