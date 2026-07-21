@@ -77,8 +77,6 @@ class VideoServiceClient:
             service_name="video-service",
             fallback={"id": video_id, "degraded": True},
         )
-            logger.error(f"Failed to get video: {e}")
-            raise
 
 
 class LLMServiceClient:
