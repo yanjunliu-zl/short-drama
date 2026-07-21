@@ -671,7 +671,7 @@ class Novel2ScriptV2Service:
 
         # Sort by chapter order for temporal consistency
         result = "\n---\n".join(context_parts)
-        logger.debug(f"Hybrid RAG: dense={len(dense_results)} sparse={len(sparse_results)} "
+        logger.debug(f"Hybrid RAG: dense={len(dense_scores)} sparse={len(sparse_scores)} "
                     f"fused→{len(context_parts)} chunks, filtered={'yes' if filter_characters else 'no'}")
         return result if result else "\n".join([c["text"] for c in self._bm25_chunks[:3]]) if self._bm25_chunks else ""
 
