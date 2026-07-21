@@ -1,6 +1,8 @@
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/lists/*
+RUN echo "deb http://mirrors.aliyun.com/debian trixie main" > /etc/apt/sources.list && \
+    echo "deb http://mirrors.aliyun.com/debian-security trixie-security main" >> /etc/apt/sources.list && \
+    apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/lists/*
 RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser -s /bin/bash -m appuser
 
 WORKDIR /app
