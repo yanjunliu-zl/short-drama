@@ -2,6 +2,38 @@
 
 AI-powered short drama creation platform — end-to-end automated production from idea to final cut.
 
+## Features
+
+### Case Square — Discover & Search
+Browse trending short dramas, personalized recommendations, and full-text search.
+
+![Case Square](assets/main.png)
+
+### Script Generation — AI-Powered Creation
+Upload novels, paste ideas, or start from scratch. Multi-model AI generates complete scripts with character profiles, episode outlines, and shot-level storyboards.
+
+![Script Generation](assets/script.png)
+
+### Scene & Character Extraction
+Auto-extract scenes, characters, and props from scripts. AI generates scene preview images for visual reference.
+
+![Scene Extraction](assets/scene.png)
+
+### Storyboard — Shot-Level Planning
+AI breaks down each episode into detailed shots with camera angles, lighting, movement, and cinematography presets.
+
+![Storyboard](assets/storyboard.png)
+
+### AI Video Generation
+Generate images and videos from storyboard shots. Batch process entire episodes with character consistency and style controls.
+
+![Video Generation](assets/video.png)
+
+### Final Cut — Assembly & Export
+Combine generated videos into a complete short drama with transitions, audio, and final rendering.
+
+![Final Cut](assets/final-cut.png)
+
 ## Quick Start
 
 ### 1. Configuration
