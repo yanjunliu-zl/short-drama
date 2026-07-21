@@ -116,3 +116,19 @@ CREATE TABLE IF NOT EXISTS `script_outlines` (
     PRIMARY KEY (`id`),
     KEY `idx_case_id` (`case_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- User interactions (recommendation system)
+CREATE TABLE IF NOT EXISTS user_case_interactions (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    user_id VARCHAR(64) NOT NULL,
+    case_id VARCHAR(64) NOT NULL,
+    action_type VARCHAR(16) NOT NULL DEFAULT 'view',
+    recall_source VARCHAR(32) NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_user (user_id),
+    KEY idx_case (case_id),
+    KEY idx_action (action_type),
+    KEY idx_user_time (user_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

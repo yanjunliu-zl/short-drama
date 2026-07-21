@@ -6,8 +6,8 @@ RUN echo "deb http://mirrors.aliyun.com/debian bookworm main contrib non-free no
     echo "deb http://mirrors.aliyun.com/debian-security bookworm-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
     echo "deb http://mirrors.aliyun.com/debian bookworm-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list
 
-# 安装系统依赖
-RUN apt-get update && apt-get install -y \
+# 安装系统依赖 (cache-bust: v2)
+RUN apt-get update -o Acquire::Retries=3 && apt-get install -y --fix-missing \
     gcc \
     g++ \
     libpq-dev \
@@ -37,8 +37,8 @@ FROM python:3.10-slim
 RUN echo "deb http://mirrors.aliyun.com/debian bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
     echo "deb http://mirrors.aliyun.com/debian-security bookworm-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list
 
-# 安装运行时依赖
-RUN apt-get update && apt-get install -y \
+# 安装运行时依赖 (cache-bust: v2)
+RUN apt-get update -o Acquire::Retries=3 && apt-get install -y --fix-missing \
     libpq5 \
     curl \
     && rm -rf /var/lib/apt/lists/*
