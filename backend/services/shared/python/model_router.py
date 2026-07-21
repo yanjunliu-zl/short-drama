@@ -400,7 +400,7 @@ class ResilientLLM:
 
     async def ainvoke(self, messages, config: dict = None):
         """Async invoke with circuit breaker + automatic failover."""
-        from async_circuit_breaker import get_circuit_breaker, CircuitOpenError
+        from app.utils.async_circuit_breaker import get_circuit_breaker, CircuitOpenError
 
         breaker = get_circuit_breaker(f"llm-{self._provider}")
         last_error = None
