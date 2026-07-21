@@ -324,44 +324,81 @@ class FilterLayer:
 # ==============================
 
 class PreRankingLayer:
-    """粗排层 — 轻量双塔模型快速筛选。
+    """粗排层 — TwoTower 模型快速筛选。
 
-    从1000候选→200候选，用简单的用户-物品向量点积打分。
-    保证精排层的输入质量，同时控制延迟。
+    从1000候选→200候选，优先用双塔模型(User Tower × Item Tower)，
+    模型不可用时降级为加权公式。
     """
 
-    @staticmethod
-    async def pre_rank(candidates: List[RecallItem], user_profile: dict,
-                       top_n: int = 200) -> List[RecallItem]:
-        """快速粗排：加权公式 + 多样性保证。
+    _two_tower = None  # Lazy-loaded TwoTowerModel
 
-        如果精排模型不可用，这层就是实际排序层。
-        """
+    @classmethod
+    def _get_two_tower(cls):
+        if cls._two_tower is None:
+            try:
+                from app.services.deep_models import TwoTowerModel
+                cls._two_tower = TwoTowerModel(user_feature_dim=10, item_feature_dim=8)
+                # Try to load trained weights
+                import os
+                path = "/app/data/models/two_tower.pt"
+                if os.path.exists(path):
+                    import torch
+                    cls._two_tower.load_state_dict(torch.load(path, map_location="cpu"))
+                    cls._two_tower.eval()
+                    logger.info("TwoTower model loaded for pre-ranking")
+            except Exception as e:
+                logger.info(f"TwoTower unavailable ({e}), using formula fallback")
+                cls._two_tower = None
+        return cls._two_tower
+
+    @classmethod
+    async def pre_rank(cls, candidates: List[RecallItem], user_profile: dict,
+                       top_n: int = 200) -> List[RecallItem]:
         if len(candidates) <= top_n:
             return candidates
 
+        model = cls._get_two_tower()
+        if model is not None:
+            try:
+                import torch
+                scored = []
+                for item in candidates:
+                    # Simple feature vectors
+                    user_vec = torch.tensor([[
+                        user_profile.get("total_view_count", 0) / 100,
+                        user_profile.get("total_like_count", 0) / 50,
+                        user_profile.get("tag_diversity", 0) / 10,
+                        0, 0, 0, 0, 0, 0, 0,
+                    ]], dtype=torch.float32)
+                    item_vec = torch.tensor([[
+                        item.view_count / 10000, item.like_count / 1000,
+                        0, 0, item.recall_score, 0, 0, 0,
+                    ]], dtype=torch.float32)
+                    with torch.no_grad():
+                        score = model(user_vec, item_vec).item()
+                    scored.append((item, score))
+                scored.sort(key=lambda x: x[1], reverse=True)
+                return [item for item, _ in scored[:top_n]]
+            except Exception as e:
+                logger.debug(f"TwoTower pre-rank failed ({e}), falling back")
+
+        # Fallback: weighted formula
         scored = []
         for item in candidates:
-            # 轻量评分: 内容质量 + 时效 + 用户匹配
             quality = min(item.like_count / 5000, 0.5) + min(item.view_count / 50000, 0.3)
-            # 时效衰减
             age_days = 0
             if item.created_at:
                 try:
                     created = datetime.fromisoformat(item.created_at.replace("Z", "+00:00"))
                     age_days = (datetime.now() - created.replace(tzinfo=None)).days
-                except Exception:
-                    pass
+                except Exception: pass
             freshness = max(0.2, 1.0 - age_days * 0.01)
-            # 用户匹配
             fav_tags = user_profile.get("favorite_tags", [])
             tag_match = len(set(item.tags or []) & set(fav_tags)) / max(len(fav_tags), 1) if fav_tags else 0
             fav_genre = user_profile.get("favorite_genre", "")
             genre_match = 1.0 if item.genre == fav_genre else 0.0
-
             score = (quality * 0.4 + freshness * 0.2 + tag_match * 0.25 + genre_match * 0.15)
             scored.append((item, score))
-
         scored.sort(key=lambda x: x[1], reverse=True)
         return [item for item, _ in scored[:top_n]]
 
