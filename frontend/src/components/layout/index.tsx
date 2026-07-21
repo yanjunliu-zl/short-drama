@@ -228,12 +228,17 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           style={{ borderRight: 'none', background: 'transparent', marginTop: '16px', flex: 1 }}
         />
 
-        {/* 侧边栏底部用户区域 */}
+        {/* 侧边栏底部用户区域 — 与顶部 Logo 统一布局 */}
         <div
           className="sidebar-user-area"
           style={{
-            padding: '8px 20px',
+            height: 56,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: collapsed ? 'center' : 'flex-start',
+            padding: collapsed ? 0 : '0 20px',
             borderTop: '1px solid #e5e5ea',
+            background: '#f5f5f7',
             flexShrink: 0,
           }}
         >
@@ -244,16 +249,14 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                 alignItems: 'center',
                 gap: 10,
                 cursor: 'pointer',
-                padding: '4px 0',
-                justifyContent: collapsed ? 'center' : 'flex-start',
               }}>
                 <Avatar
-                  size={28}
+                  size={collapsed ? 26 : 30}
                   icon={<UserOutlined />}
                   style={{ backgroundColor: '#0066cc', flexShrink: 0 }}
                 />
                 {!collapsed && (
-                  <span style={{ fontSize: 13, fontWeight: 500, color: '#1d1d1f' }}>
+                  <span style={{ fontSize: 14, fontWeight: 500, color: '#1d1d1f' }}>
                     {user?.username || '用户'}
                   </span>
                 )}
@@ -263,9 +266,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             collapsed ? (
               <Button type="primary" shape="circle" size="small" icon={<LoginOutlined />} onClick={() => navigate('/login')} />
             ) : (
-              <div style={{ display: 'flex', gap: 6 }}>
-                <Button type="primary" icon={<LoginOutlined />} onClick={() => navigate('/login')} block size="small">登录</Button>
-                <Button onClick={() => navigate('/register')} block size="small">注册</Button>
+              <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+                <Button type="primary" icon={<LoginOutlined />} onClick={() => navigate('/login')} block size="middle">登录</Button>
+                <Button onClick={() => navigate('/register')} block size="middle">注册</Button>
               </div>
             )
           )}
