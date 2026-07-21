@@ -196,6 +196,114 @@ async def rollback_model(version: str = None):
         return {"status": "error", "reason": str(e)}
 
 
+# ================================================================
+# Enhanced Search (Douyin standard)
+# ================================================================
+
+# Lazy-loaded search enhancer instance
+_search_enhancer = None
+
+
+async def _get_search_enhancer():
+    global _search_enhancer
+    if _search_enhancer is None:
+        from app.core.redis import get_redis
+        from search_engine import SearchEnhancer
+        redis = await get_redis()
+        _search_enhancer = SearchEnhancer(redis_client=redis)
+    return _search_enhancer
+
+
+@router.get("/search")
+async def enhanced_search(
+    q: str = Query(..., description="Search query"),
+    user_id: str = Query("", description="User ID for personalization"),
+    page: int = Query(1), page_size: int = Query(20),
+):
+    """Enhanced search with query understanding, semantic retrieval, LTR, personalization."""
+    try:
+        enhancer = await _get_search_enhancer()
+
+        # Fetch BM25 results from content-service ES
+        import httpx
+        bm25_results = []
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"http://content-service:8081/api/v1/cases/search",
+                    params={"q": q, "page": page, "pageSize": page_size * 2},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    bm25_results = data.get("hits", data.get("cases", []))
+        except Exception as e:
+            logger.warning(f"Content-service search failed: {e}")
+
+        # Fetch user profile for personalization
+        user_profile = {}
+        if user_id:
+            from sqlalchemy.ext.asyncio import AsyncSession
+            from app.core.database import get_db
+            try:
+                db = await get_db().__anext__()
+                from app.services.recommendation_engine import RecommendationPipeline
+                pipeline = RecommendationPipeline.__new__(RecommendationPipeline)
+                pipeline.db = db
+                user_profile = await pipeline._get_user_profile(user_id)
+            except Exception as e:
+                logger.debug(f"User profile fetch failed: {e}")
+
+        # Enhanced search
+        result = await enhancer.search(
+            query=q, user_id=user_id,
+            user_profile=user_profile,
+            bm25_results=bm25_results,
+            top_k=page_size,
+        )
+
+        # Record query for trending
+        await enhancer.record_query(q)
+
+        return result
+    except Exception as e:
+        logger.error(f"Enhanced search failed: {e}")
+        return {"results": [], "error": str(e)}
+
+
+@router.get("/search/suggestions")
+async def search_suggestions(
+    q: str = Query("", description="Prefix for autocomplete"),
+    type: str = Query("autocomplete", description="autocomplete | trending"),
+):
+    """Search suggestions: autocomplete or trending queries."""
+    enhancer = await _get_search_enhancer()
+    if type == "trending":
+        items = await enhancer.suggest.trending(limit=10)
+    else:
+        items = await enhancer.autocomplete(q, limit=5)
+    return {"suggestions": items}
+
+
+@router.post("/search/click")
+async def search_click(
+    query: str = Query(...),
+    item_id: str = Query(...),
+    position: int = Query(0),
+    user_id: str = Query(""),
+):
+    """Record a search result click for funnel analytics."""
+    enhancer = await _get_search_enhancer()
+    await enhancer.record_click(query, item_id, position, user_id)
+    return {"status": "ok"}
+
+
+@router.get("/search/funnel")
+async def search_funnel(query: str = Query("")):
+    """Get search funnel statistics (CTR, impressions, clicks)."""
+    enhancer = await _get_search_enhancer()
+    return await enhancer.get_funnel_stats(query)
+
+
 @router.get("/health")
 async def health():
     return {"status": "ok", "service": "recommendation-service"}
