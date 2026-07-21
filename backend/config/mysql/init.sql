@@ -132,3 +132,21 @@ CREATE TABLE IF NOT EXISTS user_case_interactions (
     KEY idx_user_time (user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+
+-- Comments table
+CREATE TABLE IF NOT EXISTS comments (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    case_id VARCHAR(64) NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
+    username VARCHAR(128) NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    parent_id BIGINT DEFAULT NULL,
+    like_count INT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_case (case_id),
+    KEY idx_user (user_id),
+    KEY idx_parent (parent_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
