@@ -130,7 +130,7 @@ async def submit_feedback(
 async def trigger_training(limit: int = 200000):
     """Trigger model training. POST /recommendations/train?limit=500000"""
     try:
-        from app.services.train_model import TrainingPipeline
+        from app.services.training import TrainingPipeline
         from app.core.database import AsyncSessionLocal
         async with AsyncSessionLocal() as db:
             pipeline = TrainingPipeline(db_session=db)
@@ -164,7 +164,7 @@ async def get_model_info():
 async def rollback_model(version: str = None):
     """Rollback to a specific version or to the best previous version."""
     try:
-        from app.services.train_model import TrainingPipeline, DEFAULT_MODEL_DIR
+        from app.services.training import TrainingPipeline, DEFAULT_MODEL_DIR
         import shutil
         pipeline = TrainingPipeline(model_dir=DEFAULT_MODEL_DIR)
         pipeline._load_version_history()
