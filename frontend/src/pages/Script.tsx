@@ -1004,34 +1004,120 @@ const Script: React.FC = () => {
           <>
             <Row gutter={24}>
           <Col span={8}>
-            <Form.Item label="剧本主题">
-              <Input
-                placeholder="例如：爱情、复仇、成长"
+            <Form.Item label="剧本主题" tooltip="选择预设主题或自行输入">
+              <Select
                 value={formTheme}
-                onChange={(e) => setFormTheme(e.target.value)}
+                onChange={setFormTheme}
+                showSearch
+                allowClear
+                placeholder="选择或输入主题..."
+                filterOption={(input, option) =>
+                  (option?.label as string)?.includes(input) ||
+                  (option?.value as string)?.includes(input)
+                }
+                options={[
+                  { label: '🏙️ 都市', value: '都市', options: [
+                    { label: '都市情感', value: '都市情感' },
+                    { label: '都市逆袭', value: '都市逆袭' },
+                    { label: '商战职场', value: '商战职场' },
+                    { label: '校园青春', value: '校园青春' },
+                    { label: '家庭伦理', value: '家庭伦理' },
+                  ]},
+                  { label: '💕 言情', value: '言情', options: [
+                    { label: '甜宠', value: '甜宠' },
+                    { label: '虐恋', value: '虐恋' },
+                    { label: '先婚后爱', value: '先婚后爱' },
+                    { label: '破镜重圆', value: '破镜重圆' },
+                    { label: '暗恋成真', value: '暗恋成真' },
+                  ]},
+                  { label: '⚔️ 古风', value: '古风', options: [
+                    { label: '宫斗宅斗', value: '宫斗宅斗' },
+                    { label: '穿越重生', value: '穿越重生' },
+                    { label: '武侠江湖', value: '武侠江湖' },
+                    { label: '仙侠修真', value: '仙侠修真' },
+                    { label: '权谋天下', value: '权谋天下' },
+                  ]},
+                  { label: '🔮 奇幻', value: '奇幻', options: [
+                    { label: '玄幻魔法', value: '玄幻魔法' },
+                    { label: '异世大陆', value: '异世大陆' },
+                    { label: '系统流派', value: '系统流派' },
+                    { label: '异能觉醒', value: '异能觉醒' },
+                  ]},
+                  { label: '🚀 科幻', value: '科幻', options: [
+                    { label: '未来世界', value: '未来世界' },
+                    { label: '末日废土', value: '末日废土' },
+                    { label: '星际太空', value: '星际太空' },
+                    { label: '人工智能', value: '人工智能' },
+                  ]},
+                  { label: '🔍 悬疑', value: '悬疑', options: [
+                    { label: '刑侦推理', value: '刑侦推理' },
+                    { label: '悬疑惊悚', value: '悬疑惊悚' },
+                    { label: '谍战特工', value: '谍战特工' },
+                    { label: '灵异鬼怪', value: '灵异鬼怪' },
+                  ]},
+                  { label: '💪 逆袭', value: '逆袭', options: [
+                    { label: '重生复仇', value: '重生复仇' },
+                    { label: '废柴逆袭', value: '废柴逆袭' },
+                    { label: '赘婿翻身', value: '赘婿翻身' },
+                    { label: '强者归来', value: '强者归来' },
+                  ]},
+                  { label: '🎭 其他', value: '其他', options: [
+                    { label: '喜剧搞笑', value: '喜剧搞笑' },
+                    { label: '热血竞技', value: '热血竞技' },
+                    { label: '治愈温情', value: '治愈温情' },
+                    { label: '架空历史', value: '架空历史' },
+                    { label: '军事战争', value: '军事战争' },
+                  ]},
+                ]}
               />
             </Form.Item>
           </Col>
           <Col span={8}>
-            <Form.Item label="剧本风格">
-              <Select value={formStyle} onChange={setFormStyle}>
-                <Option value="浪漫喜剧">浪漫喜剧</Option>
-                <Option value="悬疑推理">悬疑推理</Option>
-                <Option value="科幻未来">科幻未来</Option>
-                <Option value="古风历史">古风历史</Option>
-                <Option value="都市情感">都市情感</Option>
-                <Option value="奇幻冒险">奇幻冒险</Option>
-                <Option value="恐怖惊悚">恐怖惊悚</Option>
-                <Option value="动作武侠">动作武侠</Option>
-              </Select>
+            <Form.Item label="剧本风格" tooltip="选择视觉和叙事风格">
+              <Select
+                value={formStyle}
+                onChange={setFormStyle}
+                showSearch
+                allowClear
+                placeholder="选择风格..."
+                filterOption={(input, option) =>
+                  (option?.label as string)?.includes(input) ||
+                  (option?.value as string)?.includes(input)
+                }
+                options={[
+                  { label: '🎬 主流风格', value: '主流', options: [
+                    { label: '写实风格', value: '写实风格' },
+                    { label: '浪漫喜剧', value: '浪漫喜剧' },
+                    { label: '悬疑风格', value: '悬疑风格' },
+                    { label: '科幻风格', value: '科幻风格' },
+                    { label: '古装风格', value: '古装风格' },
+                    { label: '都市风格', value: '都市风格' },
+                  ]},
+                  { label: '🎨 视觉风格', value: '视觉', options: [
+                    { label: '电影级写实', value: '电影级写实' },
+                    { label: '赛博朋克', value: '赛博朋克' },
+                    { label: '日系清新', value: '日系清新' },
+                    { label: '港风复古', value: '港风复古' },
+                    { label: '民国风情', value: '民国风情' },
+                    { label: '暗黑哥特', value: '暗黑哥特' },
+                  ]},
+                  { label: '📺 叙事风格', value: '叙事', options: [
+                    { label: '快节奏爽文', value: '快节奏爽文' },
+                    { label: '慢热细腻', value: '慢热细腻' },
+                    { label: '轻喜剧', value: '轻喜剧' },
+                    { label: '暗黑深沉', value: '暗黑深沉' },
+                    { label: '纪实风格', value: '纪实风格' },
+                  ]},
+                ]}
+              />
             </Form.Item>
           </Col>
           <Col span={8}>
             <Form.Item label="剧本长度">
               <Select value={formLength} onChange={setFormLength}>
-                <Option value="短篇">短篇（~10分钟）</Option>
-                <Option value="中篇">中篇（~30分钟）</Option>
-                <Option value="长篇">长篇（~60分钟）</Option>
+                <Option value="短篇">短篇（5-8集）</Option>
+                <Option value="中篇">中篇（10-20集）</Option>
+                <Option value="长篇">长篇（30-50集）</Option>
               </Select>
             </Form.Item>
           </Col>
@@ -1039,7 +1125,7 @@ const Script: React.FC = () => {
 
         <Form.Item label="故事背景">
           <Input
-            placeholder="例如：现代都市、古代宫廷、未来世界"
+            placeholder="例如：现代都市、古代宫廷、未来世界、末世废土..."
             value={formSetting}
             onChange={(e) => setFormSetting(e.target.value)}
           />
