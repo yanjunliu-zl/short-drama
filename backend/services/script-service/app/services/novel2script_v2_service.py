@@ -617,41 +617,44 @@ class Novel2ScriptV2Service:
         filter_dict = None
         if filter_chapter is not None:
             filter_dict = {"chapter": filter_chapter}
+        dense_texts: Dict[int, str] = {}  # index → text mapping
+        dense_scores: List[Tuple[int, float]] = []  # (index, score) for RRF
         try:
             dense_docs = vector_store.similarity_search_with_score(
                 query, k=k * 2, filter=filter_dict
             )
-            # Convert to (index, score) tuples
-            dense_results = []
-            for doc, score in dense_docs:
-                idx = doc.metadata.get("_faiss_id", hash(doc.page_content) % 100000)
-                dense_results.append((idx, 1.0 / (1.0 + score)))
+            for i, (doc, score) in enumerate(dense_docs):
+                dense_texts[i] = doc.page_content
+                dense_scores.append((i, 1.0 / (1.0 + score)))
         except Exception:
-            # Fallback: no filter support
             retriever = vector_store.as_retriever(search_kwargs={"k": k * 2})
             docs = retriever.invoke(query)
-            dense_results = [(i, 0.8) for i in range(len(docs))]
+            for i, doc in enumerate(docs):
+                dense_texts[i] = doc.page_content
+                dense_scores.append((i, 0.8))
 
         # Sparse search (BM25)
-        sparse_results = self._bm25_search(query, k=k * 2)
+        sparse_scores = self._bm25_search(query, k=k * 2)
 
         # RRF fusion
-        if sparse_results:
-            fused_indices = self._rrf_fusion(dense_results, sparse_results, k=60)
+        if sparse_scores:
+            fused_indices = self._rrf_fusion(dense_scores, sparse_scores, k=60)
         else:
-            fused_indices = [i for i, _ in dense_results]
+            fused_indices = [i for i, _ in dense_scores]
 
         # Collect results with deduplication
         seen_texts = set()
         context_parts = []
         rank = 0
         for idx in fused_indices[:k]:
+            # Check BM25 chunks first
             if idx < len(self._bm25_chunks):
                 text = self._bm25_chunks[idx]
-            elif idx < len(dense_results):
-                text = dense_results[idx][0].page_content if hasattr(dense_results[idx][0], 'page_content') else ""
+            # Check dense results
+            elif idx in dense_texts:
+                text = dense_texts[idx]
             else:
-                text = dense_results[idx % len(dense_results)][0].page_content if dense_results else ""
+                continue
             if text and text not in seen_texts:
                 seen_texts.add(text)
                 rank += 1
