@@ -1113,11 +1113,13 @@ const Script: React.FC = () => {
             </Form.Item>
           </Col>
           <Col span={8}>
-            <Form.Item label="剧本长度">
+            <Form.Item label="剧本长度" tooltip="参考红果短剧分类标准">
               <Select value={formLength} onChange={setFormLength}>
-                <Option value="短篇">短篇（5-8集）</Option>
-                <Option value="中篇">中篇（10-20集）</Option>
-                <Option value="长篇">长篇（30-50集）</Option>
+                <Option value="超短篇">超短篇（1-5集，每集1-2分钟）</Option>
+                <Option value="短篇">短篇（6-15集，每集2-3分钟）</Option>
+                <Option value="中篇">中篇（16-40集，每集3-5分钟）</Option>
+                <Option value="长篇">长篇（41-80集，每集3-5分钟）</Option>
+                <Option value="超长篇">超长篇（80-120集，每集2-5分钟）</Option>
               </Select>
             </Form.Item>
           </Col>
