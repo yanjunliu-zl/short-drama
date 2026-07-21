@@ -1,0 +1,112 @@
+# ClickHouse — OLAP analytics database
+# 2-node cluster for HA, used for user behavior logs, training data, search funnel
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: shortdrama
+  labels:
+    app: clickhouse
+spec:
+  clusterIP: None
+  ports:
+    - port: 8123
+      name: http
+    - port: 9000
+      name: tcp
+  selector:
+    app: clickhouse
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  namespace: shortdrama
+spec:
+  serviceName: clickhouse
+  replicas: 2
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:24.8
+          ports:
+            - containerPort: 8123
+              name: http
+            - containerPort: 9000
+              name: tcp
+          env:
+            - name: CLICKHOUSE_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: shortdrama-config
+                  key: CLICKHOUSE_DB
+            - name: CLICKHOUSE_USER
+              value: default
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits: { cpu: "2", memory: "4Gi" }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/clickhouse
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 8123
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 8123
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: init-sql
+          configMap:
+            name: clickhouse-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 50Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-init
+  namespace: shortdrama
+data:
+  init.sql: |
+    CREATE DATABASE IF NOT EXISTS shortdrama;
+    CREATE TABLE IF NOT EXISTS shortdrama.user_events (
+        event_time  DateTime64(3) DEFAULT now64(3),
+        event_type  LowCardinality(String),
+        user_id     String, item_id String, query String DEFAULT '',
+        recall_source String DEFAULT '', position UInt16 DEFAULT 0,
+        dwell_ms UInt32 DEFAULT 0, session_id String DEFAULT '',
+        metadata String DEFAULT '{}'
+    ) ENGINE = MergeTree()
+    PARTITION BY toYYYYMMDD(event_time)
+    ORDER BY (event_type, user_id, event_time)
+    TTL event_time + INTERVAL 90 DAY;
+    CREATE TABLE IF NOT EXISTS shortdrama.llm_usage (
+        event_time DateTime64(3) DEFAULT now64(3),
+        service_name String, model_name String, endpoint String,
+        user_id String, tokens_in UInt32, tokens_out UInt32,
+        duration_ms UInt32, cost_rmb Float64, cache_hit UInt8 DEFAULT 0
+    ) ENGINE = MergeTree()
+    PARTITION BY toYYYYMM(event_time)
+    ORDER BY (service_name, model_name, event_time)
+    TTL event_time + INTERVAL 180 DAY;
