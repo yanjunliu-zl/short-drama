@@ -192,11 +192,21 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             justify-content: center !important;
             align-items: center !important;
           }
+          .sidebar-user-area .ant-avatar {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            vertical-align: middle !important;
+          }
           .sidebar-user-area .ant-avatar > .anticon {
-            display: flex !important;
+            display: inline-flex !important;
             align-items: center !important;
             justify-content: center !important;
             vertical-align: unset !important;
+            line-height: 1 !important;
+          }
+          .sidebar-user-area .ant-avatar > .anticon svg {
+            display: block !important;
           }
         `}</style>
         <Link to="/" style={{ textDecoration: 'none', flexShrink: 0 }}>
