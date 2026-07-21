@@ -150,3 +150,22 @@ CREATE TABLE IF NOT EXISTS comments (
     KEY idx_parent (parent_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+
+-- Assets table
+CREATE TABLE IF NOT EXISTS assets (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    name VARCHAR(256) NOT NULL DEFAULT '',
+    type VARCHAR(64) NOT NULL DEFAULT '',
+    count INT NOT NULL DEFAULT 0,
+    access_level VARCHAR(32) NOT NULL DEFAULT 'private',
+    owner_id VARCHAR(64) NOT NULL DEFAULT '',
+    is_personal BOOLEAN NOT NULL DEFAULT TRUE,
+    description TEXT,
+    last_update DATE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_owner (owner_id),
+    KEY idx_type (type),
+    KEY idx_personal (is_personal)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
