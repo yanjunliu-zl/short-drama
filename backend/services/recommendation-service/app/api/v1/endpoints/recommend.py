@@ -127,15 +127,25 @@ async def submit_feedback(
 
 
 @router.post("/train")
-async def trigger_training(limit: int = 200000):
-    """Trigger model training. POST /recommendations/train?limit=500000"""
+async def trigger_training(limit: int = 200000, framework: str = "torchrec"):
+    """Trigger model training. POST /recommendations/train?limit=500000&framework=torchrec
+
+    framework: "torchrec" (distributed) | "spark" (PySpark) | "native" (single-machine)
+    """
     try:
-        from app.services.training import TrainingPipeline
-        from app.core.database import AsyncSessionLocal
-        async with AsyncSessionLocal() as db:
-            pipeline = TrainingPipeline(db_session=db)
-            result = await pipeline.run(sample_limit=limit)
-            return result
+        if framework == "torchrec":
+            from app.services.training.torchrec_job import run_torchrec_training
+            return await run_torchrec_training(limit=limit)
+        elif framework == "spark":
+            from app.services.training.spark_job import SparkTrainingJob
+            job = SparkTrainingJob(master="local[*]")
+            return job.run(limit=limit)
+        else:
+            from app.services.training import TrainingPipeline
+            from app.core.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as db:
+                pipeline = TrainingPipeline(db_session=db)
+                return await pipeline.run(sample_limit=limit)
     except Exception as e:
         logger.error(f"Training failed: {e}")
         return {"status": "failed", "error": str(e)}
