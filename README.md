@@ -1,6 +1,6 @@
 # Short Drama Platform
 
-AI-powered short drama creation platform — end-to-end automated production from idea to final cut.
+AI-powered short drama creation platform — end-to-end automated production from idea to final cut. Enterprise-grade distributed architecture with multi-model LLM routing, industrial RAG pipeline, real-time recommendation engine, and cloud-native operations.
 
 ## Features
 
@@ -67,13 +67,9 @@ docker compose ps
 cd frontend && npm install && npm run dev
 ```
 
-Open http://localhost:3000. The Vite dev server proxies `/api` to the Traefik gateway (`:80`).
+Open http://localhost:3000. The Vite dev server proxies `/api` to the API gateway.
 
-### 4. Initialize Database
-
-```bash
-docker exec -i shortdrama-mysql mysql -uadmin -padmin123 shortdrama < backend/config/mysql/init.sql
-```
+Database tables are auto-created on first startup (MySQL auto-runs init.sql).
 
 ## AI Creation Pipeline
 
@@ -143,46 +139,50 @@ POST /api/v1/comments/:case_id
 ## Architecture
 
 ```
-Frontend (:3000) → Traefik (:80) → Microservices
-                                    ├── user-service      (Go, Auth)
-                                    ├── content-service   (Go, Cases/Works/Search)
-                                    ├── script-service    (Python, AI Script)
-                                    ├── storyboard-service(Python, AI Storyboard)
-                                    ├── llmhua-service    (Python, AI Image/Video)
-                                    ├── video-service     (Python, Video Processing)
-                                    ├── final-cut-service (Go, Final Cut)
-                                    └── recommendation    (Python, Recommendations)
+Frontend (:3000) → APISIX (:9080) / Traefik (:80) → Microservices
+                                                     ├── user-service       (Go, Auth)
+                                                     ├── content-service    (Go, Cases/Search)
+                                                     ├── script-service     (Python, AI Script)
+                                                     ├── storyboard-service (Python, Storyboard)
+                                                     ├── llmhua-service     (Python, Image/Video)
+                                                     ├── video-service      (Python, Video Proc)
+                                                     ├── final-cut-service  (Go, Final Cut)
+                                                     └── recommendation     (Python, Recommend)
 
-Infrastructure: MySQL 8.0 + Redis 7 + RabbitMQ + MinIO + Kafka + Elasticsearch
-Observability: Prometheus + Grafana + Jaeger + OpenTelemetry
+Infrastructure:     MySQL 8.0 + Redis 7 + RabbitMQ + MinIO + Kafka + Elasticsearch + ClickHouse
+AI:                 DeepSeek/OpenAI/Anthropic/vLLM multi-model routing
+Observability:      Prometheus + Grafana + Jaeger + OpenTelemetry (trace-log correlation)
+SRE:                Circuit breaker + graceful degradation + per-user rate limiting
 ```
 
 ## Deployment
 
 ### Single Machine
 ```bash
-docker compose up -d
-docker compose up -d --scale script-service=3
+docker compose up -d                # All services
+docker compose up -d --scale script-service=3   # Scale AI services
 ```
 
 ### Multi-Machine
 ```bash
 # Machine A (Databases)
-docker compose up -d mysql redis rabbitmq
+docker compose up -d mysql redis rabbitmq kafka clickhouse
 
 # Machine B (AI Services, .env pointing to A)
 docker compose up -d script-service storyboard-service llmhua-service
 
-# Machine C (Gateway)
-docker compose up -d traefik
+# Machine C (Gateway + Frontend)
+docker compose up -d apisix     # or: traefik
 ```
 
-### Kubernetes
+### Kubernetes (GitOps)
 ```bash
-kubectl apply -k k8s/overlays/us-east-1
+kubectl apply -k k8s/overlays/us-east-1     # US East (primary)
+kubectl apply -k k8s/overlays/ap-southeast-1 # Singapore
+kubectl apply -k k8s/overlays/eu-west-1     # Europe
 ```
 
-Supports 3-region deployment (us-east-1 / ap-southeast-1 / eu-west-1), HPA autoscaling (max 20 pods), GPU scheduling (Volcano).
+3-region deployment, HPA (2→20 pods), KEDA event-driven (1→30), Volcano GPU scheduling, ArgoCD GitOps.
 
 ## Development
 
@@ -195,15 +195,15 @@ cd backend/services/script-service
 pip install -r requirements.txt
 uvicorn main:app --port 8000 --reload
 
-# Go service (cross-compile for Docker)
+# Go service
 cd backend/services/user-service
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o user-service ./cmd
 docker compose up -d user-service
 
 # Testing
-go test ./...              # Go
-pytest                     # Python
-curl localhost/api/v1/cases | python -m json.tool
+go test ./...                          # Go
+pytest                                 # Python
+curl localhost:9080/api/v1/cases       # APISIX gateway
 ```
 
 ## Access Points
@@ -211,11 +211,14 @@ curl localhost/api/v1/cases | python -m json.tool
 | Service | URL | Credentials |
 |---------|-----|-------------|
 | Frontend | http://localhost:3000 | — |
-| Traefik | http://localhost:8080 | — |
+| APISIX Gateway | http://localhost:9080 | — |
+| APISIX Dashboard | http://localhost:9000 | admin/admin |
+| Traefik (legacy) | http://localhost:80 | — |
 | Grafana | http://localhost:3001 | admin/admin |
 | RabbitMQ | http://localhost:15672 | admin/admin123 |
 | MinIO | http://localhost:9001 | minioadmin/minioadmin |
 | Jaeger | http://localhost:16686 | — |
+| ClickHouse | http://localhost:8123/play | — |
 
 ## Operations
 
