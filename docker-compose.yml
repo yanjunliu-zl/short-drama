@@ -89,6 +89,7 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
       - ./backend/config/mysql/conf.d:/etc/mysql/conf.d:ro
+      - ./backend/config/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     networks:
       - shortdrama-network
     healthcheck:
