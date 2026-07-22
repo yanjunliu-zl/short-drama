@@ -1,0 +1,43 @@
+# AP Southeast (Singapore) — Asia Region Patches
+# Lower capacity, read-only TiDB, local read replica for latency
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: script-service
+spec:
+  replicas: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmhua-service
+spec:
+  replicas: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recommendation-service
+spec:
+  replicas: 2
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tidb-config
+data:
+  TIDB_WRITE_MODE: read-only
+  TIDB_CDC_ENABLED: "true"
+  TIDB_CDC_SOURCE: us-east-1
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storage-config
+data:
+  STORAGE_TYPE: s3
+  STORAGE_ENDPOINT: https://s3.ap-southeast-1.amazonaws.com
+  STORAGE_REGION: ap-southeast-1
+  SEEDANCE_API_URL: https://ark.ap-southeast-1.volces.com/api/v3
+  CDN_DOMAIN: https://d2abc456.cloudfront.net

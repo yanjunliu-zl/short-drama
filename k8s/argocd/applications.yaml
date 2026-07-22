@@ -1,0 +1,69 @@
+# ArgoCD ApplicationSet — GitOps multi-cluster deployment
+# Automatically deploys to all 3 regions when manifests change in git.
+# Install: kubectl apply -f k8s/argocd/applications.yaml
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: shortdrama
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - region: us-east-1
+            server: https://kubernetes.us-east-1.example.com
+          - region: ap-southeast-1
+            server: https://kubernetes.ap-southeast-1.example.com
+          - region: eu-west-1
+            server: https://kubernetes.eu-west-1.example.com
+  template:
+    metadata:
+      name: shortdrama-{{region}}
+      namespace: argocd
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/yanjunliu-zl/short-drama.git
+        targetRevision: main
+        path: k8s/overlays/{{region}}
+      destination:
+        server: '{{server}}'
+        namespace: shortdrama
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+---
+# ArgoCD AppProject — security boundaries
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: shortdrama
+  namespace: argocd
+spec:
+  description: Short Drama Platform
+  sourceRepos:
+    - https://github.com/yanjunliu-zl/short-drama.git
+  destinations:
+    - namespace: shortdrama
+      server: '*'
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'

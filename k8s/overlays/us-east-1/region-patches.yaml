@@ -1,0 +1,63 @@
+# US East (N. Virginia) — Primary Region Patches
+# Higher capacity, primary write master, 2x the pods of other regions
+---
+# Scale script-service for primary AI traffic
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: script-service
+spec:
+  replicas: 4  # Primary region gets 4 base replicas (others get 2)
+---
+# Scale llmhua-service for image/video generation
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmhua-service
+spec:
+  replicas: 3
+---
+# Scale recommendation-service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recommendation-service
+spec:
+  replicas: 3
+---
+# Primary TiDB — accepts writes
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tidb-config
+data:
+  TIDB_WRITE_MODE: primary
+  TIDB_CDC_ENABLED: "true"
+---
+# AWS-specific storage
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storage-config
+data:
+  STORAGE_TYPE: s3
+  STORAGE_ENDPOINT: https://s3.us-east-1.amazonaws.com
+  STORAGE_REGION: us-east-1
+  CDN_DOMAIN: https://d1abc123.cloudfront.net
+---
+# NetworkPolicy — allow cross-region sync traffic from SG/EU
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cross-region-sync
+spec:
+  podSelector: {}
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.1.0.0/16   # Singapore VPC CIDR
+        - ipBlock:
+            cidr: 10.2.0.0/16   # EU VPC CIDR
+      ports:
+        - port: 4000  # TiDB
+        - port: 9092  # Kafka
