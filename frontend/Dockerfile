@@ -28,12 +28,8 @@ RUN apk add --no-cache curl
 # 复制nginx配置
 COPY nginx.conf /etc/nginx/nginx.conf
 
-# 复制构建产物
+# 复制构建产物 (includes favicon.ico and robots.txt if present)
 COPY --from=builder /app/dist /usr/share/nginx/html
-
-# 复制robots.txt和favicon
-COPY public/robots.txt /usr/share/nginx/html/robots.txt
-COPY public/favicon.ico /usr/share/nginx/html/favicon.ico
 
 # 设置权限
 RUN chown -R nginx:nginx /usr/share/nginx/html && \
