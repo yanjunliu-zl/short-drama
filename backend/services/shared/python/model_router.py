@@ -2,13 +2,14 @@
 Multi-model fallback router for LLM provider resilience.
 
 Creates a ChatOpenAI client by trying providers in priority order:
-  1. DeepSeek (deepseek-chat) — primary, lowest cost
-  2. OpenAI (gpt-4o) — first fallback
-  3. Anthropic (claude-sonnet-5) — second fallback via OpenAI-compatible API
-  4. Mock mode — last resort, returns placeholder data
+  1. vLLM (self-hosted GPU) — zero API cost, lowest latency
+  2. DeepSeek (deepseek-chat) — primary cloud, lowest cost
+  3. OpenAI (gpt-4o) — first cloud fallback
+  4. Anthropic (claude-sonnet-5) — second cloud fallback
+  5. Mock mode — last resort
 
-On initialization, the first provider with a valid API key is selected.
-On runtime errors (auth/rate-limit/server), a provider switch is triggered.
+Upgrade: Production deployments should use InferenceClientPool (inference_client.py)
+for connection pooling + health checks + automatic failover across vLLM pods.
 
 Usage:
     from app.utils.model_router import create_llm_client
