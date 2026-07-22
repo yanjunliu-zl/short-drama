@@ -1,0 +1,261 @@
+# APISIX Standalone Configuration — Routes, Upstreams, Plugins
+# Equivalent to Traefik routers.yaml + middlewares.yaml
+# APISIX performance: ~18000 QPS vs Traefik ~5000 QPS (single node)
+
+# ═══════════════════════════════════════════
+# Global Rules (applied to all routes)
+# ═══════════════════════════════════════════
+global_rules:
+  - id: 1
+    plugins:
+      prometheus:
+        prefer_name: true
+      cors:
+        allow_credential: true
+        allow_headers: "*"
+        allow_methods: "GET,POST,PUT,DELETE,OPTIONS,PATCH"
+        allow_origins: "http://localhost:3000,http://localhost:8080"
+
+# ═══════════════════════════════════════════
+# Upstreams
+# ═══════════════════════════════════════════
+upstreams:
+  - id: 1
+    name: user-service
+    type: roundrobin
+    nodes:
+      "user-service:8080": 1
+    checks:
+      active:
+        type: http
+        http_path: /health
+        healthy:
+          interval: 5s
+          successes: 2
+        unhealthy:
+          interval: 5s
+          http_failures: 2
+
+  - id: 2
+    name: content-service
+    type: roundrobin
+    nodes:
+      "content-service:8081": 1
+    checks:
+      active:
+        type: http
+        http_path: /health
+        healthy:
+          interval: 5s
+          successes: 2
+
+  - id: 3
+    name: script-service
+    type: roundrobin
+    nodes:
+      "script-service:8000": 1
+    checks:
+      active:
+        type: http
+        http_path: /health
+        healthy:
+          interval: 5s
+          successes: 2
+
+  - id: 4
+    name: storyboard-service
+    type: roundrobin
+    nodes:
+      "storyboard-service:8001": 1
+
+  - id: 5
+    name: llmhua-service
+    type: roundrobin
+    nodes:
+      "llmhua-service:8002": 1
+
+  - id: 6
+    name: video-service
+    type: roundrobin
+    nodes:
+      "video-service:8000": 1
+
+  - id: 7
+    name: final-cut-service
+    type: roundrobin
+    nodes:
+      "final-cut-service:8085": 1
+
+  - id: 8
+    name: recommendation-service
+    type: roundrobin
+    nodes:
+      "recommendation-service:8004": 1
+
+# ═══════════════════════════════════════════
+# Routes
+# ═══════════════════════════════════════════
+routes:
+  # ── User Service ──
+  - id: 1
+    uri: "/api/v1/users/*"
+    upstream_id: 1
+    priority: 10
+    plugins:
+      limit-count:
+        count: 20
+        time_window: 60
+        key_type: var
+        key: http_x_user_id
+        rejected_code: 429
+        rejected_msg: "请求过于频繁，请稍后再试"
+      jwt-auth:
+        secret: "${JWT_SECRET_KEY}"
+
+  # ── Content Service (Public) ──
+  - id: 2
+    uri: "/api/v1/cases/*"
+    upstream_id: 2
+    priority: 5
+    plugins:
+      limit-count:
+        count: 2000
+        time_window: 1
+        rejected_code: 429
+      proxy-cache:
+        cache_ttl: 60
+        cache_key: ["$uri", "$args"]
+
+  - id: 3
+    uri: "/api/v1/works/*"
+    upstream_id: 2
+    priority: 5
+
+  # ── Script Service (AI Generation) ──
+  - id: 4
+    uri: "/api/v1/scripts/*"
+    upstream_id: 3
+    priority: 10
+    plugins:
+      limit-count:
+        count: 50
+        time_window: 1
+        burst: 20
+        rejected_code: 429
+      api-breaker:
+        break_response_code: 503
+        max_breaker_sec: 30
+        unhealthy:
+          http_statuses: [500, 502, 503, 504]
+          failures: 5
+        healthy:
+          http_statuses: [200]
+          successes: 3
+      proxy-rewrite:
+        headers:
+          set:
+            X-Gateway: apisix
+
+  # ── Comments ──
+  - id: 5
+    uri: "/api/v1/comments/*"
+    upstream_id: 3
+    priority: 5
+
+  # ── Storyboard Service ──
+  - id: 6
+    uri: "/api/v1/storyboard/*"
+    upstream_id: 4
+    priority: 10
+    plugins:
+      limit-count:
+        count: 50
+        time_window: 1
+        burst: 20
+        rejected_code: 429
+      api-breaker:
+        break_response_code: 503
+        max_breaker_sec: 30
+        unhealthy:
+          http_statuses: [500, 502, 503]
+          failures: 5
+        healthy:
+          http_statuses: [200]
+          successes: 3
+
+  # ── LLMHua Service (Image/Video) ──
+  - id: 7
+    uri: "/api/v1/llmhua/*"
+    upstream_id: 5
+    priority: 10
+    plugins:
+      limit-count:
+        count: 30
+        time_window: 1
+        burst: 10
+        rejected_code: 429
+      api-breaker:
+        break_response_code: 503
+        max_breaker_sec: 60
+        unhealthy:
+          http_statuses: [500, 502, 503, 504]
+          failures: 3
+        healthy:
+          http_statuses: [200]
+          successes: 2
+
+  # ── Video Service ──
+  - id: 8
+    uri: "/api/v1/videos/*"
+    upstream_id: 6
+    priority: 10
+    plugins:
+      limit-count:
+        count: 100
+        time_window: 1
+        burst: 30
+        rejected_code: 429
+
+  # ── Final Cut Service ──
+  - id: 9
+    uri: "/api/v1/final-cut/*"
+    upstream_id: 7
+    priority: 10
+    plugins:
+      limit-count:
+        count: 20
+        time_window: 1
+        burst: 5
+        rejected_code: 429
+
+  # ── Recommendation Service ──
+  - id: 10
+    uri: "/api/v1/recommendations/*"
+    upstream_id: 8
+    priority: 5
+    plugins:
+      limit-count:
+        count: 2000
+        time_window: 1
+        rejected_code: 429
+      proxy-cache:
+        cache_ttl: 30
+        cache_key: ["$uri", "$args"]
+
+  # ── Health & Metrics (no upstream) ──
+  - id: 99
+    uri: "/health"
+    priority: 1
+    plugins:
+      redirect:
+        http_to_https: false
+
+# ═══════════════════════════════════════════
+# Service-level Plugin Configs
+# ═══════════════════════════════════════════
+# ssli:
+#   - id: 1
+#     sni: shortdrama.com
+#     cert: /path/to/cert.pem
+#     key: /path/to/key.pem
+#     status: 1

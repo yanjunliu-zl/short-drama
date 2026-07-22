@@ -16,6 +16,8 @@ volumes:
     driver: local
   clickhouse_data:
     driver: local
+  etcd_data:
+    driver: local
   go-mod-cache:
     driver: local
   prometheus_data:
@@ -194,6 +196,64 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # ═══════════════════════════════════════════
+  # API Gateway — Apache APISIX (高性能替代 Traefik)
+  # ═══════════════════════════════════════════
+  apisix:
+    image: apache/apisix:3.10.0-debian
+    container_name: shortdrama-apisix
+    restart: unless-stopped
+    ports:
+      - "9080:9080"   # HTTP
+      - "9443:9443"   # HTTPS
+    volumes:
+      - ./backend/api-gateway/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./backend/api-gateway/apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+    environment:
+      APISIX_STAND_ALONE: "true"   # Standalone mode (no etcd needed for dev)
+    networks:
+      - shortdrama-network
+    depends_on:
+      - etcd
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9080/apisix/status"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  etcd:
+    image: bitnami/etcd:3.5
+    container_name: shortdrama-etcd
+    restart: unless-stopped
+    environment:
+      ALLOW_NONE_AUTHENTICATION: "yes"
+      ETCD_ADVERTISE_CLIENT_URLS: "http://etcd:2379"
+      ETCD_LISTEN_CLIENT_URLS: "http://0.0.0.0:2379"
+    ports:
+      - "2379:2379"
+    volumes:
+      - etcd_data:/bitnami/etcd
+    networks:
+      - shortdrama-network
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  apisix-dashboard:
+    image: apache/apisix-dashboard:3.0.1-alpine
+    container_name: shortdrama-apisix-dashboard
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./backend/api-gateway/apisix/dashboard-conf.yaml:/usr/local/apisix-dashboard/conf/conf.yaml:ro
+    networks:
+      - shortdrama-network
+    depends_on:
+      - apisix
 
   # ============================================================
   # P0: 服务发现 — Consul 3节点集群

@@ -1,0 +1,78 @@
+# APISIX Standalone Configuration (dev mode — no etcd required)
+# Production: use etcd for dynamic config updates without restart
+apisix:
+  node_listen: 9080
+  enable_admin: true
+  enable_admin_cors: true
+  enable_dev_mode: true
+  enable_reuseport: true
+  enable_ipv6: false
+
+  # Plugin execution order
+  plugin_attr:
+    prometheus:
+      export_addr:
+        ip: "0.0.0.0"
+        port: 9091
+
+# etcd configuration (production mode)
+# etcd:
+#   host:
+#     - "http://etcd:2379"
+#   prefix: "/apisix"
+#   timeout: 30
+
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+
+nginx_config:
+  worker_processes: auto
+  worker_rlimit_nofile: 65535
+  worker_connections: 16384
+  keepalive_timeout: 60s
+  client_max_body_size: 20m
+
+  http_configuration_snippet: |
+    upstream apisix_backend {
+        server 0.0.0.1;
+        balancer_by_lua_block {
+            apisix.http_balancer_phase()
+        }
+    }
+
+plugins:
+  # Core plugins (enabled by default)
+  - real-ip
+  - client-control
+  - proxy-rewrite
+  - redirect
+  - response-rewrite
+  - cors
+  - gzip
+  # Auth plugins
+  - jwt-auth
+  - key-auth
+  - basic-auth
+  - forward-auth
+  # Traffic control
+  - limit-conn
+  - limit-count
+  - limit-req
+  - api-breaker
+  - proxy-cache
+  - request-validation
+  # Observability
+  - prometheus
+  - zipkin
+  - skywalking
+  - opentelemetry
+  - file-logger
+  - http-logger
+  - kafka-logger
+  # Transform
+  - grpc-transcode
+  - grpc-web
+  - serverless-pre-function
+  - serverless-post-function
