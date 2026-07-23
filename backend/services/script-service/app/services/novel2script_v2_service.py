@@ -932,7 +932,7 @@ class Novel2ScriptV2Service:
 
         try:
             # Reuse V1's ExtractEntitiesResponse schema
-            from app.schemas.novel import ExtractEntitiesResponse
+            from app.schemas.novel_v2 import ExtractEntitiesResponse
             structured_model = self.llm.with_structured_output(
                 ExtractEntitiesResponse, method="json_mode"
             )

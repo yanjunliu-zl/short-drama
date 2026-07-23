@@ -38,7 +38,6 @@ class ScriptFromNovelRequest(BaseModel):
     style: Optional[str] = Field(default="浪漫喜剧", description="剧本风格")
     user_id: Optional[str] = Field(default="", description="用户ID")
     excerpt_ratio: Optional[float] = Field(default=0.3, description="抽取比例(0-1)，用于长小说")
-    pipeline_version: Optional[str] = Field(default="v2", description="Pipeline版本: 'v1' (ViMax) or 'v2' (RAG-based)")
     stream: bool = Field(default=False, description="是否启用SSE流式输出")
 
 

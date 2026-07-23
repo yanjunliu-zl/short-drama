@@ -23,7 +23,6 @@ from app.schemas.script import (
     ScriptSplitResponse,
 )
 from app.services.script_service import ScriptService
-from app.services.novel2script_service import Novel2ScriptService
 from app.core.deps import get_script_service
 from app.core.config import settings
 from app.utils.sse import format_sse_event, EVENT_ERROR, EVENT_DONE
@@ -372,10 +371,12 @@ async def extract_entities(
     t0 = time.time()
 
     try:
+        from app.services.novel2script_v2_service import Novel2ScriptV2Service
         mock_mode = getattr(script_service.ai_service, '_mock_mode', False)
-        n2s = Novel2ScriptService(
+        n2s_v2 = Novel2ScriptV2Service(
             llm=script_service.ai_service.llm if not mock_mode else None,
-            mock_mode=mock_mode
+            mock_mode=mock_mode,
+            config=settings,
         )
 
         # 如果有 script_id，尝试从数据库获取预提取的角色和事件
@@ -408,7 +409,7 @@ async def extract_entities(
                 }
             # 仅提取道具
             try:
-                props_result = await n2s.extract_entities(content)
+                props_result = await n2s_v2._extract_entities_from_script(content, [], {})
                 result = {
                     "characters": pre_extracted_characters,
                     "locations": pre_extracted_locations,
@@ -430,7 +431,7 @@ async def extract_entities(
         if not content:
             raise HTTPException(status_code=400, detail="Content is required")
 
-        result = await n2s.extract_entities(content)
+        result = await n2s_v2._extract_entities_from_script(content, [], {})
         logger.info(f"[extract-entities] 完整LLM提取完成 "
                     f"角色={len(result.get('characters',[]))} "
                     f"地点={len(result.get('locations',[]))} "
@@ -716,4 +717,87 @@ async def generate_from_outline_sync(
         raise
     except Exception as e:
         logger.error(f"[API] POST /generate/from-outline-sync 异常 title={request.title}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Export endpoints ──
+
+from app.services.export_service import ExportService, ExportFormat, ExportTarget
+
+_export_service = ExportService()
+
+
+@router.post("/{script_id}/export")
+async def export_script(
+    script_id: int,
+    target: str = "all",
+    format: str = "auto",
+    script_service: ScriptService = Depends(get_script_service),
+):
+    """导出剧本为下游 AI 成片工具兼容格式。
+
+    Args:
+        script_id: 剧本 ID
+        target: 目标平台 — 'xiaoyunque' | 'libtv' | 'jurilu' | 'all'（默认）
+        format: 导出格式 — 'raw_text' | 'structured_json' | 'storyboard_json' | 'auto'（默认，自动选最佳格式）
+    """
+    logger.info(f"[API] POST /{script_id}/export target={target} format={format}")
+    t0 = time.time()
+
+    try:
+        script = await script_service.get_script(script_id)
+        if not script:
+            raise HTTPException(status_code=404, detail="Script not found")
+
+        script_content = script.get("content", "")
+        title = script.get("title", "")
+        characters = json.loads(script.get("characters", "[]") or "[]") if isinstance(script.get("characters"), str) else (script.get("characters") or [])
+        episodes = script.get("episodes", [])
+
+        if target == "all":
+            results = _export_service.export_all_formats(
+                script_content, title=title, characters=characters, episodes=episodes
+            )
+            elapsed = time.time() - t0
+            logger.info(f"[API] POST /{script_id}/export all platforms done "
+                        f"chars={len(script_content)} elapsed={elapsed:.1f}s")
+            return {
+                "script_id": script_id,
+                "title": title,
+                "exports": {k: v.to_dict() for k, v in results.items()},
+                "elapsed_ms": int(elapsed * 1000),
+            }
+        else:
+            export_target = ExportTarget(target)
+            if format == "auto":
+                # Auto-select best format per platform
+                format_map = {
+                    ExportTarget.XIAOYUNQUE: ExportFormat.RAW_TEXT,
+                    ExportTarget.LIBTV: ExportFormat.STORYBOARD_JSON,
+                    ExportTarget.JURILU: ExportFormat.RAW_TEXT,
+                }
+                export_format = format_map[export_target]
+            else:
+                export_format = ExportFormat(format)
+
+            result = _export_service.export(
+                script_content, export_target, export_format,
+                title=title, characters=characters, episodes=episodes,
+            )
+            elapsed = time.time() - t0
+            logger.info(f"[API] POST /{script_id}/export target={target} format={export_format.value} "
+                        f"chars={len(script_content)} warnings={len(result.warnings)} elapsed={elapsed:.1f}s")
+            return {
+                "script_id": script_id,
+                "title": title,
+                "export": result.to_dict(),
+                "elapsed_ms": int(elapsed * 1000),
+            }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[API] POST /{script_id}/export 异常: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -71,3 +71,26 @@ class GlobalInfoResponse(BaseModel):
     relationships: List[CharacterRelation] = Field(default_factory=list, description="角色关系图谱")
     key_scenes: List[GlobalScene] = Field(default_factory=list, description="核心场景汇总")
     key_props: List[GlobalProp] = Field(default_factory=list, description="高频核心道具汇总")
+
+
+# ── Entity Extraction (shared across V2 pipeline and standalone API) ──
+
+class ExtractedEntity(BaseModel):
+    """通用实体"""
+    name: str = Field(..., description="实体名称")
+    description: str = Field(default="", description="简要描述")
+
+
+class ExtractedCharacterEntity(BaseModel):
+    """提取的角色实体"""
+    name: str = Field(..., description="角色名")
+    role: str = Field(default="配角", description="角色：主角/配角/反派/群众")
+    gender: str = Field(default="", description="性别：男/女")
+    description: str = Field(default="", description="视觉描述")
+
+
+class ExtractEntitiesResponse(BaseModel):
+    """实体提取 LLM 结构化输出"""
+    characters: List[ExtractedCharacterEntity] = Field(default_factory=list)
+    locations: List[ExtractedEntity] = Field(default_factory=list)
+    props: List[ExtractedEntity] = Field(default_factory=list)
