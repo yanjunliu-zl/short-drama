@@ -638,7 +638,7 @@ services:
   # ============================================================
   recommendation-service:
     build:
-      context: ./backend/services/recommendation-service
+      context: ./recommendation-service
       dockerfile: Dockerfile
     container_name: shortdrama-recommendation-service
     restart: unless-stopped
@@ -658,7 +658,7 @@ services:
     ports:
       - "8004:8004"
     volumes:
-      - ./backend/services/recommendation-service:/app
+      - ./recommendation-service:/app
     networks:
       - shortdrama-network
     depends_on:
