@@ -599,6 +599,20 @@ async def generate_from_outline_sync(
             config=app_settings,
         )
 
+        # ── 情节结构模板: 自动匹配最佳模板 ──
+        from app.services.plot_templates import match_template
+        plot_template = match_template(
+            style=style,
+            theme=getattr(request, 'theme', ''),
+            outline=getattr(request, 'outline', ''),
+        )
+        template_context = ""
+        if plot_template:
+            template_context = plot_template.to_prompt_context()
+            target_eps = plot_template.total_episodes  # Override episode count to match template
+            logger.info(f"[V2大纲] 情节模板匹配: {plot_template.genre_cn} ({plot_template.template_id}) "
+                        f"episodes={target_eps}")
+
         # ── 海外本土化: 注入 locale-aware 上下文 ──
         target_locale = getattr(request, 'target_locale', 'zh-CN') or 'zh-CN'
         extra_context = ""
@@ -673,9 +687,12 @@ async def generate_from_outline_sync(
             )
 
         # Merge locale context with user preferences
-        full_context = user_context
+        # Merge: template context (highest priority) + user prefs + locale context
+        full_context = template_context
+        if user_context:
+            full_context = f"{user_context}\n\n{full_context}" if full_context else user_context
         if extra_context:
-            full_context = f"{user_context}\n\n{extra_context}" if user_context else extra_context
+            full_context = f"{full_context}\n\n{extra_context}" if full_context else extra_context
 
         # ---- Non-streaming path (existing code) ----
         result = await _asyncio.wait_for(
@@ -819,6 +836,225 @@ async def export_script(
     except Exception as e:
         logger.error(f"[API] POST /{script_id}/export 异常: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Multi-Version Generation ──
+
+@router.post("/generate/multi-version")
+async def generate_multi_version(
+    request: ScriptFromOutlineRequest,
+    script_service: ScriptService = Depends(get_script_service),
+):
+    """生成 3 个版本的剧本（不同叙事角度），自动对比评分，返回最佳版本。
+
+    对标: Sudowrite Brainstorm + QualityJudge A/B 对比。
+
+    三个版本:
+    - A: 标准短剧风格（快节奏，强钩子，每集结尾悬念）
+    - B: 情感向（更深的人物塑造，情感层次丰富）
+    - C: 反转向（更多 plot twist，出人意料的转折）
+
+    Returns:
+        {
+            versions: [{version, script, score, strengths, weaknesses}],
+            winner: {...},
+            comparison: CompareReport
+        }
+    """
+    import asyncio as _asyncio
+    from app.services.novel2script_v2_service import Novel2ScriptV2Service
+    from app.core.config import settings as app_settings
+    from app.services.quality_judge import QualityJudge
+
+    t0 = time.time()
+    logger.info(f"[API] POST /generate/multi-version title={request.title} "
+                f"outline_len={len(getattr(request, 'outline', '') or '')}")
+
+    try:
+        await script_service.initialize()
+        mock_mode = getattr(script_service.ai_service, '_mock_mode', False)
+
+        style = getattr(request, 'style', '') or app_settings.N2S_V2_DEFAULT_STYLE
+        outline = getattr(request, 'outline', '')
+
+        # Three narrative angles
+        angles = [
+            {
+                "version": "A",
+                "label": "标准风格",
+                "angle_prompt": (
+                    "采用标准短剧风格: 快节奏、每集结尾强钩子、3秒一反转、10秒一记忆点。"
+                    "对话简洁有力，场景转换快速。付费点位置卡得精准。"
+                ),
+            },
+            {
+                "version": "B",
+                "label": "情感向",
+                "angle_prompt": (
+                    "采用情感向风格: 更深的角色塑造、丰富的情感层次、让观众产生共情。"
+                    "牺牲一些速度换取角色的真实感和成长弧光。对白更细腻。"
+                ),
+            },
+            {
+                "version": "C",
+                "label": "反转向",
+                "angle_prompt": (
+                    "采用高反转风格: 大量 plot twist、出人意料的转折、让观众不断惊呼'原来是这样'。"
+                    "每个反转都要有逻辑铺垫但不能太明显。节奏可以稍慢但每个反转必须有冲击力。"
+                ),
+            },
+        ]
+
+        # Generate all 3 versions concurrently
+        async def generate_version(angle: dict) -> dict:
+            logger.info(f"[multi-version] Generating version {angle['version']} ({angle['label']})...")
+            v_t0 = time.time()
+
+            n2s = Novel2ScriptV2Service(
+                llm=script_service.ai_service.llm if not mock_mode else None,
+                mock_mode=mock_mode, config=app_settings,
+            )
+
+            # Inject angle into outline
+            angled_outline = f"{outline}\n\n【叙事角度要求】{angle['angle_prompt']}"
+
+            result = await n2s.run_full_pipeline(
+                novel_text=angled_outline,
+                style=style,
+                target_episodes=10,
+            )
+
+            elapsed = time.time() - v_t0
+            logger.info(f"[multi-version] Version {angle['version']} done ({elapsed:.1f}s)")
+
+            return {
+                "version": angle["version"],
+                "label": angle["label"],
+                "script_content": result.get("final_script", ""),
+                "episodes": result.get("episodes", []),
+                "characters": result.get("entities", {}).get("characters", []),
+                "elapsed_ms": int(elapsed * 1000),
+            }
+
+        versions = await _asyncio.gather(
+            *[generate_version(a) for a in angles], return_exceptions=True
+        )
+
+        # Filter out failed versions
+        valid_versions = [v for v in versions if not isinstance(v, Exception) and v.get("script_content")]
+
+        if not valid_versions:
+            raise HTTPException(status_code=500, detail="All versions failed to generate")
+
+        # QualityJudge scoring
+        judge = QualityJudge(
+            script_service.ai_service.llm if not mock_mode else None,
+            enabled=not mock_mode,
+        )
+
+        scored_versions = []
+        for v in valid_versions:
+            if not mock_mode:
+                report = await judge.judge_script(
+                    content=v["script_content"],
+                    title=request.title,
+                    style=style,
+                    max_chars=6000,
+                )
+                v["score"] = report.total_score
+                v["strengths"] = report.strengths
+                v["weaknesses"] = report.weaknesses
+                v["suggestions"] = report.suggestions
+            else:
+                v["score"] = 75
+                v["strengths"] = ["mock mode"]
+                v["weaknesses"] = []
+                v["suggestions"] = ""
+            scored_versions.append(v)
+
+        # Sort by score
+        scored_versions.sort(key=lambda v: v["score"], reverse=True)
+        winner = scored_versions[0]
+
+        # Pairwise comparison (winner vs runner-up)
+        comparison = None
+        if len(scored_versions) >= 2 and not mock_mode:
+            runner_up = scored_versions[1]
+            comparison = await judge.compare_scripts(
+                script_a=winner["script_content"],
+                script_b=runner_up["script_content"],
+                label_a=f"Version {winner['version']} ({winner['label']})",
+                label_b=f"Version {runner_up['version']} ({runner_up['label']})",
+                max_chars=4000,
+            )
+
+        elapsed = time.time() - t0
+        logger.info(f"[API] POST /generate/multi-version done: "
+                    f"{len(scored_versions)} versions, winner={winner['version']}, "
+                    f"elapsed={elapsed:.1f}s")
+
+        return {
+            "success": True,
+            "data": {
+                "title": request.title,
+                "versions": scored_versions,
+                "winner": {
+                    "version": winner["version"],
+                    "label": winner["label"],
+                    "score": winner["score"],
+                    "strengths": winner["strengths"],
+                },
+                "comparison": {
+                    "winner": comparison.winner if comparison else winner["version"],
+                    "confidence": comparison.confidence if comparison else 1.0,
+                    "score_a": comparison.score_a if comparison else winner["score"],
+                    "score_b": comparison.score_b if comparison else (scored_versions[1]["score"] if len(scored_versions) > 1 else 0),
+                    "key_differences": comparison.key_differences if comparison else [],
+                    "verdict_summary": comparison.verdict_summary if comparison else "",
+                } if comparison else None,
+                "elapsed_ms": int(elapsed * 1000),
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[API] POST /generate/multi-version 异常: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Plot Templates ──
+
+@router.get("/templates")
+async def list_plot_templates():
+    """列出所有可用的情节结构模板"""
+    from app.services.plot_templates import list_templates
+    templates = list_templates()
+    return {"success": True, "data": templates, "total": len(templates)}
+
+
+@router.get("/templates/match")
+async def match_plot_template(style: str = "", theme: str = ""):
+    """根据风格和主题自动匹配最佳情节模板"""
+    from app.services.plot_templates import match_template, list_templates
+    template = match_template(style=style, theme=theme)
+    if template:
+        return {
+            "success": True,
+            "data": {
+                "matched": True,
+                "template_id": template.template_id,
+                "genre_cn": template.genre_cn,
+                "total_episodes": template.total_episodes,
+                "character_archetypes": template.character_archetypes,
+                "structure_summary": [
+                    {"episode": ep.episode, "title": ep.title_hint, "beat": ep.primary_beat.value, "cliffhanger": ep.cliffhanger[:80]}
+                    for ep in template.episodes[:8]
+                ],
+                "paywall_positions": template.get_paywall_positions(),
+            },
+        }
+    return {"success": True, "data": {"matched": False, "available": [t["template_id"] for t in list_templates()]}}
 
 
 # ── Localization endpoints ──
