@@ -236,7 +236,7 @@ Our video output is designed for direct submission to mainstream short drama pla
 | **Aspect Ratio** | 9:16 vertical (1080×1920) | ⚠️ Currently 16:9 horizontal → Configurable to 9:16 |
 | **Frame Rate** | 25fps or 30fps | ⚠️ Default 24fps → Configurable (Seedance parameter) |
 | **Video Codec** | H.264 (AVC) or H.265 (HEVC) | ✅ Seedance output is MP4/H.264 |
-| **Audio** | AAC stereo, 128kbps+ | ⚠️ No audio generation (video-only) → Need TTS integration |
+| **Audio** | AAC stereo, 128kbps+ | ✅ Seedance 2.0 generates audio natively from prompt |
 | **Bitrate** | 2-8 Mbps (1080p) | ✅ Seedance default bitrate within range |
 | **File Size** | < 500MB per episode | ✅ 5-15s clips are well within limit |
 | **Watermark** | Must be watermark-free | ✅ Seedance watermark=False |
@@ -287,9 +287,9 @@ Quality Check:
 | Category | Compliance | Gap |
 |----------|-----------|-----|
 | Video Resolution | ✅ | — |
-| Aspect Ratio | ⚠️ | Default is 16:9; needs 9:16 config flag |
-| Frame Rate | ⚠️ | Default 24fps; needs 30fps option |
-| Audio Track | ❌ | No audio generation; TTS pipeline needed |
+| Aspect Ratio | ✅ | Default 9:16, configurable (PORTRAIT_MODE) |
+| Frame Rate | ✅ | Default 30fps, configurable (VIDEO_FPS) |
+| Audio Track | ✅ | Seedance 2.0 generates audio natively |
 | Episode Structure | ✅ | Cliffhanger + episode markers built into prompt |
 | Content Safety | ✅ | 4-dimension checker + LLM-as-Judge |
 | Duration Range | ✅ | Adaptive duration per episode |

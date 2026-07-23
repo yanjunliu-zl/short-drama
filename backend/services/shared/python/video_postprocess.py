@@ -220,58 +220,58 @@ class VideoPostProcessor:
             return await self.process(input_path, output_path, **kwargs)
 
 
-# ── TTS Placeholder Pipeline ──
+# ── Audio Verification ──
 
-class TTSPipeline:
-    """Text-to-Speech placeholder — generates audio track for short drama.
+class AudioVerifier:
+    """Verify that Seedance-generated video contains an audio track.
 
-    P1: Integrate with Edge TTS / Azure TTS / Coqui TTS for production.
-    Currently: generates silent audio track matching video duration.
+    Seedance 2.0 natively generates audio from the video prompt.
+    This module validates the output for platform compliance.
     """
 
-    async def generate_audio(self, script_text: str,
-                             output_path: str,
-                             duration_seconds: float = 10.0,
-                             voice: str = "zh-CN-XiaoxiaoNeural") -> bool:
-        """Generate audio track from script text.
-
-        P1 implementation: use Azure Cognitive Services TTS or Edge TTS.
-        Current: generates silent placeholder using ffmpeg.
-        """
+    @staticmethod
+    async def has_audio(video_path: str) -> bool:
+        """Check if video file contains an audio stream."""
         try:
             cmd = [
-                "ffmpeg", "-f", "lavfi",
-                "-i", f"anullsrc=r=44100:cl=stereo:d={duration_seconds}",
-                "-c:a", "aac", "-b:a", "128k",
-                "-y", output_path,
+                "ffprobe", "-v", "error",
+                "-select_streams", "a:0",
+                "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0",
+                video_path,
             ]
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            await proc.communicate()
-            logger.info(f"Audio placeholder generated: {output_path} "
-                        f"({duration_seconds}s)")
-            return True
-        except Exception as e:
-            logger.warning(f"Audio generation failed: {e}")
+            stdout, _ = await proc.communicate()
+            return b"audio" in stdout
+        except Exception:
             return False
 
-    async def merge_audio_video(self, video_path: str, audio_path: str,
-                                output_path: str) -> bool:
-        """Merge separate audio and video tracks."""
+    @staticmethod
+    async def get_audio_info(video_path: str) -> dict:
+        """Get audio stream metadata from video file."""
         try:
+            import json
             cmd = [
-                "ffmpeg",
-                "-i", video_path,
-                "-i", audio_path,
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-shortest",
-                "-y", output_path,
+                "ffprobe", "-v", "quiet",
+                "-print_format", "json",
+                "-show_streams", "-select_streams", "a",
+                video_path,
             ]
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            await proc.communicate()
-            return True
-        except Exception as e:
-            logger.warning(f"Audio-video merge failed: {e}")
-            return False
+            stdout, _ = await proc.communicate()
+            data = json.loads(stdout)
+            streams = data.get("streams", [])
+            if streams:
+                s = streams[0]
+                return {
+                    "codec": s.get("codec_name", "unknown"),
+                    "channels": s.get("channels", 0),
+                    "sample_rate": s.get("sample_rate", 0),
+                    "bitrate": s.get("bit_rate", "unknown"),
+                }
+        except Exception:
+            pass
+        return {}
+
