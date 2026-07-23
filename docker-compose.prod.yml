@@ -92,6 +92,12 @@ services:
       resources:
         limits: { cpus: '2', memory: 2G }
 
+  search-service:
+    deploy:
+      replicas: ${SEARCH_SERVICE_REPLICAS:-2}
+      resources:
+        limits: { cpus: '0.5', memory: 256M }
+
   recommendation-service:
     deploy:
       replicas: ${RECOMMENDATION_SERVICE_REPLICAS:-2}

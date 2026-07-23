@@ -92,6 +92,12 @@ upstreams:
     nodes:
       "recommendation-service:8004": 1
 
+  - id: 9
+    name: search-service
+    type: roundrobin
+    nodes:
+      "search-service:8005": 1
+
 # ═══════════════════════════════════════════
 # Routes
 # ═══════════════════════════════════════════
@@ -228,8 +234,19 @@ routes:
         burst: 5
         rejected_code: 429
 
-  # ── Recommendation Service ──
+  # ── Search Service ──
   - id: 10
+    uri: "/api/v1/search*"
+    upstream_id: 9
+    priority: 5
+    plugins:
+      limit-count:
+        count: 2000
+        time_window: 1
+        rejected_code: 429
+
+  # ── Recommendation Service ──
+  - id: 11
     uri: "/api/v1/recommendations/*"
     upstream_id: 8
     priority: 5
