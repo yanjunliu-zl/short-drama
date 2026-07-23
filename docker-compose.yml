@@ -636,7 +636,7 @@ services:
   # ============================================================
   # 推荐系统服务 (FastAPI + PyTorch Wide&Deep)
   # ============================================================
-  # ═══════════════ Search Service ═══════════════
+  # ═══════════════ Search Service (Go) ═══════════════
   search-service:
     build:
       context: ./search-service
@@ -644,29 +644,25 @@ services:
     container_name: shortdrama-search-service
     restart: unless-stopped
     environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_ADDR=redis:6379
       - REDIS_DB=12
       - SEARCH_SERVICE_PORT=8005
       - CONTENT_SERVICE_URL=http://content-service:8081
       - LOG_LEVEL=INFO
     ports:
       - "8005:8005"
-    volumes:
-      - ./search-service:/app
     networks:
       - shortdrama-network
     depends_on:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8005/health"]
       interval: 30s
       timeout: 5s
       retries: 3
-    command: uvicorn main:app --host 0.0.0.0 --port 8005 --reload --workers 2
 
-  # ═══════════════ Recommendation Service ═══════════════
+  # ═══════════════ Recommendation Service (Go) ═══════════════
   recommendation-service:
     build:
       context: ./recommendation-service
@@ -674,22 +670,13 @@ services:
     container_name: shortdrama-recommendation-service
     restart: unless-stopped
     environment:
-      - APP_ENV=development
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_USER=admin
-      - DB_PASSWORD=admin123
-      - DB_NAME=shortdrama
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - MYSQL_DSN=admin:admin123@tcp(mysql:3306)/shortdrama?parseTime=true
+      - REDIS_ADDR=redis:6379
       - REDIS_DB=11
       - PORT=8004
       - LOG_LEVEL=INFO
-      - DEBUG=false
     ports:
       - "8004:8004"
-    volumes:
-      - ./recommendation-service:/app
     networks:
       - shortdrama-network
     depends_on:
@@ -697,13 +684,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    labels:
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8004/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
-    command: uvicorn main:app --host 0.0.0.0 --port 8004 --reload --workers 2
 
   # ============================================================
   # 链路追踪 — Jaeger
