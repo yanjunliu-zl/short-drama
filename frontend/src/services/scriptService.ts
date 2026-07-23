@@ -186,6 +186,32 @@ export const scriptService = {
     return response.data
   },
 
+  // 多版本生成 (3 versions + auto-compare)
+  generateMultiVersion: async (data: {
+    title: string; outline: string; theme: string; length: string
+    characters?: string[]; setting?: string; style?: string; user_id?: string
+  }): Promise<ApiResponse<{
+    title: string
+    versions: Array<{ version: string; label: string; script_content: string; score: number; strengths: string[]; weaknesses: string[]; episodes: any[] }>
+    winner: { version: string; label: string; score: number; strengths: string[] }
+    comparison: { winner: string; confidence: number; verdict_summary: string; key_differences: string[] } | null
+  }>> => {
+    const response = await api.post('/v1/scripts/generate/multi-version', data, { timeout: 600000 })
+    return response.data
+  },
+
+  // 获取情节模板列表
+  getPlotTemplates: async (): Promise<ApiResponse<{ data: Array<{ template_id: string; genre: string; genre_cn: string; description: string; total_episodes: number }> }>> => {
+    const response = await api.get('/v1/scripts/templates')
+    return response.data
+  },
+
+  // 匹配情节模板
+  matchPlotTemplate: async (style: string, theme: string): Promise<ApiResponse<{ matched: boolean; template_id?: string; genre_cn?: string; total_episodes?: number }>> => {
+    const response = await api.get('/v1/scripts/templates/match', { params: { style, theme } })
+    return response.data
+  },
+
   // 从大纲/想法生成剧本
   generateScriptFromOutline: async (data: {
     title: string

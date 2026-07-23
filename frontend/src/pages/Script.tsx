@@ -24,6 +24,7 @@ import {
   Empty,
   Spin,
   Dropdown,
+  Alert,
 } from 'antd';
 import { usePipelinePersistence, clearPipelineStorage } from '@/hooks/usePipelinePersistence';
 import { pipelineService } from '@/services/pipelineService';
@@ -50,6 +51,7 @@ import {
   SettingOutlined,
   ExperimentOutlined,
   DownloadOutlined,
+  TrophyOutlined,
 } from '@ant-design/icons';
 import { scriptService } from '@/services/scriptService';
 import { workService } from '@/services/workService';
@@ -115,6 +117,17 @@ const Script: React.FC = () => {
   const [formLength, setFormLength] = useState('短篇');
   const [formSetting, setFormSetting] = useState('现代都市');
   const [targetLocale, setTargetLocale] = useState('zh-CN');
+  const [multiVersion, setMultiVersion] = useState(false);
+
+  // Multi-version result state
+  const [multiVersions, setMultiVersions] = useState<any[]>([])
+  const [multiWinner, setMultiWinner] = useState<any>(null)
+  const [multiComparison, setMultiComparison] = useState<any>(null)
+  const [versionModalOpen, setVersionModalOpen] = useState(false)
+  const [selectedVersion, setSelectedVersion] = useState<string>('')
+
+  // Template match state
+  const [matchedTemplate, setMatchedTemplate] = useState<any>(null)
 
   // ============ 分集剧本编辑状态 ============
   const [episodes, setEpisodes] = useState<Episode[]>([]);
@@ -468,28 +481,69 @@ const Script: React.FC = () => {
           theme: formTheme,
         });
       } else if (inputTab === 'idea') {
-        // 同步生成，直接等 AI 返回结果（不走轮询）
-        setGenerationProgress(30);
-        const result = await scriptService.generateScriptFromOutlineSync({
-          title: formTitle, outline: formContent,
-          theme: formTheme, length: formLength,
-          style: formStyle, setting: formSetting,
-          user_id: String(userId || 'anonymous'),
-          target_locale: targetLocale,
-        });
-        setGenerationProgress(100);
-        setGeneratedScriptTitle(result.title);
-        const parsedEpisodes: Episode[] = result.episodes.map((ep: any) => ({
-          id: `ep-${ep.episode_number || 1}-${Date.now().toString(36)}`,
-          title: ep.title || `第${ep.episode_number || 1}集`,
-          number: ep.episode_number || 1,
-          scenes: [], characters: [],
-          description: ep.content || '',
-        }));
-        setEpisodes(parsedEpisodes);
-        setGenerationStatus('completed');
-        setGenerationProgress(100);
-        if (parsedEpisodes.length > 0) setActiveEpisodeId(parsedEpisodes[0].id);
+        // Match plot template
+        try {
+          const tmpl = await scriptService.matchPlotTemplate(formStyle, formTheme)
+          if ((tmpl as any)?.data?.matched) setMatchedTemplate((tmpl as any).data)
+        } catch {}
+
+        if (multiVersion) {
+          // Multi-version generation
+          setGenerationProgress(30);
+          const result = await scriptService.generateMultiVersion({
+            title: formTitle, outline: formContent,
+            theme: formTheme, length: formLength,
+            style: formStyle, setting: formSetting,
+            user_id: String(userId || 'anonymous'),
+          });
+          setGenerationProgress(100);
+          const data = (result as any)?.data
+          if (data?.versions) {
+            setMultiVersions(data.versions)
+            setMultiWinner(data.winner)
+            setMultiComparison(data.comparison)
+            setSelectedVersion(data.winner?.version || data.versions[0]?.version || '')
+            setVersionModalOpen(true)
+            // Load winner's episodes by default
+            const winnerVer = data.versions.find((v: any) => v.version === data.winner?.version) || data.versions[0]
+            if (winnerVer?.episodes) {
+              setGeneratedScriptTitle(formTitle)
+              const parsedEpisodes: Episode[] = winnerVer.episodes.map((ep: any) => ({
+                id: `ep-${ep.episode_number || 1}-${Date.now().toString(36)}`,
+                title: ep.title || `第${ep.episode_number || 1}集`,
+                number: ep.episode_number || 1,
+                scenes: [], characters: [],
+                description: ep.content || '',
+              }))
+              setEpisodes(parsedEpisodes)
+              if (parsedEpisodes.length > 0) setActiveEpisodeId(parsedEpisodes[0].id)
+            }
+          }
+          setGenerationStatus('completed')
+        } else {
+          // Standard generation
+          setGenerationProgress(30);
+          const result = await scriptService.generateScriptFromOutlineSync({
+            title: formTitle, outline: formContent,
+            theme: formTheme, length: formLength,
+            style: formStyle, setting: formSetting,
+            user_id: String(userId || 'anonymous'),
+            target_locale: targetLocale,
+          });
+          setGenerationProgress(100);
+          setGeneratedScriptTitle(result.title);
+          const parsedEpisodes: Episode[] = result.episodes.map((ep: any) => ({
+            id: `ep-${ep.episode_number || 1}-${Date.now().toString(36)}`,
+            title: ep.title || `第${ep.episode_number || 1}集`,
+            number: ep.episode_number || 1,
+            scenes: [], characters: [],
+            description: ep.content || '',
+          }));
+          setEpisodes(parsedEpisodes);
+          setGenerationStatus('completed');
+          setGenerationProgress(100);
+          if (parsedEpisodes.length > 0) setActiveEpisodeId(parsedEpisodes[0].id);
+        }
 
         // 保存到 localStorage 和后端
         const scriptData = {
@@ -1149,6 +1203,33 @@ const Script: React.FC = () => {
             <Option value="th-TH">🇹🇭 东南亚 — Lakorn Romance / Comedy</Option>
           </Select>
         </Form.Item>
+
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item label="情节模板" tooltip="AI 自动匹配最佳短剧结构模板（含集级节奏、钩子位置、付费点）">
+              {matchedTemplate ? (
+                <Tag color="blue" style={{ fontSize: 13, padding: '4px 8px' }}>
+                  {matchedTemplate.genre_cn} ({matchedTemplate.total_episodes}集)
+                </Tag>
+              ) : (
+                <Text type="secondary" style={{ fontSize: 12 }}>生成时自动匹配</Text>
+              )}
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item label=" ">
+              <Button
+                type={multiVersion ? 'primary' : 'dashed'}
+                size="small"
+                icon={<ExperimentOutlined />}
+                onClick={() => setMultiVersion(!multiVersion)}
+                style={{ marginTop: 4 }}
+              >
+                {multiVersion ? '✓ 多版本对比' : '多版本对比'}
+              </Button>
+            </Form.Item>
+          </Col>
+        </Row>
           </>
         )}
 
@@ -1787,6 +1868,64 @@ const Script: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* 多版本对比弹窗 */}
+      <Modal
+        title={<span><TrophyOutlined style={{ marginRight: 8, color: '#faad14' }} />多版本对比 — 选择最佳剧本</span>}
+        open={versionModalOpen}
+        onCancel={() => setVersionModalOpen(false)}
+        footer={null}
+        width={960}
+      >
+        {multiComparison && (
+          <Alert
+            type="info"
+            message={`推荐「${multiWinner?.version}」(${multiWinner?.score}分) — ${multiComparison?.verdict_summary || ''}`}
+            style={{ marginBottom: 12 }}
+            showIcon
+          />
+        )}
+        <Row gutter={12}>
+          {multiVersions.map((v: any) => {
+            const isWinner = v.version === multiWinner?.version
+            const colors: Record<string, string> = { A: '#1890ff', B: '#eb2f96', C: '#722ed1' }
+            return (
+              <Col span={8} key={v.version}>
+                <Card size="small" hoverable
+                  style={{ borderColor: isWinner ? '#faad14' : undefined, borderWidth: isWinner ? 2 : 1 }}
+                  title={<Space><Tag color={colors[v.version]}>{v.version} — {v.label}</Tag>{isWinner && <Tag color="gold"><StarOutlined /> 最佳</Tag>}</Space>}
+                  extra={<Text strong>{v.score}分</Text>}
+                >
+                  <Text type="success" style={{ fontSize: 11 }}>{(v.strengths || []).slice(0, 2).join('、') || '—'}</Text>
+                  <br />
+                  <Text type="secondary" style={{ fontSize: 11 }}>{v.script_content?.length || 0} 字 · {v.episodes?.length || 0} 集</Text>
+                  <Button
+                    type={selectedVersion === v.version ? 'primary' : 'default'}
+                    size="small" block
+                    onClick={() => {
+                      setSelectedVersion(v.version)
+                      if (v.episodes?.length > 0) {
+                        const parsedEpisodes = v.episodes.map((ep: any) => ({
+                          id: `ep-${ep.episode_number || 1}-${Date.now().toString(36)}`,
+                          title: ep.title || `第${ep.episode_number || 1}集`,
+                          number: ep.episode_number || 1,
+                          scenes: [], characters: [],
+                          description: ep.content || '',
+                        }))
+                        setEpisodes(parsedEpisodes)
+                        if (parsedEpisodes.length > 0) setActiveEpisodeId(parsedEpisodes[0].id)
+                      }
+                    }}
+                    style={{ marginTop: 8 }}
+                  >
+                    {selectedVersion === v.version ? '✓ 已选择' : '选择此版本'}
+                  </Button>
+                </Card>
+              </Col>
+            )
+          })}
+        </Row>
+      </Modal>
 
       {/* 主体提取弹窗 */}
       <Modal
