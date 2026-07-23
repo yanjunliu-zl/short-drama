@@ -35,6 +35,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Shot, ShotEpisode, ReferenceImages } from '@/types';
 import { scriptService } from '@/services/scriptService';
 import { pipelineService } from '@/services/pipelineService';
+import { assetService, CharacterAsset, SceneTemplate } from '@/services/assetService';
 import { usePipelinePersistence } from '@/hooks/usePipelinePersistence';
 type Episode = ShotEpisode;
 
@@ -120,6 +121,11 @@ const Storyboard: React.FC = () => {
   const [videoGenerationProgress, setVideoGenerationProgress] = useState(0);
   const [previewingShotId, setPreviewingShotId] = useState<number | null>(null);
   const videoPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // 资产选择器状态
+  const [selectedCharacterIds, setSelectedCharacterIds] = useState<string[]>([]);
+  const [selectedSceneId, setSelectedSceneId] = useState<string>('');
+  const [selectedPresetIds, setSelectedPresetIds] = useState<string[]>([]);
 
   // 轮询视频生成状态
   const pollVideoGeneration = useCallback((taskId: string) => {
@@ -605,6 +611,19 @@ const Storyboard: React.FC = () => {
     </div>
   );
 
+  // ── Asset Selector ──
+  const [charOptions, setCharOptions] = useState<{ label: string; value: string }[]>([])
+  const [sceneOptions, setSceneOptions] = useState<{ label: string; value: string }[]>([])
+  const [assetExpanded, setAssetExpanded] = useState(false)
+  useEffect(() => {
+    assetService.listCharacters({ limit: 50 }).then((res: any) => {
+      if (res?.data) setCharOptions(res.data.map((c: CharacterAsset) => ({ label: `${c.name} (${c.role_type})`, value: c.asset_id })))
+    }).catch(() => {})
+    assetService.listScenes({ limit: 50 }).then((res: any) => {
+      if (res?.data) setSceneOptions(res.data.map((s: SceneTemplate) => ({ label: `${s.name} [${s.category}]`, value: s.template_id })))
+    }).catch(() => {})
+  }, [])
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)' }}>
       {/* 顶部操作栏 */}
@@ -644,6 +663,23 @@ const Storyboard: React.FC = () => {
           </Text>
         </div>
       )}
+
+      {/* 资产选择器 */}
+      <div style={{ padding: '4px 24px', background: '#fafbfc', borderBottom: '1px solid #e5e5ea' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }} onClick={() => setAssetExpanded(!assetExpanded)}>
+          <Text type="secondary" style={{ fontSize: 12 }}>🎬 资产库选择</Text>
+          <Text style={{ fontSize: 11, color: '#999' }}>{assetExpanded ? '收起' : '展开'}</Text>
+        </div>
+        {assetExpanded && (
+          <div style={{ display: 'flex', gap: 12, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Select mode="multiple" placeholder="选择角色资产" style={{ minWidth: 240 }}
+              options={charOptions} onChange={setSelectedCharacterIds} allowClear size="small" />
+            <Select placeholder="选择场景模板" style={{ minWidth: 200 }}
+              options={sceneOptions} onChange={setSelectedSceneId} allowClear size="small" />
+            <Button size="small" icon={<FolderOpenOutlined />} onClick={() => navigate('/assets')}>管理资产库</Button>
+          </div>
+        )}
+      </div>
 
       {/* 内容区 */}
       <div style={{ flex: 1, display: 'flex', padding: '16px 24px', gap: 16, overflow: 'hidden' }}>

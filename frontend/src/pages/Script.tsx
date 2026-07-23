@@ -23,6 +23,7 @@ import {
   Progress,
   Empty,
   Spin,
+  Dropdown,
 } from 'antd';
 import { usePipelinePersistence, clearPipelineStorage } from '@/hooks/usePipelinePersistence';
 import { pipelineService } from '@/services/pipelineService';
@@ -48,6 +49,7 @@ import {
   CloseCircleOutlined,
   SettingOutlined,
   ExperimentOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons';
 import { scriptService } from '@/services/scriptService';
 import { workService } from '@/services/workService';
@@ -1595,14 +1597,62 @@ const Script: React.FC = () => {
           </Title>
           <Tag color="success" style={{ fontSize: 12 }}>已生成</Tag>
         </div>
-        <Button
-          type="primary"
-          size="middle"
-          icon={<ExperimentOutlined />}
-          onClick={handleExtractEntities}
-        >
-          主体提取
-        </Button>
+        <Space>
+          <Dropdown
+            menu={{
+              items: [
+                { key: 'xiaoyunque', label: '小云雀 (纯文本)', icon: <DownloadOutlined /> },
+                { key: 'libtv', label: 'LibTV (分镜JSON)', icon: <DownloadOutlined /> },
+                { key: 'jurilu', label: '巨日禄 (纯文本)', icon: <DownloadOutlined /> },
+                { type: 'divider' },
+                { key: 'all', label: '一键导出全部', icon: <DownloadOutlined /> },
+              ],
+              onClick: async ({ key }) => {
+                if (!scriptId) { message.warning('请先生成剧本'); return; }
+                const hide = message.loading(`正在导出到 ${key === 'all' ? '全部平台' : key}...`, 0);
+                try {
+                  const result = await scriptService.exportToPlatform(
+                    scriptId, key as any, key === 'libtv' ? 'storyboard_json' : 'raw_text'
+                  );
+                  hide();
+                  if (key === 'all') {
+                    const exports = (result as any)?.exports || {};
+                    const passed = Object.values(exports).filter((e: any) => e?.validation_passed).length;
+                    message.success(`已导出 ${passed}/${Object.keys(exports).length} 个平台`);
+                    const content = JSON.stringify(exports, null, 2);
+                    const blob = new Blob([content], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a'); a.href = url;
+                    a.download = `script_${scriptId}_exports.json`; a.click();
+                    URL.revokeObjectURL(url);
+                  } else {
+                    const exp = (result as any)?.export;
+                    message.success(`导出成功 (${exp?.target}, ${exp?.format})`);
+                    const blob = new Blob([exp?.content || JSON.stringify(exp, null, 2)], {
+                      type: exp?.format === 'raw_text' ? 'text/plain' : 'application/json',
+                    });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a'); a.href = url;
+                    a.download = `script_${scriptId}_${key}.${exp?.format === 'raw_text' ? 'txt' : 'json'}`;
+                    a.click(); URL.revokeObjectURL(url);
+                  }
+                } catch (e: any) {
+                  hide(); message.error(`导出失败: ${e?.message || e}`);
+                }
+              },
+            }}
+          >
+            <Button icon={<DownloadOutlined />}>导出</Button>
+          </Dropdown>
+          <Button
+            type="primary"
+            size="middle"
+            icon={<ExperimentOutlined />}
+            onClick={handleExtractEntities}
+          >
+            主体提取
+          </Button>
+        </Space>
       </div>
 
       {/* 下方内容区 */}

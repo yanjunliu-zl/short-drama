@@ -61,7 +61,21 @@ export const scriptService = {
     return response.data
   },
 
-  // 导出剧本
+  // 导出剧本 — 下游AI成片工具兼容格式
+  exportToPlatform: async (scriptId: number | string, target: 'xiaoyunque' | 'libtv' | 'jurilu' | 'all' = 'all', format: 'auto' | 'raw_text' | 'structured_json' | 'storyboard_json' = 'auto'): Promise<ApiResponse<{
+    script_id: number
+    title: string
+    exports?: Record<string, any>    // target=all
+    export?: any                     // target=specific
+    elapsed_ms: number
+  }>> => {
+    const response = await api.post(`/v1/scripts/${scriptId}/export`, null, {
+      params: { target, format },
+    })
+    return response.data
+  },
+
+  // 导出剧本为纯文本下载 (兼容旧版)
   exportScript: async (scriptId: string, format: 'pdf' | 'docx' | 'txt'): Promise<Blob> => {
     const response = await api.get(`/v1/scripts/${scriptId}/export`, {
       params: { format },

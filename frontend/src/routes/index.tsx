@@ -11,6 +11,7 @@ import Register from '../pages/Register';
 import Payment from '../pages/Payment';
 import Settings from '../pages/Settings';
 import { CaseDetail } from '../pages/CaseDetail';
+import AssetLibrary from '../pages/AssetLibrary';
 import ProtectedRoute from '../components/ProtectedRoute';
 
 const AppRoutes: React.FC = () => {
@@ -31,6 +32,7 @@ const AppRoutes: React.FC = () => {
       <Route path="/final-cut" element={<ProtectedRoute><FinalCut /></ProtectedRoute>} />
       <Route path="/payment" element={<ProtectedRoute><Payment /></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+      <Route path="/assets" element={<ProtectedRoute><AssetLibrary /></ProtectedRoute>} />
 
       <Route path="*" element={<div>404 - 页面未找到</div>} />
     </Routes>
