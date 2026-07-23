@@ -139,7 +139,7 @@ POST /api/v1/comments/:case_id
 ## Architecture
 
 ```
-Frontend (:3000) → APISIX (:9080) / Traefik (:80) → Microservices
+Frontend (:3000) → APISIX (:9080) → Microservices
                                                      ├── user-service       (Go, Auth)
                                                      ├── content-service    (Go, Cases/Search)
                                                      ├── script-service     (Python, AI Script)

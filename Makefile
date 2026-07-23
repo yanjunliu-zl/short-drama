@@ -29,7 +29,7 @@ dev-up:
 	@echo "开发环境已启动"
 	@echo "用户服务: http://localhost:8080"
 	@echo "剧本服务: http://localhost:8000"
-	@echo "Traefik仪表板: http://localhost:8081"
+	@echo "APISIX网关: http://localhost:9080"
 	@echo "RabbitMQ管理: http://localhost:15672 (guest/guest)"
 	@echo "MySQL: localhost:3306 (root:password)"
 	@echo "Redis: localhost:6379"

@@ -14,11 +14,11 @@ spec:
     # Allow from same namespace
     - from:
         - podSelector: {}
-    # Allow from ingress controller (Traefik)
+    # Allow from ingress controller (APISIX)
     - from:
         - namespaceSelector:
             matchLabels:
-              name: traefik
+              name: apisix
     # Allow from monitoring namespace
     - from:
         - namespaceSelector:

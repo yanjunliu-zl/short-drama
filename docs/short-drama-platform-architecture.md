@@ -31,7 +31,7 @@ The Short Drama Platform is an end-to-end AI-powered content creation system tha
 | LLM Providers | DeepSeek / OpenAI / Anthropic / vLLM (self-hosted) |
 | Image/Video | Seedream 4.5 / Seedance 2.0 (Volcano Ark API) |
 | Infrastructure | MySQL 8.0 + Redis 7 + RabbitMQ + Kafka + MinIO + Elasticsearch + ClickHouse |
-| Gateway | Apache APISIX 3.10 (primary) / Traefik v3 (legacy) |
+| Gateway | Apache APISIX 3.10 |
 | Observability | Prometheus + Grafana + Jaeger + OpenTelemetry + ELK |
 | Orchestration | Docker Compose (dev) + Kubernetes (prod) + ArgoCD (GitOps) |
 
@@ -48,7 +48,7 @@ The Short Drama Platform is an end-to-end AI-powered content creation system tha
                     └──────────────┬───────────────┘
                                    │
                     ┌──────────────▼───────────────┐
-                    │    APISIX (:9080) / Traefik   │
+                    │      APISIX (:9080)        │
                     │  Rate limit + Circuit breaker │
                     └──────────────┬───────────────┘
                                    │
@@ -539,7 +539,7 @@ GitOps (ArgoCD):
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| API Gateway | APISIX over Traefik | 3.6× QPS, etcd dynamic config, plugin ecosystem |
+| API Gateway | APISIX | 3.6× QPS, etcd dynamic config, plugin ecosystem |
 | LLM Framework | LangChain + self-built Router | Flexibility vs vendor lock-in |
 | RAG Strategy | FAISS + BM25 + RRF (self-built) | Avoids LlamaIndex dependency for core path |
 | Python vs Go split | AI in Python, business in Go | Python for ML ecosystem, Go for throughput |

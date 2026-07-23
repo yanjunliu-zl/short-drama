@@ -198,7 +198,7 @@ services:
       retries: 5
 
   # ═══════════════════════════════════════════
-  # API Gateway — Apache APISIX (高性能替代 Traefik)
+  # API Gateway — Apache APISIX
   # ═══════════════════════════════════════════
   apisix:
     image: apache/apisix:3.10.0-debian
@@ -298,42 +298,6 @@ services:
       timeout: 10s
       retries: 3
 
-  # API网关 - Traefik
-  traefik:
-    image: traefik:v3.0
-    container_name: shortdrama-traefik
-    restart: unless-stopped
-    command:
-      - "--api.dashboard=true"
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--log.level=DEBUG"
-    ports:
-      - "80:80"
-      - "443:443"
-      - "8081:8080"  # 仪表板
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./backend/api-gateway/traefik.yaml:/etc/traefik/traefik.yml:ro
-      - ./backend/api-gateway/dynamic:/etc/traefik/dynamic:ro
-    networks:
-      - shortdrama-network
-    depends_on:
-      - mysql
-      - redis
-      - rabbitmq
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`traefik.localhost`)"
-      - "traefik.http.routers.api.service=api@internal"
-      - "traefik.http.routers.api.middlewares=auth"
-      - "traefik.http.middlewares.auth.basicauth.users=admin:$$apr1$$6lJ9lL5q$$0.8G8XJc8Q9p0.5k.5.5k."
-
-  # 用户服务 (GoZero) — new architecture
-  user-service:
     build:
       context: ./backend/services/user-service
       dockerfile: Dockerfile.prebuilt
@@ -374,10 +338,6 @@ services:
       rabbitmq:
         condition: service_healthy
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.user-service.rule=PathPrefix(`/api/v1/users`)"
-      - "traefik.http.routers.user-service.entrypoints=web"
-      - "traefik.http.services.user-service.loadbalancer.server.port=8080"
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.send(b'GET /health HTTP/1.0\\r\\nHost:localhost\\r\\n\\r\\n'); print('OK' if b'200' in s.recv(256) else 'FAIL'); s.close()"]
       interval: 30s
@@ -411,10 +371,6 @@ services:
       rabbitmq:
         condition: service_healthy
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.script-service.rule=PathPrefix(`/api/v1/scripts`)"
-      - "traefik.http.routers.script-service.entrypoints=web"
-      - "traefik.http.services.script-service.loadbalancer.server.port=8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -461,10 +417,6 @@ services:
       rabbitmq:
         condition: service_healthy
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.content-service.rule=PathPrefix(`/api/v1/cases`) || PathPrefix(`/api/v1/works`) || PathPrefix(`/api/v1/scenes`) || PathPrefix(`/api/v1/characters`)"
-      - "traefik.http.routers.content-service.entrypoints=web"
-      - "traefik.http.services.content-service.loadbalancer.server.port=8081"
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8081)); s.send(b'GET /health HTTP/1.0\\r\\nHost:localhost\\r\\n\\r\\n'); print('OK' if b'200' in s.recv(256) else 'FAIL'); s.close()"]
       interval: 30s
@@ -505,10 +457,6 @@ services:
       redis:
         condition: service_healthy
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.storyboard-service.rule=PathPrefix(`/api/v1/storyboard`)"
-      - "traefik.http.routers.storyboard-service.entrypoints=web"
-      - "traefik.http.services.storyboard-service.loadbalancer.server.port=8001"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 30s
@@ -563,10 +511,6 @@ services:
       minio:
         condition: service_healthy
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.llmhua-service.rule=PathPrefix(`/api/v1/llmhua`)"
-      - "traefik.http.routers.llmhua-service.entrypoints=web"
-      - "traefik.http.services.llmhua-service.loadbalancer.server.port=8002"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 30s
@@ -616,10 +560,6 @@ services:
       minio:
         condition: service_healthy
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.final-cut-service.rule=PathPrefix(`/api/v1/final-cut`)"
-      - "traefik.http.routers.final-cut-service.entrypoints=web"
-      - "traefik.http.services.final-cut-service.loadbalancer.server.port=8085"
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8085)); s.send(b'GET /health HTTP/1.0\\r\\nHost:localhost\\r\\n\\r\\n'); print('OK' if b'200' in s.recv(256) else 'FAIL'); s.close()"]
       interval: 30s
@@ -666,10 +606,6 @@ services:
       minio:
         condition: service_healthy
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.video-service.rule=PathPrefix(`/api/v1/videos`)"
-      - "traefik.http.routers.video-service.entrypoints=web"
-      - "traefik.http.services.video-service.loadbalancer.server.port=8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -731,10 +667,6 @@ services:
       redis:
         condition: service_healthy
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.recommendation-service.rule=PathPrefix(`/api/v1/recommendations`)"
-      - "traefik.http.routers.recommendation-service.entrypoints=web"
-      - "traefik.http.services.recommendation-service.loadbalancer.server.port=8004"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')"]
       interval: 30s

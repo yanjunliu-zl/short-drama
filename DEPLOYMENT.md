@@ -17,7 +17,7 @@ docker compose up -d mysql redis rabbitmq kafka clickhouse
 docker compose up -d script-service storyboard-service llmhua-service
 
 # Machine C (Gateway + Frontend)
-docker compose up -d apisix     # or: traefik
+docker compose up -d apisix
 ```
 
 ### Kubernetes (GitOps)
@@ -58,7 +58,6 @@ curl localhost:9080/api/v1/cases       # APISIX gateway
 | Frontend | http://localhost:3000 | — |
 | APISIX Gateway | http://localhost:9080 | — |
 | APISIX Dashboard | http://localhost:9000 | admin/admin |
-| Traefik (legacy) | http://localhost:80 | — |
 | Grafana | http://localhost:3001 | admin/admin |
 | RabbitMQ | http://localhost:15672 | admin/admin123 |
 | MinIO | http://localhost:9001 | minioadmin/minioadmin |

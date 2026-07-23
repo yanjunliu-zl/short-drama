@@ -1,6 +1,6 @@
 # APISIX Standalone Configuration — Routes, Upstreams, Plugins
-# Equivalent to Traefik routers.yaml + middlewares.yaml
-# APISIX performance: ~18000 QPS vs Traefik ~5000 QPS (single node)
+# APISIX 路由 + 中间件配置
+# APISIX performance: ~18000 QPS (single node)
 
 # ═══════════════════════════════════════════
 # Global Rules (applied to all routes)

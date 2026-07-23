@@ -48,10 +48,10 @@ scrape_configs:
     static_configs:
       - targets: ['rabbitmq:15692']
 
-  # Traefik 网关
-  - job_name: 'traefik'
+  # APISIX 网关
+  - job_name: 'apisix'
     static_configs:
-      - targets: ['traefik:8080']
+      - targets: ['apisix:9091']
 
   # ========= 应用服务 =========
 

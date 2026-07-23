@@ -21,7 +21,7 @@ resources:
   - services/video-service.yaml
   - services/frontend.yaml
   - services/pod-disruption-budgets.yaml
-  - ingress/traefik-ingressroute.yaml
+  # Traefik IngressRoute removed — use APISIX ingress instead
   - monitoring/servicemonitor.yaml
 
 # To enable Linkerd service mesh, uncomment:
