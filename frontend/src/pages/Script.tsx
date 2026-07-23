@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Card,
@@ -128,6 +129,10 @@ const Script: React.FC = () => {
 
   // Template match state
   const [matchedTemplate, setMatchedTemplate] = useState<any>(null)
+
+  // Refs to bridge scope between generation branches and save logic
+  const latestResultRef = useRef<any>(null)
+  const latestEpisodesRef = useRef<Episode[]>([])
 
   // ============ 分集剧本编辑状态 ============
   const [episodes, setEpisodes] = useState<Episode[]>([]);
@@ -517,6 +522,8 @@ const Script: React.FC = () => {
               }))
               setEpisodes(parsedEpisodes)
               if (parsedEpisodes.length > 0) setActiveEpisodeId(parsedEpisodes[0].id)
+              latestEpisodesRef.current = parsedEpisodes
+              latestResultRef.current = { title: formTitle }
             }
           }
           setGenerationStatus('completed')
@@ -543,12 +550,14 @@ const Script: React.FC = () => {
           setGenerationStatus('completed');
           setGenerationProgress(100);
           if (parsedEpisodes.length > 0) setActiveEpisodeId(parsedEpisodes[0].id);
+          latestEpisodesRef.current = parsedEpisodes
+          latestResultRef.current = result
         }
 
         // 保存到 localStorage 和后端
         const scriptData = {
-          episodes: JSON.parse(JSON.stringify(parsedEpisodes)),
-          generatedScriptTitle: result.title,
+          episodes: JSON.parse(JSON.stringify(latestEpisodesRef.current)),
+          generatedScriptTitle: latestResultRef.current.title,
           generationStatus: 'completed', generationProgress: 100,
         };
         // 创建作品并直接保存到后端
@@ -559,7 +568,7 @@ const Script: React.FC = () => {
             const resp = await fetch('/api/v1/works', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ title: result.title, type: '短剧', description: '', userId: 'anonymous' }),
+              body: JSON.stringify({ title: latestResultRef.current.title, type: '短剧', description: '', userId: 'anonymous' }),
             });
             if (resp.ok) {
               const work = await resp.json();
@@ -575,9 +584,9 @@ const Script: React.FC = () => {
             const existing = (resp as any)?.data || {};
             existing.script = scriptData;
             // Save V2 storyboard data so "智能分镜" can skip storyboard-service
-            if ((result as any).storyboard) {
+            if ((latestResultRef.current as any).storyboard) {
               existing.storyboard = {
-                episodes: (result as any).storyboard,
+                episodes: (latestResultRef.current as any).storyboard,
                 generatedAt: new Date().toISOString(),
               };
             }
@@ -590,12 +599,12 @@ const Script: React.FC = () => {
           message.warning('作品创建失败，请重试');
         }
 
-        message.success(`剧本生成完成，共 ${result.total_episodes} 集`);
+        message.success(`剧本生成完成，共 ${latestResultRef.current.total_episodes} 集`);
         return;
       }
 
-      if (response?.task_id) {
-        const id = response.task_id;
+      if ((response as any)?.task_id) {
+        const id = (response as any).task_id;
         setGenerationProgress(10);
         saveState({ generationStatus: 'generating', generationProgress: 10, taskId: id, generatedScriptTitle: formTitle });
         message.info('剧本生成任务已提交，正在生成中...');
@@ -634,7 +643,7 @@ const Script: React.FC = () => {
       });
 
       // 将后端 EpisodeItem[] 映射为前端 Episode[]
-      const parsedEpisodes: Episode[] = result.episodes.map((ep) => ({
+      const eps: Episode[] = latestResultRef.current.episodes.map((ep: any) => ({
         id: `ep-${ep.episode_number}-${Date.now().toString(36)}`,
         title: ep.title,
         number: ep.episode_number,
@@ -643,35 +652,35 @@ const Script: React.FC = () => {
         description: ep.content,
       }));
 
-      setScriptId(result.script_id);
-      setEpisodes(parsedEpisodes);
-      setGeneratedScriptTitle(result.title);
+      setScriptId(latestResultRef.current.script_id);
+      setEpisodes(eps);
+      setGeneratedScriptTitle(latestResultRef.current.title);
       setGenerationStatus('completed');
       setGenerationProgress(100);
 
       // 立即持久化到 localStorage
       saveState({
-        episodes: JSON.parse(JSON.stringify(parsedEpisodes)),
-        generatedScriptTitle: result.title,
+        episodes: JSON.parse(JSON.stringify(eps)),
+        generatedScriptTitle: latestResultRef.current.title,
         generationStatus: 'completed',
         generationProgress: 100,
-        scriptId: result.script_id,
+        scriptId: latestResultRef.current.script_id,
       });
 
       // 立即创建作品并保存到后端（不依赖 debounce）
       const scriptData = {
-        episodes: JSON.parse(JSON.stringify(parsedEpisodes)),
-        generatedScriptTitle: result.title,
+        episodes: JSON.parse(JSON.stringify(latestEpisodesRef.current)),
+        generatedScriptTitle: latestResultRef.current.title,
         generationStatus: 'completed',
         generationProgress: 100,
-        scriptId: result.script_id,
+        scriptId: latestResultRef.current.script_id,
       };
       persistState('script', scriptData);  // 先写 localStorage
       let wId = getWorkId();
       if (!wId) {
         try {
           const work = await workService.createWork({
-            title: result.title,
+            title: latestResultRef.current.title,
             type: '短剧',
             description: '',
             userId: userId,
@@ -1588,7 +1597,7 @@ const Script: React.FC = () => {
         return;
       }
       message.loading({ content: '正在提取角色、场景、道具...', key: 'extract', duration: 0 });
-      const data = await scriptService.extractEntities(fullText, scriptId);
+      const data = await scriptService.extractEntities(fullText, scriptId!);
       message.destroy('extract');
 
       // 构建场景数据（从地点列表）

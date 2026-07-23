@@ -173,6 +173,7 @@ const Payment: React.FC = () => {
       const timer = setInterval(checkPaymentStatus, 3000)
       return () => clearInterval(timer)
     }
+    return
   }, [currentPayment?.status])
 
   const statusColorMap: Record<string, string> = {

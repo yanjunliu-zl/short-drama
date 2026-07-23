@@ -8,7 +8,8 @@ import {
   ArrowLeftOutlined, EyeOutlined, LikeOutlined,
   ShareAltOutlined, PlayCircleOutlined
 } from '@ant-design/icons'
-import { caseService, type CaseItem } from '@/services/caseService'
+import { caseService } from '@/services/caseService'
+import type { CaseItem } from '@/types/case'
 import { CommentSection } from '@/components/CommentSection'
 
 const { Title, Text, Paragraph } = Typography
@@ -151,7 +152,7 @@ export const CaseDetail: React.FC = () => {
 
             <Text strong style={{ display: 'block', marginBottom: 8 }}>标签</Text>
             <Space size={[4, 8]} wrap style={{ marginBottom: 16 }}>
-              {caseData.tags.map((tag, i) => (
+              {caseData.tags.map((tag: string, i: number) => (
                 <Tag key={i} color="blue">{tag}</Tag>
               ))}
             </Space>

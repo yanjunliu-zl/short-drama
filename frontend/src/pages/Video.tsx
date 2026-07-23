@@ -81,7 +81,7 @@ const Video: React.FC = () => {
         for (const ep of allEps) {
           for (const s of (ep.shots || [])) { tid++;
             const r = (videoData?.episodes?.find((ve: any) => ve.id === ep.id)?.videoResults || ep.videoResults || []).find((x: any) => x.shot_id === s.id);
-            tasks.push({ id: tid, name: `${ep.title} 镜头${s.number}`, episodeId: ep.id, episodeTitle: ep.title, shotNumber: s.number, shotDescription: s.description, shotType: s.shotType, status: r?.status === 'completed' ? 'completed' : r?.status === 'failed' ? 'failed' : 'pending', progress: r?.status === 'completed' ? 100 : 0, duration: s.duration || 5, resolution: '1920x1080', format: 'mp4', videoUrl: r?.video_url, thumbnailUrl: r?.image_url, fileSize: r?.file_size, createdAt: videoData?.generatedAt || storyData?.generatedAt || '' });
+            tasks.push({ id: tid, name: `${ep.title} 镜头${s.number}`, episodeId: ep.id, episodeTitle: ep.title, shotNumber: s.number, shotDescription: s.description, shotType: s.shotType, status: (r?.status === 'completed' ? 'completed' : r?.status === 'failed' ? 'failed' : 'pending') as any, progress: r?.status === 'completed' ? 100 : 0, duration: s.duration || 5, resolution: '1920x1080', format: 'mp4', videoUrl: r?.video_url, thumbnailUrl: r?.image_url, fileSize: r?.file_size, createdAt: videoData?.generatedAt || storyData?.generatedAt || '' } as any);
           }
         }
         setVideoTasks(tasks);
@@ -111,7 +111,7 @@ const Video: React.FC = () => {
       const sEp = sb?.episodes?.find((e: any) => e.id === task.episodeId);
       const shot = sEp?.shots?.find((s: any) => s.number === task.shotNumber);
       if (!shot) throw new Error('Shot not found');
-      const resp = await scriptService.generateShotsVideo({ episodes: [{ ...ep, shots: [shot] }], fps: 24 });
+      const resp = await scriptService.generateShotsVideo({ episodes: [{ ...ep, shots: [shot] }] as any, fps: 24 });
       if (!resp?.task_id) throw new Error('No task');
       const poll = setInterval(async () => {
         const s = await scriptService.getShotsVideoStatus(resp.task_id);

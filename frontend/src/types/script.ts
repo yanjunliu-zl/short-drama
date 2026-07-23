@@ -2,9 +2,14 @@ import { Gender } from './user'
 
 export interface Script {
   id: string
+  task_id?: string
   title: string
   description?: string
   content: string
+  theme?: string
+  style?: string
+  length?: string
+  setting?: string
   genre: ScriptGenre
   duration_minutes: number
   character_count: number
@@ -14,6 +19,13 @@ export interface Script {
   created_at: string
   updated_at: string
   completed_at?: string
+  // V2 pipeline fields
+  episodes?: EpisodeItem[]
+  storyboard?: any
+  characters?: any
+  analysis_result?: any
+  pipeline_version?: string
+  workflow_metadata?: any
 }
 
 export interface ScriptCharacter {
@@ -133,10 +145,14 @@ export interface GenerationStatus {
   progress: number
   estimated_time_remaining?: number
   result?: Script
+  error?: string
   error_message?: string
+  data?: any
   created_at: string
   updated_at: string
 }
+
+export type GenerationStatusType = 'idle' | 'generating' | 'completed' | 'failed'
 
 // ========== 分镜头 (Shot) 类型 ==========
 

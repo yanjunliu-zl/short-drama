@@ -181,6 +181,7 @@ export const scriptService = {
     style?: string
     setting?: string
     user_id?: string
+    target_locale?: string
   }): Promise<import('@/types').ScriptSplitResponse> => {
     const response = await api.post<import('@/types').ScriptSplitResponse>('/v1/scripts/generate/from-outline-sync', data, { timeout: 600000 })
     return response.data

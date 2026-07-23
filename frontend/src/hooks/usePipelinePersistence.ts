@@ -48,7 +48,7 @@ export function usePipelinePersistence() {
               existing[key] = value
               existing.updatedAt = new Date().toISOString()
               await pipelineService.savePipelineState(workId, existing)
-            }).catch(err => {
+            }).catch((err: any) => {
               console.error('Auto-save pipeline state failed:', err)
             })
             ;(window as any)[saveKey] = next
@@ -138,7 +138,7 @@ export function usePipelinePersistence() {
       const prev = (window as any)[saveKey] || Promise.resolve()
       const next = prev.then(async () => {
         await pipelineService.savePipelineState(workId, fullState)
-      }).catch(err => {
+      }).catch((err: any) => {
         console.error('saveAllToBackend failed:', err)
       })
       ;(window as any)[saveKey] = next
