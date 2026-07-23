@@ -295,16 +295,17 @@ Quality Check:
 | Duration Range | ✅ | Adaptive duration per episode |
 | Codec/Format | ✅ | MP4/H.264 native output |
 
-### 4.6 Roadmap to Full Compliance
+### 4.6 Compliance Implementation Status
 
-| Priority | Task | Effort |
-|----------|------|--------|
-| P0 | Add 9:16 vertical output config flag | 1 day |
-| P0 | Add 30fps frame rate option | 1 day |
-| P1 | FFmpeg post-processing pipeline (upscale, aspect, audio placeholder) | 3 days |
-| P1 | TTS integration for audio track generation | 5 days |
-| P2 | AI video outpainting for automatic 16:9→9:16 conversion | 2 weeks |
-| P2 | Automated platform submission API integration | 3 weeks |
+| Priority | Task | Status | Implementation |
+|----------|------|--------|---------------|
+| ✅ P0 | 9:16 vertical output (PORTRAIT_MODE) | Done | `seedance_service.py` — 1080×1920 default, ratio="9:16" |
+| ✅ P0 | 30fps frame rate (VIDEO_FPS) | Done | `config.py` — configurable fps parameter |
+| ✅ P1 | FFmpeg post-processing pipeline | Done | `video_postprocess.py` — VideoPostProcessor |
+| ✅ P1 | Audio track verification | Done | `AudioVerifier` — ffprobe audio stream check |
+| P2 | AI video outpainting for 16:9→9:16 conversion | Planned | 2 weeks |
+| P2 | Automated platform submission API | Planned | 3 weeks |
+| P2 | Batch FFmpeg processing for full series | Done | `VideoPostProcessor.process_batch()` |
 
 ---
 
