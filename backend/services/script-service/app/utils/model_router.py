@@ -510,6 +510,54 @@ def create_llm_client(prefer: str = "deepseek", timeout: float = 180.0):
     return None
 
 
+def create_llm_for_locale(
+    target_locale: str = "zh-CN",
+    timeout: float = 180.0,
+) -> Optional[Any]:
+    """Create an LLM client optimized for the target market locale.
+
+    Locale-aware routing:
+      - zh-CN → DeepSeek (best Chinese creative writing, lowest cost)
+      - en-US / es-MX → Anthropic Claude (best English creative writing)
+      - ja-JP / ko-KR → Anthropic (strong multilingual, especially Asian languages)
+      - ar-SA / tr-TR → OpenAI GPT-4o (best Arabic/Turkish support)
+      - Other → DeepSeek (default)
+
+    Returns a ResilientLLM or None if no provider is available.
+    """
+    # Locale → preferred provider mapping
+    _LOCALE_PROVIDER: Dict[str, str] = {
+        "zh-CN": "deepseek",
+        "en-US": "anthropic",
+        "en-GB": "anthropic",
+        "es-MX": "anthropic",
+        "es-ES": "anthropic",
+        "ja-JP": "anthropic",
+        "ko-KR": "anthropic",
+        "ar-SA": "openai",
+        "tr-TR": "openai",
+        "th-TH": "deepseek",  # DeepSeek handles Thai reasonably
+    }
+
+    prefer = _LOCALE_PROVIDER.get(target_locale, "deepseek")
+    logger.info(
+        f"ModelRouter: locale={target_locale} → prefer={prefer} "
+        f"(locale-aware routing)"
+    )
+
+    # Try preferred provider first, then fall back to any available
+    primary = create_llm_client(prefer=prefer, timeout=timeout)
+    if primary is not None and get_active_provider() == prefer:
+        return primary
+
+    # If preferred provider is not available, try any provider
+    logger.warning(
+        f"ModelRouter: preferred provider '{prefer}' not available for locale "
+        f"'{target_locale}', falling back to any available"
+    )
+    return create_llm_client(prefer="deepseek", timeout=timeout)
+
+
 def get_active_provider() -> str:
     """Return the currently active LLM provider name."""
     return _active_provider

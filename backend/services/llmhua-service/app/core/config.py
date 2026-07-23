@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     SEEDANCE_IMAGE_MODEL: str = os.getenv("SEEDANCE_IMAGE_MODEL", "doubao-seedream-4-5-251128")
     SEEDANCE_VIDEO_MODEL: str = os.getenv("SEEDANCE_VIDEO_MODEL", "doubao-seedance-2-0-260128")
     SEEDANCE_TIMEOUT: int = int(os.getenv("SEEDANCE_TIMEOUT", 300))
+    # Google Veo 2 (海外视频生成)
+    VEO_ENABLED: bool = os.getenv("VEO_ENABLED", "false").lower() == "true"
+    GOOGLE_CLOUD_PROJECT: Optional[str] = os.getenv("GOOGLE_CLOUD_PROJECT", None)
+    GOOGLE_CLOUD_LOCATION: str = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    GOOGLE_API_KEY: Optional[str] = os.getenv("GOOGLE_API_KEY", None)
+    VEO_TIMEOUT: int = int(os.getenv("VEO_TIMEOUT", 600))
+
     # Platform compliance — 红果短剧/快手短剧 standard
     PORTRAIT_MODE: bool = os.getenv("PORTRAIT_MODE", "true").lower() == "true"  # 9:16 vertical
     VIDEO_FPS: int = int(os.getenv("VIDEO_FPS", 30))  # 25 or 30 fps

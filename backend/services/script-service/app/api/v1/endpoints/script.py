@@ -864,7 +864,11 @@ async def localize_script(data: dict, script_service: ScriptService = Depends(ge
     try:
         await script_service.initialize()
         mock_mode = getattr(script_service.ai_service, '_mock_mode', False)
-        llm = script_service.ai_service.llm if not mock_mode else None
+        target_locale_val = data.get("target_locale", "en-US")
+
+        # Locale-aware LLM routing: prefer Anthropic for English markets
+        from app.utils.model_router import create_llm_for_locale
+        llm = create_llm_for_locale(target_locale=target_locale_val) if not mock_mode else None
 
         svc = ScriptLocalizationService(llm=llm)
         req = LocalizationRequest(
