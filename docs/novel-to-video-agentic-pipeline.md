@@ -627,7 +627,184 @@ Image/video generation adds 15-30s per shot (5-8s per image, 15-30s per video in
 
 ---
 
-## 12. Key Architectural Decisions
+## 12. Consistency: How We Keep Everything Coherent
+
+Long-form content production (50+ episodes, 300+ shots) faces one fundamental challenge: **consistency across time and media**. A character must look, sound, and act the same in episode 3 and episode 47. A prop introduced in chapter 7 must reappear correctly in chapter 30. A cliffhanger in episode 15 must pay off in episode 16.
+
+Our platform enforces consistency across **four dimensions** through a layered defense strategy.
+
+### 12.1 Plot Consistency (Narrative Level)
+
+**Problem**: When 50 chapters are generated in parallel (Semaphore=3), chapter 15 might have the protagonist in Beijing, while chapter 16 (generated simultaneously) has them in Shanghai with no explanation.
+
+**Solution**: Cumulative Context Injection (`_build_cumulative_context`)
+
+```
+Before parallel generation:
+  Stage 3c: Serial chapter summarization (30s per chapter, lightweight LLM)
+  Chapter 1: "萧炎在迦南学院突破斗皇 → 魂殿来袭"
+  Chapter 2: "萧炎击退魂殿使者 → 得知药老被囚"
+  ...
+
+During chapter 5 generation:
+  Prompt includes:
+    【前情提要】
+    第2章: 萧炎击退魂殿使者 → 得知药老被囚
+    第3章: 萧炎前往中州 → 结识风尊者
+    第4章: 抵达丹塔 → 参加炼药师大会
+    【下集预告】第6章: 决赛对阵魂殿天才
+
+  This ensures chapter 5's content connects coherently from chapter 4
+  and sets up chapter 6 — even though all three were generated in parallel.
+```
+
+**Defense Layers**:
+
+| Layer | Mechanism | When |
+|-------|-----------|------|
+| Prompt-level | 前情提要 (last 3 chapters) + 下集预告 (next chapter) | Every chapter generation |
+| Knowledge Graph | GraphRAG cross-chapter entity relationships | Injected as context when available |
+| Agentic Review | ReviewAgent checks plot coherence across scenes | After each batch generation |
+| Auto-retry | PolishAgent rewrites inconsistent chapters | On ReviewAgent score < 7.0 |
+
+### 12.2 Character Consistency (Personality Level)
+
+**Problem**: In chapter 3 the protagonist speaks 3 sentences calmly. In chapter 8, the same character suddenly becomes verbose and emotional with no character development arc to justify it.
+
+**Solution**: Independent Character Vector Store (`_build_character_store`)
+
+```
+Global character extraction (Stage 3):
+  LLM reads entire novel → structured output:
+    {name: "萧炎", personality: "坚韧不拔,重情义,冷静果断",
+     role: "主角", speech_style: "沉稳,少言,关键时语气坚定"}
+
+  Each character profile is embedded and stored in a separate FAISS index.
+
+Per-chapter injection (Stage 4):
+  For chapter 15, characters present: ["萧炎", "风尊者", "慕骨老人"]
+  → _search_characters(["萧炎", "风尊者", "慕骨老人"])
+  → Returns combined profiles:
+    "角色:萧炎。性格:坚韧不拔,重情义。角色定位:主角。对白风格:沉稳,少言..."
+    "角色:风尊者。性格:老练圆滑,亦正亦邪。角色定位:配角。对白风格:话多带刺..."
+  → Injected into prompt as 【角色档案库】
+
+  The LLM now has character-specific voice instructions for every line of dialogue.
+```
+
+**Defense Layers**:
+
+| Layer | Mechanism | When |
+|-------|-----------|------|
+| Global extraction | LLM extracts personality + speech style per character | Once, after chapter detection |
+| Vector store | FAISS index of all character profiles | Once, before generation |
+| Per-chapter lookup | _search_characters() retrieves profiles for current scene | Every chapter |
+| Agentic Review | ReviewAgent scores "Character Consistency" dimension | After each batch |
+| PromptOptimizer | Auto-adjusts system prompt to emphasize voice consistency | When score drops below 7.0 |
+
+### 12.3 Visual Consistency (Image/Video Level)
+
+**Problem**: Shot 3 and shot 7 are the same scene (迦南学院后山 at sunset), but the AI generates them with different lighting, color temperature, and background details — breaking visual continuity.
+
+**Solution**: Shared Seed per Scene + Cinematography Profiles
+
+```
+Per-Scene Seed Sharing:
+  scene_seeds = {}
+  For each shot:
+    sceneRef = shot.sceneRef  # "迦南学院后山"
+    if sceneRef not in scene_seeds:
+      scene_seeds[sceneRef] = hash(sceneRef + shot_number) % 2^31
+    seed = scene_seeds[sceneRef]
+    # All shots in the same scene use the same seed
+    # → Same lighting, color grading, background composition
+
+Cinematography Profile Baseline:
+  Style "古装风格" → Profile "ancient-palace":
+    lighting_style: 逆光
+    color_temperature: 暖色调 3200K
+    depth_of_field: 深景深
+    atmospheric_effects: 轻微烟雾
+
+  Per-shot LLM-generated fields override profile when needed:
+    Shot 1 (对话): lighting_style=三点布光 (overrides profile for indoor dialogue)
+    Shot 2 (远景): uses profile default (逆光 for outdoor establishing shot)
+
+Style-Specific Negative Prompts:
+  ancient-palace → "modern buildings, cars, phones, technology, neon"
+  Prevents anachronistic elements from appearing in historical scenes
+```
+
+**Defense Layers**:
+
+| Layer | Mechanism | When |
+|-------|-----------|------|
+| Scene seed | hash(sceneRef + shot) → shared seed | Per-shot image generation |
+| Cinematography profiles | 17 presets as baselines | All shots in same style |
+| Per-shot differentiation | LLM-generated lighting/camera fields | LLM output during storyboard |
+| Style negatives | Profile-specific exclusion list | Per-shot image prompt |
+| Reference images | Character portrait URL injection | When available, per-shot |
+
+### 12.4 Cross-Media Consistency (Script→Image→Video)
+
+**Problem**: A scene described as "rainy night" in the script gets generated as a sunny day image because the image prompt lost the weather context during translation.
+
+**Solution**: PromptBuilder 5-Layer Enrichment
+
+```
+Script text: "△暴雨夜的废弃工厂, 萧炎全身湿透潜入"
+
+PromptBuilder processes this into structured layers:
+  Layer 1 (Camera): "medium shot, eye-level, handheld"
+  Layer 1.5 (Lighting): "lightning flashes, harsh shadows, cool temperature 5600K"
+  Layer 2 (Subject): "location: 废弃工厂, character: 萧炎, action: 潜入"
+  Layer 3 (Mood): "emotional progression: 紧张 → 警惕, atmosphere: 暴雨 (强烈)"
+  Layer 5 (Style): "visual style: 古装风格"
+
+→ imagePromptZh: "中景, 平视, 手持, 闪电照明, 冷色调5600K,
+   地点:废弃工厂, 角色:萧炎, 情绪:紧张→警惕,
+   暴雨(强烈), 风格:古装风格, still frame, sharp focus"
+
+The weather, location, mood, and action from the script are all preserved
+in mandatory structured layers — the image model cannot "forget" them.
+```
+
+**Defense Layers**:
+
+| Layer | Mechanism | What It Preserves |
+|-------|-----------|-------------------|
+| PromptBuilder | 5-layer structured prompt | Weather, location, mood, action, characters |
+| PromptEnhancer | LLM translates CN→EN with detail preservation | Composition, lighting, quality keywords |
+| Metadata tagging | chunk_type, characters, timeline | Enables retrieval with contextual awareness |
+| RAG retrieval | Hybrid search with character filter | Ensures image prompt has full scene context |
+| Quality gates | LLM-as-Judge evaluates consistency | Catches discrepancies before delivery |
+
+### 12.5 Consistency Architecture Summary
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                   CONSISTENCY LAYERS                          │
+├──────────────┬──────────────┬──────────────┬────────────────┤
+│   PLOT       │  CHARACTER   │   VISUAL     │  CROSS-MEDIA   │
+├──────────────┼──────────────┼──────────────┼────────────────┤
+│ Cumulative   │ Character    │ Scene Seed   │ 5-Layer        │
+│ Context      │ Vector Store │ Sharing      │ PromptBuilder  │
+│ (前情提要)    │ (档案库)      │ (shared seed)│ (structured)   │
+├──────────────┼──────────────┼──────────────┼────────────────┤
+│ GraphRAG     │ Per-chapter  │ 17 Profiles  │ PromptEnhancer │
+│ Knowledge    │ FAISS lookup │ + Overrides  │ (CN→EN)        │
+├──────────────┼──────────────┼──────────────┼────────────────┤
+│ ReviewAgent  │ ReviewAgent  │ Style        │ RAG Context    │
+│ Coherence    │ Consistency  │ Negatives    │ Injection      │
+├──────────────┼──────────────┼──────────────┼────────────────┤
+│ PolishAgent  │ PromptOpt    │ Reference    │ Quality Gates  │
+│ Auto-retry   │ Auto-tune    │ Images       │ Judge Check    │
+└──────────────┴──────────────┴──────────────┴────────────────┘
+```
+
+---
+
+## 13. Key Architectural Decisions
 
 | Decision | Choice | Impact |
 |----------|--------|--------|
