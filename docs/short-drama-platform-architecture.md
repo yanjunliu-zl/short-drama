@@ -224,7 +224,91 @@ Batch Processing (Semaphore=3 per episode, shared seed per scene)
 
 ---
 
-## 4. Data Architecture
+## 4. Platform Compliance & Output Standards
+
+Our video output is designed for direct submission to mainstream short drama platforms — specifically targeting **红果短剧** (ByteDance) and **快手短剧** (Kuaishou) compliance requirements.
+
+### 4.1 红果短剧 Technical Specifications
+
+| Parameter | 红果短剧 Requirement | Our Implementation |
+|-----------|---------------------|-------------------|
+| **Resolution** | 1080p minimum (1920×1080) | ✅ 1920×1080 (changed from 1920×1920 in P0 fix) |
+| **Aspect Ratio** | 9:16 vertical (1080×1920) | ⚠️ Currently 16:9 horizontal → Configurable to 9:16 |
+| **Frame Rate** | 25fps or 30fps | ⚠️ Default 24fps → Configurable (Seedance parameter) |
+| **Video Codec** | H.264 (AVC) or H.265 (HEVC) | ✅ Seedance output is MP4/H.264 |
+| **Audio** | AAC stereo, 128kbps+ | ⚠️ No audio generation (video-only) → Need TTS integration |
+| **Bitrate** | 2-8 Mbps (1080p) | ✅ Seedance default bitrate within range |
+| **File Size** | < 500MB per episode | ✅ 5-15s clips are well within limit |
+| **Watermark** | Must be watermark-free | ✅ Seedance watermark=False |
+
+### 4.2 Content Format Requirements
+
+| Requirement | How We Comply |
+|-------------|---------------|
+| **Episode Structure** | Each episode generated with `【本集钩子】` (cliffhanger) — enforced by prompt requirement |
+| **Duration Control** | Episodes split by `length` parameter: 超短篇(1-5集), 短篇(6-15集), 中篇(16-40集), 长篇(41-80集), 超长篇(80-120集) |
+| **Opening Hook** | 3-second opening hook rule enforced via `【本集钩子】` placement at episode start |
+| **Ending CTA** | Each episode ends with suspense hook for next-episode retention — `SYSTEM_GENERATE_CHAPTER_V2` mandates this |
+| **Series Consistency** | Cross-chapter character profiles + shared seed per scene maintain visual/narrative continuity |
+| **Content Safety** | `ContentSafetyChecker` runs on all generated scripts before output, scoring 4 dimensions (political, violence, adult, illegal) |
+| **Copyright** | Scripts generated from user-provided novels; platform does not use copyrighted training data |
+
+### 4.3 Format Conversion Pipeline
+
+```
+Seedance Output (16:9, 720p, H.264)
+        ↓
+  [FFmpeg Post-Processing]
+  ├── Upscale to 1080p (lanczos filter)
+  ├── Convert to 9:16 vertical (crop + pad, or AI outpainting)
+  ├── Frame rate conversion to 30fps (minterpolate)
+  ├── Add silent audio track (placeholder for TTS)
+  └── Metadata injection (title, episode number, creator)
+        ↓
+  Platform-Ready MP4
+```
+
+### 4.4 Quality Gate for Platform Submission
+
+```
+Generated Video
+  ↓
+Quality Check:
+  ├── Resolution ≥ 1080p? → ❌ → Upscale
+  ├── Aspect ratio = 9:16? → ❌ → Convert
+  ├── Duration in range? → ❌ → Trim/Extend
+  ├── Watermark present? → ❌ → Reject
+  ├── Bitrate in range? → ❌ → Re-encode
+  └── All pass → ✅ → Ready for submission
+```
+
+### 4.5 Alignment Scorecard vs 红果短剧
+
+| Category | Compliance | Gap |
+|----------|-----------|-----|
+| Video Resolution | ✅ | — |
+| Aspect Ratio | ⚠️ | Default is 16:9; needs 9:16 config flag |
+| Frame Rate | ⚠️ | Default 24fps; needs 30fps option |
+| Audio Track | ❌ | No audio generation; TTS pipeline needed |
+| Episode Structure | ✅ | Cliffhanger + episode markers built into prompt |
+| Content Safety | ✅ | 4-dimension checker + LLM-as-Judge |
+| Duration Range | ✅ | Adaptive duration per episode |
+| Codec/Format | ✅ | MP4/H.264 native output |
+
+### 4.6 Roadmap to Full Compliance
+
+| Priority | Task | Effort |
+|----------|------|--------|
+| P0 | Add 9:16 vertical output config flag | 1 day |
+| P0 | Add 30fps frame rate option | 1 day |
+| P1 | FFmpeg post-processing pipeline (upscale, aspect, audio placeholder) | 3 days |
+| P1 | TTS integration for audio track generation | 5 days |
+| P2 | AI video outpainting for automatic 16:9→9:16 conversion | 2 weeks |
+| P2 | Automated platform submission API integration | 3 weeks |
+
+---
+
+## 5. Data Architecture
 
 ### 4.1 Storage Topology
 
@@ -276,7 +360,7 @@ L3: Semantic Cache (semantic_cache.py)
 
 ---
 
-## 5. Recommendation System
+## 6. Recommendation System
 
 ### 5.1 Five-Layer Architecture
 
@@ -330,7 +414,7 @@ Data Flow:
 
 ---
 
-## 6. Search System
+## 7. Search System
 
 ### 6.1 Search Pipeline
 
@@ -358,7 +442,7 @@ Multi-Modal:
 
 ---
 
-## 7. Infrastructure & SRE
+## 8. Infrastructure & SRE
 
 ### 7.1 Resilience Layers
 
@@ -409,7 +493,7 @@ Database Scaling:
 
 ---
 
-## 8. Security
+## 9. Security
 
 ### 8.1 Authentication & Authorization
 
@@ -432,7 +516,7 @@ K8s Production: ExternalSecret Operator → Vault/AWS/GCP
 
 ---
 
-## 9. CI/CD & GitOps
+## 10. CI/CD & GitOps
 
 ```
 GitHub Actions (.github/workflows/ci.yml):
@@ -450,7 +534,7 @@ GitOps (ArgoCD):
 
 ---
 
-## 10. Key Design Decisions
+## 11. Key Design Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
