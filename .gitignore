@@ -54,4 +54,3 @@ backend/services/*/asset-service
 # Backups
 *.bak
 .cc-history/
-docs/
