@@ -207,7 +207,8 @@ class SeedanceService:
 
         return await self._retry_operation(_call, "图像生成")
 
-    async def generate_image(self, prompt, negative_prompt="", width=1920, height=1920,
+    async def generate_image(self, prompt, negative_prompt="",
+                             width=1080, height=1920,  # 9:16 vertical default for short drama
                              seed=None, store_to_ceph=True, related_entity_type="scene",
                              related_entity_id=None, user_id=None, db_session=None, **kwargs):
         if not self._initialized:
@@ -292,13 +293,17 @@ class SeedanceService:
         if not image_bytes:
             return None
         data_uri = f"data:image/png;base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+        # Support configurable aspect ratio for platform compliance
+        ratio = kwargs.get("ratio", "9:16")  # Default vertical for short drama platforms
+        resolution = kwargs.get("resolution", "720p")
         payload = {
             "model": self.video_model,
             "content": [
                 {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": data_uri}, "role": "first_frame"},
             ],
-            "resolution": "720p", "ratio": "16:9", "duration": duration, "watermark": False,
+            "resolution": resolution, "ratio": ratio,
+            "duration": duration, "watermark": False,
         }
 
         async def _call():

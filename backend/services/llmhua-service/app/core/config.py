@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     SEEDANCE_IMAGE_MODEL: str = os.getenv("SEEDANCE_IMAGE_MODEL", "doubao-seedream-4-5-251128")
     SEEDANCE_VIDEO_MODEL: str = os.getenv("SEEDANCE_VIDEO_MODEL", "doubao-seedance-2-0-260128")
     SEEDANCE_TIMEOUT: int = int(os.getenv("SEEDANCE_TIMEOUT", 300))
+    # Platform compliance — 红果短剧/快手短剧 standard
+    PORTRAIT_MODE: bool = os.getenv("PORTRAIT_MODE", "true").lower() == "true"  # 9:16 vertical
+    VIDEO_FPS: int = int(os.getenv("VIDEO_FPS", 30))  # 25 or 30 fps
+    VIDEO_RESOLUTION: str = os.getenv("VIDEO_RESOLUTION", "720p")  # 720p or 1080p
 
     # 图像生成参数
     IMAGE_WIDTH: int = int(os.getenv("IMAGE_WIDTH", 1920))
