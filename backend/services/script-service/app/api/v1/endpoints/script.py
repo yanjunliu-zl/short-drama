@@ -599,6 +599,19 @@ async def generate_from_outline_sync(
             config=app_settings,
         )
 
+        # ── 海外本土化: 注入 locale-aware 上下文 ──
+        target_locale = getattr(request, 'target_locale', 'zh-CN') or 'zh-CN'
+        extra_context = ""
+        if target_locale != 'zh-CN':
+            from app.services.localization_service import ScriptLocalizationService
+            loc_svc = ScriptLocalizationService(llm=None)
+            extra_context = loc_svc.build_locale_system_prompt(
+                target_locale=target_locale,
+                style=style,
+            )
+            logger.info(f"[V2大纲] 海外本土化模式 locale={target_locale} "
+                        f"context_len={len(extra_context)}")
+
         # Parse episode count for both paths
         length_to_eps = {
             "超短篇": 3, "短篇": 10, "中篇": 25, "长篇": 60, "超长篇": 100,
@@ -659,11 +672,16 @@ async def generate_from_outline_sync(
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
             )
 
+        # Merge locale context with user preferences
+        full_context = user_context
+        if extra_context:
+            full_context = f"{user_context}\n\n{extra_context}" if user_context else extra_context
+
         # ---- Non-streaming path (existing code) ----
         result = await _asyncio.wait_for(
             n2s_v2.run_full_pipeline(novel_text=request.outline, style=style,
                                       target_episodes=target_eps,
-                                      user_context=user_context),
+                                      user_context=full_context),
             timeout=600
         )
 
@@ -800,4 +818,93 @@ async def export_script(
         raise
     except Exception as e:
         logger.error(f"[API] POST /{script_id}/export 异常: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Localization endpoints ──
+
+@router.get("/markets")
+async def list_markets():
+    """列出所有支持的海外本土化市场"""
+    from app.services.localization_service import ScriptLocalizationService
+    markets = ScriptLocalizationService.list_markets()
+    return {"success": True, "data": markets}
+
+
+@router.get("/markets/{locale}")
+async def get_market_info(locale: str):
+    """获取指定市场的详细信息"""
+    from app.services.localization_service import ScriptLocalizationService
+    try:
+        info = ScriptLocalizationService().get_market_info(locale)
+        return {"success": True, "data": info}
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Market not found: {locale}")
+
+
+@router.post("/localize")
+async def localize_script(data: dict, script_service: ScriptService = Depends(get_script_service)):
+    """将剧本本土化适配到目标市场。
+
+    Args (JSON body):
+        script_content: 原始剧本内容
+        target_locale: 目标市场 (en-US, ar-SA, tr-TR, ja-JP, ko-KR, es-MX, th-TH)
+        source_locale: 源市场 (default: zh-CN)
+        title: 剧本标题
+        style: 原始风格
+        adaptation_level: "light" (仅文化符号替换) | "full" (完整文化适配, default)
+        preserve_plot: 是否保留原情节 (default: true)
+        output_language: 输出语言 (空=使用目标市场语言)
+    """
+    from app.services.localization_service import ScriptLocalizationService, LocalizationRequest
+
+    t0 = time.time()
+    logger.info(f"[API] POST /localize target={data.get('target_locale')} level={data.get('adaptation_level', 'full')} chars={len(data.get('script_content', ''))}")
+
+    try:
+        await script_service.initialize()
+        mock_mode = getattr(script_service.ai_service, '_mock_mode', False)
+        llm = script_service.ai_service.llm if not mock_mode else None
+
+        svc = ScriptLocalizationService(llm=llm)
+        req = LocalizationRequest(
+            script_content=data.get("script_content", ""),
+            source_locale=data.get("source_locale", "zh-CN"),
+            target_locale=data.get("target_locale", "en-US"),
+            title=data.get("title", ""),
+            style=data.get("style", ""),
+            adaptation_level=data.get("adaptation_level", "full"),
+            preserve_plot=data.get("preserve_plot", True),
+            preserve_episode_count=data.get("preserve_episode_count", True),
+            output_language=data.get("output_language", ""),
+        )
+
+        if req.adaptation_level == "light":
+            result = await svc.localize_light(req)
+        else:
+            result = await svc.localize(req)
+
+        elapsed = time.time() - t0
+        logger.info(f"[API] POST /localize done target={req.target_locale} "
+                    f"success={result.success} elapsed={elapsed:.1f}s")
+        return {
+            "success": result.success,
+            "data": {
+                "localized_script": result.localized_script,
+                "title_localized": result.title_localized,
+                "source_locale": result.source_locale,
+                "target_locale": result.target_locale,
+                "market_name": result.market_name,
+                "language": result.language,
+                "changes_summary": result.changes_summary,
+                "character_mappings": result.character_mappings,
+                "adaptation_notes": result.adaptation_notes,
+                "elapsed_ms": result.elapsed_ms,
+            },
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[API] POST /localize 异常: {e}")
         raise HTTPException(status_code=500, detail=str(e))

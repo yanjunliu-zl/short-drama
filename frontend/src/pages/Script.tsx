@@ -114,6 +114,7 @@ const Script: React.FC = () => {
   const [formStyle, setFormStyle] = useState('浪漫喜剧');
   const [formLength, setFormLength] = useState('短篇');
   const [formSetting, setFormSetting] = useState('现代都市');
+  const [targetLocale, setTargetLocale] = useState('zh-CN');
 
   // ============ 分集剧本编辑状态 ============
   const [episodes, setEpisodes] = useState<Episode[]>([]);
@@ -474,6 +475,7 @@ const Script: React.FC = () => {
           theme: formTheme, length: formLength,
           style: formStyle, setting: formSetting,
           user_id: String(userId || 'anonymous'),
+          target_locale: targetLocale,
         });
         setGenerationProgress(100);
         setGeneratedScriptTitle(result.title);
@@ -1133,6 +1135,19 @@ const Script: React.FC = () => {
             value={formSetting}
             onChange={(e) => setFormSetting(e.target.value)}
           />
+        </Form.Item>
+
+        <Form.Item label="目标市场" tooltip="选择海外本土化市场，剧本将自动适配当地文化（角色原型、场景、叙事风格）">
+          <Select value={targetLocale} onChange={setTargetLocale}>
+            <Option value="zh-CN">🇨🇳 中国大陆（默认）</Option>
+            <Option value="en-US">🇺🇸 北美 — Billionaire Romance / Mystery</Option>
+            <Option value="ar-SA">🇸🇦 中东 — Family Drama / Business Empire</Option>
+            <Option value="tr-TR">🇹🇷 土耳其 — Mafia Romance / Revenge</Option>
+            <Option value="ja-JP">🇯🇵 日本 — Slice of Life / Office Romance</Option>
+            <Option value="ko-KR">🇰🇷 韩国 — Chaebol Romance / Fantasy</Option>
+            <Option value="es-MX">🇲🇽 拉美 — Telenovela / Family Legacy</Option>
+            <Option value="th-TH">🇹🇭 东南亚 — Lakorn Romance / Comedy</Option>
+          </Select>
         </Form.Item>
           </>
         )}

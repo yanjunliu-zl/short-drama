@@ -24,6 +24,7 @@ class ScriptFromOutlineRequest(BaseModel):
     style: Optional[str] = Field(default="浪漫喜剧", description="剧本风格")
     user_id: Optional[str] = Field(default="", description="用户ID")
     stream: bool = Field(default=False, description="是否启用SSE流式输出")
+    target_locale: Optional[str] = Field(default="zh-CN", description="目标市场: zh-CN, en-US, ar-SA, tr-TR, ja-JP, ko-KR, es-MX, th-TH")
 
 
 # 剧本生成请求 - 从小说
