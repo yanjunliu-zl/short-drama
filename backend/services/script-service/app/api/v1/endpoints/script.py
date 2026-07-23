@@ -1148,3 +1148,121 @@ async def localize_script(data: dict, script_service: ScriptService = Depends(ge
     except Exception as e:
         logger.error(f"[API] POST /localize 异常: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Collaboration endpoints ──
+
+@router.post("/{script_id}/share")
+async def share_script(
+    script_id: int,
+    data: dict,
+    script_service: ScriptService = Depends(get_script_service),
+):
+    """分享剧本给其他用户或生成公开链接。
+
+    Body:
+        shared_with: 被分享者 user_id（空=生成公开链接）
+        permission: view / comment / edit (default: view)
+        ttl_hours: 公开链接有效期，小时 (default: 72)
+    """
+    from app.services.collaboration_service import get_collaboration_service, SharePermission
+
+    collab = get_collaboration_service()
+
+    script = await script_service.get_script(script_id)
+    if not script:
+        raise HTTPException(status_code=404, detail="Script not found")
+
+    link = collab.share_script(
+        script_id=script_id,
+        shared_by=data.get("shared_by", "user"),
+        shared_with=data.get("shared_with", ""),
+        permission=data.get("permission", SharePermission.VIEW),
+        ttl_hours=data.get("ttl_hours", 72),
+    )
+    logger.info(f"[API] POST /{script_id}/share token={link.token} permission={link.permission}")
+    return {"success": True, "data": link.to_dict()}
+
+
+@router.get("/{script_id}/shares")
+async def list_shares(script_id: int):
+    """列出剧本的所有分享链接"""
+    from app.services.collaboration_service import get_collaboration_service
+    collab = get_collaboration_service()
+    shares = collab.list_shares(script_id)
+    return {"success": True, "data": [s.to_dict() for s in shares]}
+
+
+@router.delete("/{script_id}/share/{token}")
+async def revoke_share(script_id: int, token: str):
+    """撤销分享链接"""
+    from app.services.collaboration_service import get_collaboration_service
+    collab = get_collaboration_service()
+    ok = collab.revoke_share(token)
+    return {"success": ok}
+
+
+@router.post("/{script_id}/annotations")
+async def add_annotation(script_id: int, data: dict):
+    """添加剧本批注
+
+    Body:
+        user_id: 批注者
+        content: 批注内容
+        episode_number: 批注在哪一集 (default: 0=全局)
+        position: {"line": 42, "char_offset": 10}
+        annotation_type: note / suggestion / issue / praise (default: note)
+    """
+    from app.services.collaboration_service import get_collaboration_service
+    collab = get_collaboration_service()
+    ann = collab.add_annotation(
+        script_id=script_id,
+        user_id=data.get("user_id", "anonymous"),
+        content=data.get("content", ""),
+        episode_number=data.get("episode_number", 0),
+        position=data.get("position"),
+        annotation_type=data.get("annotation_type", "note"),
+    )
+    logger.info(f"[API] POST /{script_id}/annotations id={ann.annotation_id}")
+    return {"success": True, "data": ann.to_dict()}
+
+
+@router.get("/{script_id}/annotations")
+async def list_annotations(
+    script_id: int,
+    episode_number: Optional[int] = None,
+    resolved: Optional[bool] = None,
+):
+    """列出剧本批注"""
+    from app.services.collaboration_service import get_collaboration_service
+    collab = get_collaboration_service()
+    annotations = collab.list_annotations(script_id, episode_number, resolved)
+    summary = collab.get_annotations_summary(script_id)
+    return {"success": True, "data": [a.to_dict() for a in annotations], "summary": summary}
+
+
+@router.post("/{script_id}/annotations/{annotation_id}/reply")
+async def reply_annotation(script_id: int, annotation_id: str, data: dict):
+    """回复批注"""
+    from app.services.collaboration_service import get_collaboration_service
+    collab = get_collaboration_service()
+    ok = collab.reply_annotation(annotation_id, data.get("user_id", ""), data.get("content", ""))
+    return {"success": ok}
+
+
+@router.post("/{script_id}/annotations/{annotation_id}/resolve")
+async def resolve_annotation(script_id: int, annotation_id: str, data: dict):
+    """标记批注为已解决"""
+    from app.services.collaboration_service import get_collaboration_service
+    collab = get_collaboration_service()
+    ok = collab.resolve_annotation(annotation_id, data.get("resolved_by", ""))
+    return {"success": ok}
+
+
+@router.get("/{script_id}/collaborators")
+async def list_collaborators(script_id: int):
+    """列出剧本协作者"""
+    from app.services.collaboration_service import get_collaboration_service
+    collab = get_collaboration_service()
+    users = collab.get_script_collaborators(script_id)
+    return {"success": True, "data": users}
