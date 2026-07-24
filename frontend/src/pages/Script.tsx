@@ -214,6 +214,10 @@ const Script: React.FC = () => {
           if (!saved.generationStatus) saved.generationStatus = 'completed';
           // Has full data: load immediately, map API format to frontend Episode type
           if (saved.episodes?.length > 0) {
+            setGeneratedScriptTitle(saved.generatedScriptTitle || saved.title || '');
+            setGenerationStatus('completed');
+            setGenerationProgress(100);
+            if (saved.scriptId) setScriptId(saved.scriptId);
             const mapped = saved.episodes.map((ep: any, i: number) => ({
               id: ep.id || `ep-${i + 1}-${Date.now().toString(36)}`,
               title: ep.title || `第${i + 1}集`,
