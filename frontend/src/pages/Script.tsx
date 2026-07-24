@@ -227,7 +227,18 @@ const Script: React.FC = () => {
               // API returns {task_id, status, script: {content, episodes, title}}
               const s = resp?.data?.script || resp?.script || resp?.data || resp;
               if (s?.content) parseScriptToEpisodes(s.content, s.title || '');
-              if (s?.episodes) { setEpisodes(s.episodes); setActiveEpisodeId(s.episodes[0]?.id); }
+              if (s?.episodes?.length > 0) {
+                // Map API episode format → frontend Episode type
+                const mapped = s.episodes.map((ep: any, i: number) => ({
+                  id: `ep-${i + 1}-${Date.now().toString(36)}`,
+                  title: ep.title || `第${i + 1}集`,
+                  number: ep.episode_number || (i + 1),
+                  description: ep.content || ep.description || '',
+                  scenes: [], characters: [],
+                }));
+                setEpisodes(mapped);
+                if (mapped.length > 0) setActiveEpisodeId(mapped[0].id);
+              }
             }).catch(() => {});
           }
           setGeneratedScriptTitle(saved.generatedScriptTitle || '');
