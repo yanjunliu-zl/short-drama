@@ -86,12 +86,8 @@ const Scene: React.FC = () => {
       if (urlWorkId) {
         setWorkId(urlWorkId);
         await restoreFromBackend(urlWorkId);
-      } else {
-        setScenes([]);
-        setCharacters([]);
-        setProps([]);
-        return;
       }
+      // Even without workId, try loading from localStorage (set by Script page)
 
       // 优先从 pipeline localStorage 加载（workId 感知）
       const savedScenes = loadState('scenes');
