@@ -103,7 +103,7 @@ async def get_script(
             logger.warning(f"[API] GET /{script_id} 剧本未找到")
             raise HTTPException(status_code=404, detail="Script not found")
 
-        logger.info(f"[API] GET /{script_id} 成功 title={script.title}")
+        logger.info(f"[API] GET /{script_id} 成功 title={script.get('title', '')}")
         return ScriptResponse(
             task_id=script_id,
             status="completed",
