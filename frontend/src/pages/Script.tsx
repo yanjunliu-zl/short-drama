@@ -2035,6 +2035,17 @@ const Script: React.FC = () => {
 
   // ============ 主渲染 ============
   // 生成完成或已有分集数据时显示分集编辑器，否则显示上传视图
+  // Persist state for cross-navigation (sidebar switches)
+  useEffect(() => {
+    if (episodes.length > 0 && generationStatus === 'completed') {
+      persistState('script', {
+        generationStatus: 'completed', generationProgress: 100,
+        generatedScriptTitle: generatedScriptTitle || formTitle,
+        episodes: episodes, scriptId: scriptId,
+      });
+    }
+  }, [episodes, generationStatus]);
+
   const showEditor = generationStatus === 'completed' || (generationStatus === 'idle' && episodes.length > 0);
 
   return showEditor ? renderScriptEditor() : renderUploadTabs();
