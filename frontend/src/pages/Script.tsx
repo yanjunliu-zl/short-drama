@@ -2035,7 +2035,7 @@ const Script: React.FC = () => {
 
   // ============ 主渲染 ============
   // 生成完成或已有分集数据时显示分集编辑器，否则显示上传视图
-  const showEditor = generationStatus === 'completed';
+  const showEditor = generationStatus === 'completed' || (generationStatus === 'idle' && episodes.length > 0);
 
   return showEditor ? renderScriptEditor() : renderUploadTabs();
 };
