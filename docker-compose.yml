@@ -492,8 +492,12 @@ services:
       - PORT=8002
       - LOG_LEVEL=INFO
       - DEBUG=false
+      - http_proxy=http://host.docker.internal:7897
+      - https_proxy=http://host.docker.internal:7897
+      - NO_PROXY=localhost,127.0.0.1,minio,mysql,redis,rabbitmq,.internal,ark.cn-beijing.volces.com,api.deepseek.com
+      - no_proxy=localhost,127.0.0.1,minio,mysql,redis,rabbitmq,.internal,ark.cn-beijing.volces.com,api.deepseek.com
     ports:
-      - "8005:8002"
+      - "8002:8002"
     volumes:
       - ./backend/services/llmhua-service:/app
     networks:
@@ -510,7 +514,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    command: uvicorn main:app --host 0.0.0.0 --port 8002 --reload --workers 2
+    command: sh -c "env -u HTTP_PROXY -u HTTPS_PROXY uvicorn main:app --host 0.0.0.0 --port 8002 --reload --workers 2"
 
   # 最终剪辑服务 (GoZero + ffmpeg) — new architecture with gRPC
   final-cut-service:

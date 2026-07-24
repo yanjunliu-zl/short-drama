@@ -720,18 +720,11 @@ class Novel2ScriptV2Service:
         chapter_content = chapter.get("content", "")
         episode_hint = chapter.get("episode_hint", "")
 
-        # #1: Smart truncation — preserve beginning AND ending for long chapters
-        max_chars = 8000  # Increased from 6000
-        if len(chapter_content) > max_chars:
-            first_part = chapter_content[:max_chars - 2000]  # First 6000
-            last_part = chapter_content[-2000:]               # Last 2000
-            chapter_content_trimmed = (
-                first_part +
-                f"\n\n...（中间{len(chapter_content) - max_chars}字内容已省略）...\n\n" +
-                last_part
-            )
-        else:
-            chapter_content_trimmed = chapter_content
+        # Dynamic scene count based on chapter length — no truncation
+        # ~1200 chars per scene, 3 minimum, 12 maximum
+        chapter_len = len(chapter_content)
+        target_scenes = max(3, min(12, (chapter_len + 1199) // 1200))
+        chapter_content_trimmed = chapter_content  # Full content, no truncation
 
         # #5: Query rewrite — structured retrieval query
         characters_list = [c.get("name", "") for c in global_info.get("characters", [])[:5]]
@@ -796,67 +789,119 @@ class Novel2ScriptV2Service:
                     style_rule=style_rule,
                     scene_serial=scene_serial,
                     episode_hint=episode_hint,
+                    target_scenes=target_scenes,
                 )),
             ]
             response = await self.llm.ainvoke(messages, config={"timeout": 180})
-            return self._parse_chapter_response(response.content, chapter_name, scene_serial)
+            scenes = self._parse_chapter_response(response.content, chapter_name, scene_serial)
+            logger.info(f"Chapter '{chapter_name}' → {len(scenes)} scenes")
+            return scenes
         except Exception as e:
             logger.warning(f"Chapter script generation failed for {chapter_name}: {e}")
-            return self._fallback_chapter_script(chapter, scene_serial)
+            return [self._fallback_chapter_script(chapter, scene_serial)]
 
     def _parse_chapter_response(self, response_text: str, chapter_title: str,
-                                 scene_serial: str) -> dict:
-        """Parse LLM text response into structured chapter script dict."""
-        result = {
-            "chapter_title": chapter_title,
-            "scene_number": scene_serial,
-            "scene_type": "",
-            "location": "",
-            "characters": [],
-            "props": [],
-            "storyboard": [],
-            "script_body": response_text,
-        }
+                                 scene_serial: str) -> list:
+        """Parse LLM text response into MULTIPLE structured scene dicts.
 
-        # Extract scene type
-        type_match = re.search(r'【场景类型】(.+)', response_text)
-        if type_match:
-            result["scene_type"] = type_match.group(1).strip()
+        The LLM generates 3-6 scenes per chapter, delimited by 【场景N：...】 markers.
+        Each scene has its own type, location, characters, props, and storyboard.
+        """
+        scenes = []
 
-        # Extract location
-        loc_match = re.search(r'【场景地点】(.+)', response_text)
-        if loc_match:
-            result["location"] = loc_match.group(1).strip()
+        # Extract per-chapter metadata (shared across all scenes in this chapter)
+        chapter_chars_raw = re.search(r'【出场角色】(.+)', response_text)
+        chapter_chars = []
+        if chapter_chars_raw:
+            chapter_chars = [c.strip() for c in re.split(r'[、，,]', chapter_chars_raw.group(1)) if c.strip()]
 
-        # Extract characters
-        char_match = re.search(r'【出场角色】(.+)', response_text)
-        if char_match:
-            result["characters"] = [c.strip() for c in re.split(r'[、，,]', char_match.group(1)) if c.strip()]
+        chapter_props_raw = re.search(r'【核心道具】(.+)', response_text)
+        chapter_props = []
+        if chapter_props_raw:
+            chapter_props = [p.strip() for p in re.split(r'[、，,]', chapter_props_raw.group(1)) if p.strip()]
 
-        # Extract props
-        prop_match = re.search(r'【核心道具】(.+)', response_text)
-        if prop_match:
-            result["props"] = [p.strip() for p in re.split(r'[、，,]', prop_match.group(1)) if p.strip()]
-
-        # Extract storyboard table
-        board_pattern = re.compile(
-            r'镜号：(\d+)\s*\|\s*镜头类型：(.*?)\s*\|\s*运镜：(.*?)\s*\|\s*时长：(.*?)\s*\|\s*画面内容：(.*?)(?=镜号|【|$)',
-            re.S
+        # Split into individual scenes by 【场景N：...】 markers
+        # Pattern matches: 【场景1：地点 - 时间】 or 【场景一：地点】
+        scene_pattern = re.compile(
+            r'【场景\s*([一二三四五六七八九十\d]+)\s*[：:]([^】]+)】',
+            re.IGNORECASE
         )
-        for m in board_pattern.finditer(response_text):
-            try:
-                dur_str = m.group(4).strip().replace('s', '').replace('秒', '')
-                result["storyboard"].append({
-                    "shot_number": int(m.group(1)),
-                    "camera_type": m.group(2).strip(),
-                    "camera_movement": m.group(3).strip(),
-                    "duration_seconds": float(dur_str) if dur_str else 5.0,
-                    "description": m.group(5).strip(),
-                })
-            except (ValueError, IndexError):
-                continue
+        scene_splits = list(scene_pattern.finditer(response_text))
 
-        return result
+        if not scene_splits:
+            # No scene markers found — treat entire text as one scene (fallback)
+            scenes.append({
+                "chapter_title": chapter_title,
+                "scene_number": scene_serial,
+                "scene_type": "",
+                "location": "",
+                "characters": chapter_chars,
+                "props": chapter_props,
+                "storyboard": [],
+                "script_body": response_text,
+            })
+            return scenes
+
+        for i, match in enumerate(scene_splits):
+            scene_num_str = match.group(1)
+            scene_location = match.group(2).strip()
+            start = match.end()
+            end = scene_splits[i + 1].start() if i + 1 < len(scene_splits) else len(response_text)
+            scene_body = response_text[start:end].strip()
+
+            # Generate unique scene serial: "SCENE-001", "SCENE-002", etc.
+            scene_serial_int = int(scene_serial.split('-')[1]) if '-' in scene_serial else i + 1
+            unique_serial = f"SCENE-{scene_serial_int + i:03d}"
+
+            # Extract scene-specific metadata
+            scene_type = ""
+            type_match = re.search(r'【场景类型】(.+)', scene_body)
+            if type_match:
+                scene_type = type_match.group(1).strip()
+
+            # Extract scene-specific characters from body (角色名：台词 pattern)
+            scene_chars = list(set(re.findall(r'([^\s：:△【（(]{2,5})[：:]', scene_body)))
+            all_chars = list(set(chapter_chars + scene_chars))
+
+            # Extract storyboard for this scene
+            board_pattern = re.compile(
+                r'镜号：(\d+)\s*\|\s*镜头类型：(.*?)\s*\|\s*运镜：(.*?)\s*\|\s*时长：(.*?)\s*\|\s*画面[：:](.*?)(?=镜号|【|$)',
+                re.S
+            )
+            storyboard = []
+            for m in board_pattern.finditer(scene_body):
+                try:
+                    dur_str = m.group(4).strip().replace('s', '').replace('秒', '')
+                    storyboard.append({
+                        "shot_number": len(storyboard) + 1,
+                        "camera_type": m.group(2).strip(),
+                        "camera_movement": m.group(3).strip(),
+                        "duration_seconds": float(dur_str) if dur_str else 5.0,
+                        "description": m.group(5).strip(),
+                    })
+                except (ValueError, IndexError):
+                    continue
+
+            # Extract cliffhanger (hook) from last scene
+            hook = ""
+            if i == len(scene_splits) - 1:  # Last scene
+                hook_match = re.search(r'【本集钩子】(.+)', response_text)
+                if hook_match:
+                    hook = hook_match.group(1).strip()
+
+            scenes.append({
+                "chapter_title": chapter_title,
+                "scene_number": unique_serial,
+                "scene_type": scene_type,
+                "location": scene_location,
+                "characters": all_chars,
+                "props": chapter_props,
+                "storyboard": storyboard,
+                "script_body": scene_body,
+                "hook": hook,
+            })
+
+        return scenes
 
     def _fallback_chapter_script(self, chapter: dict, scene_serial: str) -> dict:
         """Fallback: programmatic conversion of chapter content to basic script format.
@@ -1250,7 +1295,11 @@ class Novel2ScriptV2Service:
         results = await asyncio.gather(*tasks)
         # Sort by original chapter order
         results.sort(key=lambda x: x[0])
-        all_chapters = [r[1] for r in results]
+        # Flatten: each chapter now produces a LIST of scenes
+        all_chapters = []
+        for r in results:
+            chapter_scenes = r[1] if isinstance(r[1], list) else [r[1]]
+            all_chapters.extend(chapter_scenes)
 
         result["script_scenes"] = all_chapters
         result["stages"]["script"] = {"chapters_generated": len(all_chapters)}
@@ -1264,7 +1313,15 @@ class Novel2ScriptV2Service:
                 all_storyboard.append(shot)
         result["storyboard"] = all_storyboard
 
-        # Build final concatenated script text with 第N集 markers for episode splitting
+        # Build final concatenated script text with 第N集 markers
+        # Group scenes by chapter_title for per-chapter episodes
+        chapter_groups: dict = {}
+        for scene in all_chapters:
+            ch_title = scene.get("chapter_title", "未知章节")
+            if ch_title not in chapter_groups:
+                chapter_groups[ch_title] = []
+            chapter_groups[ch_title].append(scene)
+
         parts = []
         episodes = []
         cn_nums = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
@@ -1273,24 +1330,28 @@ class Novel2ScriptV2Service:
                    '三十一', '三十二', '三十三', '三十四', '三十五', '三十六', '三十七', '三十八', '三十九', '四十',
                    '四十一', '四十二', '四十三', '四十四', '四十五', '四十六', '四十七', '四十八', '四十九', '五十']
 
-        for i, ch in enumerate(all_chapters):
-            ep_num = i + 1
+        ep_num = 0
+        for chapter_title, scenes in chapter_groups.items():
+            ep_num += 1
             ep_cn = cn_nums[ep_num] if ep_num < len(cn_nums) else str(ep_num)
             ep_title = f"第{ep_cn}集"
-            chapter_title = ch.get('chapter_title', '')
-            script_body = ch.get('script_body', '')
+            # Join all scene bodies for this chapter
+            scene_bodies = []
+            for sc in scenes:
+                scene_bodies.append(sc.get('script_body', ''))
+            full_body = "\n\n".join(scene_bodies)
 
-            # #14: Don't duplicate episode markers if LLM already generated them
-            if re.match(r'\s*(?:\*\*)?第\s*[一二三四五六七八九十百千\d]+\s*集', script_body):
-                # LLM already included 第N集 — use script_body as-is
-                episode_content = script_body
+            # Don't duplicate episode markers if LLM already generated them
+            if re.match(r'\s*(?:\*\*)?第\s*[一二三四五六七八九十百千\d]+\s*集', full_body):
+                episode_content = full_body
             else:
+                first_scene = scenes[0] if scenes else {}
                 episode_content = (
                     f"{ep_title}\n\n"
-                    f"【场景编号】{ch.get('scene_number', '')}\n"
-                    f"【场景类型】{ch.get('scene_type', '')}\n"
-                    f"【场景地点】{ch.get('location', '')}\n\n"
-                    f"{script_body}"
+                    f"【场景数量】{len(scenes)}\n"
+                    f"【场景类型】{first_scene.get('scene_type', '')}\n"
+                    f"【场景地点】{first_scene.get('location', '')}\n\n"
+                    f"{full_body}"
                 )
             parts.append(episode_content)
             episodes.append({

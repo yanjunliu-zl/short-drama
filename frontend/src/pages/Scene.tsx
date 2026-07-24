@@ -106,7 +106,7 @@ const Scene: React.FC = () => {
 
       // 回退：从全局 key 加载（兼容旧数据）
       if (!savedScenes?.length && !savedCharacters?.length && !savedProps?.length) {
-        const saved = localStorage.getItem('extracted_entities');
+        const saved = localStorage.getItem(`extracted_entities_${searchParams.get('workId') || 'default'}`);
         if (saved) {
           try {
             const data = JSON.parse(saved);
@@ -118,7 +118,7 @@ const Scene: React.FC = () => {
       }
 
       // 加载预览图像缓存
-      const savedImages = localStorage.getItem('scene_preview_images');
+      const savedImages = localStorage.getItem(`scene_preview_images_${searchParams.get('workId') || 'default'}`);
       if (savedImages) {
         try { setPreviewImages(JSON.parse(savedImages)); } catch {}
       }
@@ -144,7 +144,7 @@ const Scene: React.FC = () => {
   // 自动持久化：直接 GET-merge-PUT，不依赖 hook
   useEffect(() => {
     if (scenes.length || characters.length || props.length) {
-      localStorage.setItem('extracted_entities', JSON.stringify({
+      localStorage.setItem(`extracted_entities_${getWorkId() || 'default'}`, JSON.stringify({
         scenes, characters, props,
         updatedAt: new Date().toISOString(),
       }));
@@ -472,7 +472,7 @@ const Scene: React.FC = () => {
   // 自动持久化：previewImages 变化时保存到 localStorage + pipeline state
   useEffect(() => {
     if (Object.keys(previewImages).length > 0) {
-      localStorage.setItem('scene_preview_images', JSON.stringify(previewImages));
+      localStorage.setItem(`scene_preview_images_${getWorkId() || searchParams.get('workId') || 'default'}`, JSON.stringify(previewImages));
 
       // 构建 name → image_url 参考映射，供 Storyboard 视频生成使用
       const referenceImages = {
@@ -499,7 +499,7 @@ const Scene: React.FC = () => {
       // 保存映射到 localStorage
       if (Object.keys(referenceImages.characters).length ||
           Object.keys(referenceImages.scenes).length) {
-        localStorage.setItem('scene_reference_images', JSON.stringify(referenceImages));
+        localStorage.setItem(`scene_reference_images_${getWorkId() || 'default'}`, JSON.stringify(referenceImages));
       }
 
       // 异步保存到后端 pipeline state
