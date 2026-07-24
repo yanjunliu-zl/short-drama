@@ -50,7 +50,7 @@ def _try_create_deepseek(timeout: float = 180.0) -> Optional[Any]:
         return None
 
     api_base = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
-    model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    model = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
     http_client, http_async_client = _create_httpx_clients(api_base, timeout)
 
     try:

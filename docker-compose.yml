@@ -68,7 +68,7 @@ x-env-base: &env-base
   ELASTICSEARCH_PORT: ${ELASTICSEARCH_PORT:-9200}
   DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
   DEEPSEEK_API_BASE: ${DEEPSEEK_API_BASE:-https://api.deepseek.com}
-  DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+  DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-pro}
   SEEDANCE_API_KEY: ${SEEDANCE_API_KEY:-}
   SEEDANCE_API_URL: ${SEEDANCE_API_URL:-https://ark.cn-beijing.volces.com/api/v3}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -443,7 +443,7 @@ services:
       - REDIS_PORT=6379
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - DEEPSEEK_API_BASE=${DEEPSEEK_API_BASE:-https://api.deepseek.com}
-      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-pro}
       - PORT=8001
       - LOG_LEVEL=INFO
       - DEBUG=false
@@ -489,7 +489,7 @@ services:
       - SEEDANCE_VIDEO_MODEL=${SEEDANCE_VIDEO_MODEL:-doubao-seedance-2-0-260128}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - DEEPSEEK_API_BASE=https://api.deepseek.com
-      - DEEPSEEK_MODEL=deepseek-chat
+      - DEEPSEEK_MODEL=deepseek-v4-pro
       - STORAGE_TYPE=minio
       - STORAGE_ENDPOINT=minio:9000
       - STORAGE_ACCESS_KEY=minioadmin
