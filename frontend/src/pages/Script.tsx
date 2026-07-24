@@ -1704,6 +1704,13 @@ const Script: React.FC = () => {
         title: generatedScriptTitle,
       }));
 
+      setExtractedEntities({
+        characters: extractedCharacters,
+        locations: extractedScenes.map((s: any) => s.name),
+        items: extractedProps.map((p: any) => p.name),
+      } as any);
+      setIsExtractModalOpen(true);
+
       const totalCount = extractedCharacters.length + extractedScenes.length + extractedProps.length;
       message.success(`提取完成：${extractedCharacters.length} 个角色、${extractedScenes.length} 个场景、${extractedProps.length} 个道具`);
       navigate(`/scene?workId=${wId || ''}`);
