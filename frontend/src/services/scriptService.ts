@@ -143,7 +143,7 @@ export const scriptService = {
     locations: { name: string; description: string }[]
     props: { name: string; description: string }[]
   }> => {
-    const response = await api.post('/v1/scripts/extract-entities', { content, script_id: scriptId })
+    const response = await api.post('/v1/scripts/extract-entities', { content, script_id: scriptId }, { timeout: 120000 })
     return response.data
   },
 
