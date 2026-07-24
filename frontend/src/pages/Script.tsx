@@ -190,27 +190,22 @@ const Script: React.FC = () => {
       const urlWorkId = searchParams.get('workId');
 
       if (urlWorkId) {
-        // URL 明确指定了 workId → restoreFromBackend 会自动清旧数据并从后端恢复
-        clearState();
-        await restoreFromBackend(urlWorkId);
+        // Fetch pipeline directly from backend (bypass localStorage complexity)
+        try {
+          const resp = await pipelineService.getPipelineState(urlWorkId);
+          const data = (resp as any)?.data;
+          if (data?.script) {
+            saved = data.script;
+          }
+        } catch {}
       } else {
-        // 无 workId → 全新开始，清除之前所有 pipeline 状态
         clearPipelineStorage(userId);
         clearState();
       }
 
-      // 从 localStorage 恢复（多源尝试，确保不丢数据）
-      let saved = loadPersisted('script');
+      // Fallback to localStorage if backend fetch didn't produce data
       if (!saved) {
-        saved = loadState();  // script_page_state_{userId}
-      }
-      if (!saved && urlWorkId) {
-        // 最后尝试：从后端重新加载
-        try {
-          const resp = await pipelineService.getPipelineState(urlWorkId);
-          const data = (resp as any)?.data;
-          if (data?.script) saved = data.script;
-        } catch {}
+        saved = loadPersisted('script') || loadState();
       }
 
       if (saved) {
