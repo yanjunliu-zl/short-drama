@@ -214,13 +214,20 @@ const Script: React.FC = () => {
       }
 
       if (saved) {
-        if (saved.generationStatus === 'completed' && (saved.episodes?.length > 0 || saved.content)) {
+        if (saved.generationStatus === 'completed' && (saved.episodes?.length > 0 || saved.content || saved.scriptId)) {
+          // Has full data: load immediately
           if (saved.episodes?.length > 0) {
             setEpisodes(saved.episodes || []);
             setActiveEpisodeId(saved.episodes[0].id);
           } else if (saved.content) {
-            // 有原始内容但无 episodes，重新解析
             parseScriptToEpisodes(saved.content, saved.generatedScriptTitle || '');
+          } else if (saved.scriptId) {
+            // Pipeline stored reference only — fetch full script from API
+            scriptService.getScript(String(saved.scriptId)).then((resp: any) => {
+              const s = resp?.data || resp;
+              if (s?.content) parseScriptToEpisodes(s.content, s.title || '');
+              if (s?.episodes) { setEpisodes(s.episodes); setActiveEpisodeId(s.episodes[0]?.id); }
+            }).catch(() => {});
           }
           setGeneratedScriptTitle(saved.generatedScriptTitle || '');
           setGenerationStatus('completed');
@@ -321,9 +328,11 @@ const Script: React.FC = () => {
                 try {
                   const r = await pipelineService.getPipelineState(workId);
                   const existing = (r as any)?.data || {};
+                  // Pipeline stores metadata + script_id reference (not full content)
                   existing.script = {
-                    episodes: epsForSave.length > 0 ? epsForSave : [],
-                    content: contentForSave,
+                    scriptId: (status as any).script_id,
+                    title: title,
+                    episodeCount: epsForSave.length,
                     generatedScriptTitle: title,
                     generationStatus: 'completed',
                     generationProgress: 100,
@@ -335,9 +344,9 @@ const Script: React.FC = () => {
                     };
                   }
                   existing.updatedAt = new Date().toISOString();
-                  // Save locally first (backend may fail but local persists)
+                  // Save locally with full content for immediate access
                   saveState({ generationStatus: 'completed', generationProgress: 100,
-                    generatedScriptTitle: title, episodes: epsForSave, content: contentForSave });
+                    generatedScriptTitle: title, episodes: epsForSave, content: contentForSave, scriptId: (status as any).script_id });
                   await pipelineService.savePipelineState(workId, existing);
                 } catch {}
               }
