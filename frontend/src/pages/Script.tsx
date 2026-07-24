@@ -208,7 +208,10 @@ const Script: React.FC = () => {
       }
 
       if (saved) {
-        if (saved.generationStatus === 'completed' && (saved.episodes?.length > 0 || saved.content || saved.scriptId)) {
+        // Infer completed state from data presence (old pipeline data lacks generationStatus)
+        const isCompleted = saved.generationStatus === 'completed' || saved.episodes?.length > 0 || saved.content;
+        if (isCompleted) {
+          if (!saved.generationStatus) saved.generationStatus = 'completed';
           // Has full data: load immediately, map API format to frontend Episode type
           if (saved.episodes?.length > 0) {
             const mapped = saved.episodes.map((ep: any, i: number) => ({
