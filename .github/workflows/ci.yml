@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [script-service, storyboard-service, llmhua-service, recommendation-service]
+        service: [script-service, storyboard-service, llmhua-service]
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [user-service, content-service, final-cut-service]
+        service: [user-service, content-service, final-cut-service, recommendation-service, search-service]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -58,7 +58,7 @@ jobs:
           cache: false
 
       - name: Build Go binary
-        working-directory: backend/services/${{ matrix.service }}
+        working-directory: ${{ contains(fromJSON('["recommendation-service","search-service"]'), matrix.service) && matrix.service || format('backend/services/{0}', matrix.service) }}
         run: CGO_ENABLED=0 GOOS=linux go build -o ${{ matrix.service }} ./cmd
 
       - name: Set up Docker Buildx
@@ -76,8 +76,8 @@ jobs:
       - name: Build ${{ matrix.service }}
         uses: docker/build-push-action@v5
         with:
-          context: backend/services/${{ matrix.service }}
-          file: backend/services/${{ matrix.service }}/Dockerfile.prebuilt
+          context: ${{ contains(fromJSON('["recommendation-service","search-service"]'), matrix.service) && matrix.service || format('backend/services/{0}', matrix.service) }}
+          file: ${{ contains(fromJSON('["recommendation-service","search-service"]'), matrix.service) && format('{0}/Dockerfile', matrix.service) || format('backend/services/{0}/Dockerfile.prebuilt', matrix.service) }}
           push: false
           load: true
           tags: |
