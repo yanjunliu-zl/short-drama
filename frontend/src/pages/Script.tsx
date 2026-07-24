@@ -335,6 +335,9 @@ const Script: React.FC = () => {
                     };
                   }
                   existing.updatedAt = new Date().toISOString();
+                  // Save locally first (backend may fail but local persists)
+                  saveState({ generationStatus: 'completed', generationProgress: 100,
+                    generatedScriptTitle: title, episodes: epsForSave, content: contentForSave });
                   await pipelineService.savePipelineState(workId, existing);
                 } catch {}
               }
