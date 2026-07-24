@@ -1687,17 +1687,19 @@ const Script: React.FC = () => {
         tags: [],
       }));
 
-      // 使用 saveAllToBackend（带序列化锁，确保与其他保存不冲突）
-      const wId = getWorkId();
-      if (wId) {
-        await saveAllToBackend(wId, {
-          scenes: extractedScenes,
-          characters: extractedCharacters,
-          props: extractedProps,
-        });
+      // Save directly to localStorage so Scene page can load immediately
+      const wId = getWorkId() || 'default';
+      persistState('scenes', extractedScenes);
+      persistState('characters', extractedCharacters);
+      persistState('props', extractedProps);
+
+      // Also try backend save (fire-and-forget)
+      if (getWorkId()) {
+        saveAllToBackend(getWorkId()!, {
+          scenes: extractedScenes, characters: extractedCharacters, props: extractedProps,
+        }).catch(() => {});
       }
 
-      // 存到 sessionStorage（绕过 pipeline 问题，可靠传递剧本数据）
       sessionStorage.setItem('current_script', JSON.stringify({
         episodes: JSON.parse(JSON.stringify(episodes)),
         generatedScriptTitle,
