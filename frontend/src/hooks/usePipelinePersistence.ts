@@ -82,10 +82,10 @@ export function usePipelinePersistence() {
   const restoreFromBackend = useCallback(
     async (workId: string): Promise<boolean> => {
       try {
-        // 先清除当前用户所有 pipeline 旧数据，防止切换作品时残留
-        clearPipelineStorage(userId)
         const response = await pipelineService.getPipelineState(workId)
         if (response.data) {
+          // Only clear after successful fetch, not before
+          clearPipelineStorage(userId)
           for (const key of SLICE_KEYS) {
             const value = (response.data as any)[key]
             if (value) {
@@ -95,7 +95,7 @@ export function usePipelinePersistence() {
           localStorage.setItem(storageKey(userId, 'workId'), workId)
           return true
         }
-        // 即使没有数据也记住 workId，防止 auto-save 创建重复作品
+        // Even without data, remember workId
         localStorage.setItem(storageKey(userId, 'workId'), workId)
         return false
       } catch (err) {

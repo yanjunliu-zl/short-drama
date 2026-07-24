@@ -708,97 +708,222 @@ class Novel2ScriptV2Service:
         style: str,
         scene_serial: str,
         cumulative_context: str = "",
-    ) -> dict:
-        """Generate script for one chapter with RAG context, cross-chapter context, and storyboard.
+    ) -> list:
+        """Iterative scene-by-scene generation for one chapter.
 
-        #1: Long chapters (>6000 chars) get smart truncation: first 4000 + last 2000 chars.
-        #3: RAG query uses chapter summary (from cumulative_context) if available,
-            falling back to the first 500 chars of chapter content.
-        #5: cumulative_context provides previous-chapter summaries and next-chapter preview.
+        Phase 1: Split chapter into N scene segments (one LLM call for scene planning).
+        Phase 2: Generate each scene individually (focused on its specific text segment).
+        This avoids the attention dilution of batch generation and ensures
+        every part of the chapter is covered.
         """
         chapter_name = chapter.get("title", f"第{chapter['index']+1}章")
         chapter_content = chapter.get("content", "")
         episode_hint = chapter.get("episode_hint", "")
 
-        # Dynamic scene count based on chapter length — no truncation
-        # ~1200 chars per scene, 3 minimum, 12 maximum
         chapter_len = len(chapter_content)
         target_scenes = max(3, min(12, (chapter_len + 1199) // 1200))
-        chapter_content_trimmed = chapter_content  # Full content, no truncation
 
-        # #5: Query rewrite — structured retrieval query
+        # Shared context (computed once, reused across all scene calls)
         characters_list = [c.get("name", "") for c in global_info.get("characters", [])[:5]]
-        chapter_keywords = f"章节: {chapter_name}, 内容: {chapter_content[:200]}"
+        char_profiles = self._search_characters(
+            characters_list + (chapter.get("characters", []) or [])[:3]
+        )
+        style_rule = self._get_style_instructions(style)
+
+        # RAG — one retrieval for the whole chapter
         rewritten_query = await self._rewrite_query(
-            user_intent=chapter_keywords,
+            user_intent=f"章节: {chapter_name}, 内容: {chapter_content[:200]}",
             chapter_context=chapter_content[:500],
             chapter_name=chapter_name,
             characters=characters_list,
         )
-
-        # #2: Hybrid search (BM25 + Dense + RRF) with character filter
         rag_context = await self._rag_search(
-            vector_store,
-            query=rewritten_query,
+            vector_store, query=rewritten_query,
             filter_characters=characters_list if characters_list else None,
         )
 
-        # #4: Independent character profile lookup
-        char_profiles = self._search_characters(
-            [c.get("name", "") for c in global_info.get("characters", [])[:5]]
-            + (chapter.get("characters", []) or [])[:3]
-        )
-
-        style_rule = self._get_style_instructions(style)
-
-        logger.info(f"Generating script for {chapter_name}... "
-                    f"content_len={len(chapter_content)}, trimmed={len(chapter_content_trimmed)}, "
-                    f"rag_ctx_len={len(rag_context)}, char_profiles_len={len(char_profiles)}, "
-                    f"cum_ctx_len={len(cumulative_context)}"
-                    f"{', hint=' + episode_hint[:50] if episode_hint else ''}")
+        logger.info(f"Iterative scene generation for {chapter_name}: "
+                    f"content_len={chapter_len}, target_scenes={target_scenes}, "
+                    f"rag={len(rag_context)} chars")
 
         if self.mock_mode:
-            return {
-                "chapter_title": chapter_name,
-                "scene_number": scene_serial,
-                "scene_type": "内景 白天",
-                "location": "大殿",
-                "characters": ["主角", "配角"],
-                "props": ["宝剑"],
-                "storyboard": [
-                    {"shot_number": 1, "camera_type": "全景", "camera_movement": "固定",
-                     "duration_seconds": 5.0, "description": "大殿全景，人物入场"},
-                    {"shot_number": 2, "camera_type": "中景", "camera_movement": "推",
-                     "duration_seconds": 4.0, "description": "角色对话场景"},
-                ],
-                "script_body": f"（大殿内，庄严肃穆）\n主角：（坚定）台词内容\n配角：（恭敬）台词内容",
-            }
+            return [{
+                "chapter_title": chapter_name, "scene_number": scene_serial,
+                "scene_type": "内景 白天", "location": "大殿",
+                "characters": ["主角", "配角"], "props": ["宝剑"],
+                "storyboard": [{"shot_number": 1, "camera_type": "全景",
+                    "camera_movement": "固定", "duration_seconds": 5.0,
+                    "description": "大殿全景，人物入场"}],
+                "script_body": "（大殿内，庄严肃穆）\n主角：（坚定）台词内容",
+            }]
 
         try:
-            messages = [
-                SystemMessage(content=SYSTEM_GENERATE_CHAPTER_V2),
-                HumanMessage(content=HUMAN_GENERATE_CHAPTER_V2.format(
+            # ── Phase 1: Scene planning ──
+            segments = await self._plan_scenes(
+                chapter_content, chapter_name, target_scenes, global_info,
+                char_profiles, rag_context, cumulative_context, style_rule,
+            )
+            if not segments:
+                segments = self._fallback_segments(chapter_content, target_scenes)
+
+            # ── Phase 2: Iterative per-scene generation ──
+            all_scenes = []
+            prev_summary = ""
+            for idx, seg in enumerate(segments):
+                scene_serial_i = f"{scene_serial}-{idx+1}"
+                scene = await self._generate_single_scene(
+                    segment_text=seg.get("text", ""),
+                    segment_summary=seg.get("summary", f"场景{idx+1}"),
+                    chapter_name=chapter_name,
+                    scene_serial=scene_serial_i,
                     global_info=global_info,
-                    story_framework=global_info.get("story_framework", ""),
-                    graphrag_context=global_info.get("graphrag_context", ""),
-                    cumulative_context=cumulative_context,
                     char_profiles=char_profiles,
                     rag_context=rag_context,
-                    chapter_name=chapter_name,
-                    chapter_content=chapter_content_trimmed,
+                    cumulative_context=cumulative_context,
+                    prev_scene_summary=prev_summary,
                     style_rule=style_rule,
-                    scene_serial=scene_serial,
-                    episode_hint=episode_hint,
-                    target_scenes=target_scenes,
-                )),
-            ]
-            response = await self.llm.ainvoke(messages, config={"timeout": 180})
-            scenes = self._parse_chapter_response(response.content, chapter_name, scene_serial)
-            logger.info(f"Chapter '{chapter_name}' → {len(scenes)} scenes")
-            return scenes
+                    scene_index=idx,
+                    total_scenes=len(segments),
+                )
+                if scene:
+                    prev_summary = seg.get("summary", "")[:100]
+                    all_scenes.append(scene)
+
+            logger.info(f"Chapter '{chapter_name}' → {len(all_scenes)}/{len(segments)} scenes")
+            return all_scenes if all_scenes else [self._fallback_chapter_script(chapter, scene_serial)]
+
         except Exception as e:
             logger.warning(f"Chapter script generation failed for {chapter_name}: {e}")
             return [self._fallback_chapter_script(chapter, scene_serial)]
+
+    # ── Phase 1: Scene planning ──
+
+    async def _plan_scenes(
+        self, chapter_content: str, chapter_name: str, target_scenes: int,
+        global_info: dict, char_profiles: str, rag_context: str,
+        cumulative_context: str, style_rule: str,
+    ) -> list:
+        """Analyze chapter and split into N scene segments with plot boundaries."""
+        plan_prompt = f"""分析以下小说章节，将其拆分为恰好{target_scenes}个场景片段。
+
+每个场景片段应包含：
+1. 覆盖的小说原文段落（从章节原文中截取）
+2. 一句话摘要（该场景要讲什么）
+
+【章节名称】{chapter_name}
+【章节内容】
+{chapter_content[:12000]}
+
+输出格式（JSON）：
+{{
+  "scenes": [
+    {{"summary": "男主角在咖啡厅遇见女主角", "text": "...对应的原文段落..."}},
+    ...
+  ]
+}}
+
+要求：
+- 恰好{target_scenes}个场景
+- 完整覆盖章节所有关键情节
+- 每个场景的text字段包含对应原文（不要截断）"""
+
+        try:
+            messages = [
+                SystemMessage(content="你是专业剧本策划，擅长将小说章节拆分为场景片段。"),
+                HumanMessage(content=plan_prompt),
+            ]
+            response = await self.llm.ainvoke(messages, config={"timeout": 120})
+            data = self._parse_json_response(response.content)
+            scenes = data.get("scenes", [])
+            if scenes and len(scenes) > 0:
+                return scenes[:target_scenes]
+        except Exception as e:
+            logger.warning(f"Scene planning failed for {chapter_name}: {e}")
+        return []
+
+    def _fallback_segments(self, chapter_content: str, target_scenes: int) -> list:
+        """Uniform split as fallback when LLM planning fails."""
+        text_len = len(chapter_content)
+        chunk_size = max(500, text_len // target_scenes)
+        segments = []
+        for i in range(target_scenes):
+            start = i * chunk_size
+            end = min(start + chunk_size, text_len) if i < target_scenes - 1 else text_len
+            segments.append({
+                "summary": f"场景{i+1}",
+                "text": chapter_content[start:end],
+            })
+        return segments
+
+    # ── Phase 2: Single scene generation ──
+
+    async def _generate_single_scene(
+        self, segment_text: str, segment_summary: str, chapter_name: str,
+        scene_serial: str, global_info: dict, char_profiles: str,
+        rag_context: str, cumulative_context: str, prev_scene_summary: str,
+        style_rule: str, scene_index: int, total_scenes: int,
+    ) -> dict:
+        """Generate ONE scene from one text segment — focused and complete."""
+        scene_prompt = f"""根据以下小说片段，生成一个独立的影视场景。
+
+【章节】{chapter_name}
+【本场景】{scene_index + 1}/{total_scenes} — {segment_summary}
+【前一场景摘要】{prev_scene_summary if prev_scene_summary else '无（这是本章第一个场景）'}
+【前情提要】{cumulative_context[:500]}
+【角色档案】{char_profiles[:500]}
+【相关前文】{rag_context[:500]}
+【台词风格】{style_rule}
+
+【小说原文片段 — 只改编以下内容】
+{segment_text[:3000]}
+
+【输出格式】
+【场景编号】{scene_serial}
+【场景地点】地点名 - 白天/黑夜
+【场景类型】外景/内景
+△环境描写（一句话）
+
+角色名：（情绪）对白内容
+角色名：（情绪）对白内容
+...
+
+【分镜明细】
+镜号：1 | 镜头类型：全景/中景/近景/特写 | 运镜：推/拉/摇/移/固定 | 时长：3-8s | 画面：详细描述
+镜号：2 | ...
+
+【要求】
+- 只改编上面【小说原文片段】中的内容，不要编造新的情节
+- 如果是本章最后一个场景({scene_index+1 == total_scenes})，结尾加【本集钩子】
+- 对白:动作:环境 = 5:3:2"""
+
+        try:
+            messages = [
+                SystemMessage(content="你是专业影视编剧，将小说片段改编为场景剧本。"),
+                HumanMessage(content=scene_prompt),
+            ]
+            response = await self.llm.ainvoke(messages, config={"timeout": 120})
+            parsed = self._parse_chapter_response(
+                response.content, chapter_name, scene_serial
+            )
+            return parsed[0] if parsed else None
+        except Exception as e:
+            logger.warning(f"Single scene generation failed for {scene_serial}: {e}")
+            return None
+
+    @staticmethod
+    def _parse_json_response(text: str) -> dict:
+        """Parse JSON from LLM response with fallback."""
+        import json
+        try:
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0]
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0]
+            if "{" in text:
+                text = text[text.index("{"):text.rindex("}")+1]
+            return json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return {}
 
     def _parse_chapter_response(self, response_text: str, chapter_title: str,
                                  scene_serial: str) -> list:

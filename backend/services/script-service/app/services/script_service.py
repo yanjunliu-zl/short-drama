@@ -6,7 +6,7 @@ from uuid import uuid4
 import time
 from datetime import datetime, timezone
 
-from sqlalchemy import select, func, update, delete
+from sqlalchemy import select, func, update, delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.script import (
@@ -27,6 +27,40 @@ from app.core.database import AsyncSessionLocal
 from app.services.usage_tracker import track_llm_usage
 
 logger = logging.getLogger(__name__)
+
+# Redis task status store — avoids MySQL transaction isolation issues
+import redis.asyncio as aioredis
+_task_redis: Optional[aioredis.Redis] = None
+_TASK_TTL = 7200  # 2 hours
+
+
+async def _get_task_redis() -> aioredis.Redis:
+    global _task_redis
+    if _task_redis is None:
+        _task_redis = aioredis.from_url(
+            f"redis://{app_settings.REDIS_HOST}:{app_settings.REDIS_PORT}/{app_settings.REDIS_DB}",
+            socket_connect_timeout=3,
+        )
+    return _task_redis
+
+
+async def _task_set(task_id: str, data: dict):
+    """Write task status to Redis (immediately visible, no isolation)."""
+    try:
+        r = await _get_task_redis()
+        await r.setex(f"task:{task_id}", _TASK_TTL, json.dumps(data, default=str))
+    except Exception as e:
+        logger.warning(f"Redis task write failed (non-critical): {e}")
+
+
+async def _task_get(task_id: str) -> Optional[dict]:
+    """Read task status from Redis."""
+    try:
+        r = await _get_task_redis()
+        raw = await r.get(f"task:{task_id}")
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
 
 
 class ScriptService:
@@ -314,7 +348,38 @@ class ScriptService:
             return True
 
     async def get_generation_status(self, task_id: str) -> Optional[Dict]:
-        """获取剧本生成状态"""
+        """获取剧本生成状态 — Redis 为主（即时可见），MySQL 兜底"""
+        # 1. Try Redis first
+        redis_data = await _task_get(task_id)
+        if redis_data:
+            status = {
+                "task_id": task_id,
+                "status": redis_data.get("status", "processing"),
+                "progress": redis_data.get("progress", 0),
+                "stage": redis_data.get("stage", ""),
+                "title": redis_data.get("title", ""),
+                "script_id": redis_data.get("script_id"),
+            }
+
+            # If completed, check MySQL for full result
+            if redis_data.get("status") == "completed":
+                async with self._get_db() as db:
+                    stmt = select(Script).where(
+                        Script.task_id == task_id
+                    ).order_by(Script.created_at.desc()).limit(1)
+                    script_result = await db.execute(stmt)
+                    script = script_result.scalar_one_or_none()
+                    if script:
+                        status["result"] = {
+                            "title": script.title, "content": script.content,
+                            "episodes": script.episodes,
+                            "theme": script.theme, "style": script.style,
+                            "length": script.length, "setting": script.setting,
+                            "characters": script.characters,
+                        }
+            return status
+
+        # 2. Fallback to MySQL
         async with self._get_db() as db:
             stmt = select(GenerationTask).where(GenerationTask.task_id == task_id)
             result = await db.execute(stmt)
@@ -325,7 +390,6 @@ class ScriptService:
 
             status = task.to_dict()
 
-            # 如果任务完成且有script_id，附加剧本内容
             if task.status == TaskStatus.COMPLETED.value and task.script_id:
                 script_stmt = select(Script).where(Script.id == task.script_id)
                 script_result = await db.execute(script_stmt)
@@ -535,22 +599,22 @@ class ScriptService:
                 novel_content = getattr(request, 'novel_content', '') or ''
                 logger.info(f"[小说→剧本] 开始 task={task_id} title={request.title} novel_len={len(novel_content)} style={request.style}")
 
-                # Create or retrieve task record
+                # Task status via Redis — immediately visible, no isolation issues
+                await _task_set(task_id, {"status": "processing", "progress": 5, "title": request.title})
+
                 task = await db.get(GenerationTask, task_id)
                 if not task:
                     task = GenerationTask(
-                        task_id=task_id,
-                        status=TaskStatus.PROCESSING.value,
-                        progress=5,
-                        start_time=time.time(),
+                        task_id=task_id, status=TaskStatus.PROCESSING.value,
+                        progress=5, start_time=time.time(),
                     )
                     db.add(task)
                 else:
                     task.status = TaskStatus.PROCESSING.value
                     task.progress = 5
+                await db.flush()
                 await db.commit()
 
-                # --- V2 RAG-based pipeline (V1 ViMax has been removed) ---
                 await self._generate_from_novel_v2(task_id, request, task, db, novel_content)
                 return
 
@@ -581,6 +645,7 @@ class ScriptService:
             async def progress_callback(pct: int, stage: str):
                 task.progress = pct
                 await db.commit()
+                await _task_set(task_id, {"status": "processing", "progress": pct, "title": request.title, "stage": stage})
                 logger.info(f"[V2] 进度 {pct}% — {stage} task={task_id}")
 
             result = await n2s_v2.run_full_pipeline(
@@ -654,6 +719,7 @@ class ScriptService:
             task.status = TaskStatus.COMPLETED.value
             task.progress = 100
             task.script_id = script.id
+            await _task_set(task_id, {"status": "completed", "progress": 100, "title": request.title, "script_id": script.id})
             task.end_time = time.time()
             await db.commit()
 
@@ -759,6 +825,7 @@ class ScriptService:
                 async def progress_callback(pct: int, stage: str):
                     task.progress = pct
                     await db.commit()
+                    await _task_set(task_id, {"status": "processing", "progress": pct, "title": request.title, "stage": stage})
                     logger.info(f"[V2大纲] 进度 {pct}% — {stage} task={task_id}")
 
                 # Map length to target episode count (outline has no chapter markers)

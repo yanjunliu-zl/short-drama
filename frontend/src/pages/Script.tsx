@@ -268,6 +268,7 @@ const Script: React.FC = () => {
             pollingRef.current = null;
             setGenerationStatus('completed');
             setGenerationProgress(100);
+            if ((status as any).script_id) setScriptId((status as any).script_id);
             message.success('剧本生成完成！');
 
             const resultEpisodes: any[] = [];
@@ -351,7 +352,7 @@ const Script: React.FC = () => {
         // 404 = 任务可能还未持久化，重试几次再放弃
         if (err?.response?.status === 404) {
           retry404 = (retry404 || 0) + 1;
-          if (retry404 > 10) {
+          if (retry404 > 20) {
             clearInterval(pollingRef.current!);
             pollingRef.current = null;
             clearState();
