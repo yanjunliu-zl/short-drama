@@ -365,7 +365,7 @@ const Script: React.FC = () => {
                   existing.updatedAt = new Date().toISOString();
                   // Save locally with full content for immediate access
                   saveState({ generationStatus: 'completed', generationProgress: 100,
-                    generatedScriptTitle: title, episodes: epsForSave, content: contentForSave, scriptId: (status as any).script_id });
+                    generatedScriptTitle: title, episodes: epsForSave, content: contentForSave, scriptId: (status as any).script_id } as any);
                   await pipelineService.savePipelineState(workId, existing);
                 } catch {}
               }
@@ -1660,7 +1660,7 @@ const Script: React.FC = () => {
     }
   };
 
-  const showExtractionResult = (data: any) => {
+  const showExtractionResult = async (data: any) => {
       // 构建场景数据（从地点列表）
       const extractedScenes = (data.locations || []).map((loc: any, idx: number) => ({
         id: idx + 1,
@@ -1707,10 +1707,6 @@ const Script: React.FC = () => {
       const totalCount = extractedCharacters.length + extractedScenes.length + extractedProps.length;
       message.success(`提取完成：${extractedCharacters.length} 个角色、${extractedScenes.length} 个场景、${extractedProps.length} 个道具`);
       navigate(`/scene?workId=${wId || ''}`);
-    } catch {
-      message.destroy('extract');
-      message.error('主体提取失败，请重试');
-    }
   };
 
   // ============ 全局设置状态 ============
