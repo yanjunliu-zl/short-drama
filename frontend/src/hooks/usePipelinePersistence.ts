@@ -82,6 +82,8 @@ export function usePipelinePersistence() {
   const restoreFromBackend = useCallback(
     async (workId: string): Promise<boolean> => {
       try {
+        // Skip invalid workIds (e.g., 'default') to avoid 400 errors
+        if (!workId || !workId.startsWith('wk_')) return false;
         const response = await pipelineService.getPipelineState(workId)
         if (response.data) {
           // Save backup of current localStorage first

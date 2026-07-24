@@ -340,7 +340,7 @@ const Script: React.FC = () => {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title, type: '短剧', description: '', userId: 'anonymous' }),
                   });
-                  if (resp.ok) { const w = await resp.json(); if (w?.id) { setWorkId(w.id); workId = w.id; } }
+                  if (resp.ok) { const w = await resp.json(); if (w?.id) { setWorkId(w.id); workId = w.id; persistState('workId', workId); } }
                 } catch {}
               }
               if (workId) {
