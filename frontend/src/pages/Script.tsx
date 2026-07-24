@@ -222,13 +222,16 @@ const Script: React.FC = () => {
           } else if (saved.content) {
             parseScriptToEpisodes(saved.content, saved.generatedScriptTitle || '');
           } else if (saved.scriptId) {
-            // Pipeline stored reference only — fetch full script from API
+            // Set completion state immediately so editor shows
+            setGeneratedScriptTitle(saved.generatedScriptTitle || '');
+            setGenerationStatus('completed');
+            setGenerationProgress(100);
+            if (saved.scriptId) setScriptId(saved.scriptId);
+            // Fetch full script content asynchronously
             scriptService.getScript(String(saved.scriptId)).then((resp: any) => {
-              // API returns {task_id, status, script: {content, episodes, title}}
               const s = resp?.data?.script || resp?.script || resp?.data || resp;
               if (s?.content) parseScriptToEpisodes(s.content, s.title || '');
               if (s?.episodes?.length > 0) {
-                // Map API episode format → frontend Episode type
                 const mapped = s.episodes.map((ep: any, i: number) => ({
                   id: `ep-${i + 1}-${Date.now().toString(36)}`,
                   title: ep.title || `第${i + 1}集`,
@@ -239,11 +242,6 @@ const Script: React.FC = () => {
                 setEpisodes(mapped);
                 if (mapped.length > 0) setActiveEpisodeId(mapped[0].id);
               }
-              // Set completion state AFTER episodes are populated
-              setGeneratedScriptTitle(saved.generatedScriptTitle || '');
-              setGenerationStatus('completed');
-              setGenerationProgress(100);
-              if (saved.scriptId) setScriptId(saved.scriptId);
             }).catch(() => {});
           }
         } else if (saved.generationStatus === 'generating' && saved.taskId) {
@@ -2033,7 +2031,7 @@ const Script: React.FC = () => {
 
   // ============ 主渲染 ============
   // 生成完成或已有分集数据时显示分集编辑器，否则显示上传视图
-  const showEditor = generationStatus === 'completed' && uniqueEpisodes.length > 0;
+  const showEditor = generationStatus === 'completed';
 
   return showEditor ? renderScriptEditor() : renderUploadTabs();
 };
