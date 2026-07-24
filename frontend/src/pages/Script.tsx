@@ -1715,7 +1715,6 @@ const Script: React.FC = () => {
 
       const totalCount = extractedCharacters.length + extractedScenes.length + extractedProps.length;
       message.success(`提取完成：${extractedCharacters.length} 个角色、${extractedScenes.length} 个场景、${extractedProps.length} 个道具`);
-      navigate(`/scene?workId=${wId || ''}`);
   };
 
   // ============ 全局设置状态 ============
