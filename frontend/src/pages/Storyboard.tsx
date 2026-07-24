@@ -56,12 +56,13 @@ const Storyboard: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
       const urlWorkId = searchParams.get('workId');
-      if (urlWorkId) {
-        setWorkId(urlWorkId);
-        await restoreFromBackend(urlWorkId);
-      } else {
-        setEpisodes([]); return; // 无活跃作品时清空
+      const storedWorkId = getWorkId();
+      const validWorkId = urlWorkId || (storedWorkId?.startsWith('wk_') ? storedWorkId : '');
+      if (validWorkId) {
+        setWorkId(validWorkId);
+        await restoreFromBackend(validWorkId);
       }
+      // Even without valid workId, try loading from localStorage
 
       let data = loadState('storyboard');
       if (!data) {
