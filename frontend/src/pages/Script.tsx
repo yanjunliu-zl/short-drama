@@ -1732,6 +1732,7 @@ const Script: React.FC = () => {
               ],
               onClick: async ({ key }) => {
                 if (!scriptId) { message.warning('请先生成剧本'); return; }
+                if (uniqueEpisodes.length === 0) { message.warning('剧本内容加载中，请稍后再试'); return; }
                 const hide = message.loading(`正在导出到 ${key === 'all' ? '全部平台' : key}...`, 0);
                 try {
                   const result = await scriptService.exportToPlatform(
