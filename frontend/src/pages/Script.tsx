@@ -198,7 +198,7 @@ const Script: React.FC = () => {
           if (data?.script) saved = data.script;
         } catch {}
       } else {
-        clearPipelineStorage(userId);
+        // No workId — don't clear, just try to restore from localStorage
         clearState();
       }
 
