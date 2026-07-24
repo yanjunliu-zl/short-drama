@@ -133,7 +133,7 @@ export const scriptService = {
     user_id?: string
     excerpt_ratio?: number
   }): Promise<ScriptResponse> => {
-    const response = await api.post<ScriptResponse>('/v1/scripts/generate/from-novel', data)
+    const response = await api.post<ScriptResponse>('/v1/scripts/generate/from-novel', data, { timeout: 300000 })
     return response.data
   },
 

@@ -249,8 +249,10 @@ const Script: React.FC = () => {
 
   // ============ 轮询逻辑 ============
   const pollGenerationStatus = useCallback((id: string) => {
+    let retry404 = 0;
     pollingRef.current = setInterval(async () => {
       try {
+        retry404 = 0; // Reset on success
         const status = await scriptService.getGenerationStatus(id);
         if (status) {
           setGenerationProgress(status.progress || 0);
@@ -346,13 +348,16 @@ const Script: React.FC = () => {
           }
         }
       } catch (err: any) {
-        // 404 = 任务已不存在，停止轮询
+        // 404 = 任务可能还未持久化，重试几次再放弃
         if (err?.response?.status === 404) {
-          clearInterval(pollingRef.current!);
-          pollingRef.current = null;
-          clearState();
-          setGenerationStatus('idle');
-          console.log('任务已过期，已停止轮询');
+          retry404 = (retry404 || 0) + 1;
+          if (retry404 > 10) {
+            clearInterval(pollingRef.current!);
+            pollingRef.current = null;
+            clearState();
+            setGenerationStatus('idle');
+            console.log('任务已过期，已停止轮询');
+          }
         } else {
           console.error('轮询状态失败:', err?.message || err);
         }

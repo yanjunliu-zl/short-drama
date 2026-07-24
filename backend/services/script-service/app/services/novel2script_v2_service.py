@@ -1274,7 +1274,7 @@ class Novel2ScriptV2Service:
 
         async def generate_one(i: int, chapter: dict) -> tuple:
             nonlocal completed
-            scene_serial = f"SCENE-{str(i + 1).zfill(3)}"
+            scene_serial = f"SCENE-{str(i + 1).zfill(3)}"  # Placeholder, renumbered later
             # Build cumulative context from previous chapter summaries (#5)
             cum_ctx = self._build_cumulative_context(chapter_summaries, i)
             async with sem:
@@ -1300,6 +1300,10 @@ class Novel2ScriptV2Service:
         for r in results:
             chapter_scenes = r[1] if isinstance(r[1], list) else [r[1]]
             all_chapters.extend(chapter_scenes)
+
+        # Global sequential scene numbering (SCENE-001, SCENE-002, ...)
+        for idx, scene in enumerate(all_chapters):
+            scene["scene_number"] = f"SCENE-{str(idx + 1).zfill(3)}"
 
         result["script_scenes"] = all_chapters
         result["stages"]["script"] = {"chapters_generated": len(all_chapters)}
@@ -1335,22 +1339,28 @@ class Novel2ScriptV2Service:
             ep_num += 1
             ep_cn = cn_nums[ep_num] if ep_num < len(cn_nums) else str(ep_num)
             ep_title = f"第{ep_cn}集"
-            # Join all scene bodies for this chapter
+            # Join all scene bodies for this chapter with scene markers
             scene_bodies = []
-            for sc in scenes:
-                scene_bodies.append(sc.get('script_body', ''))
-            full_body = "\n\n".join(scene_bodies)
+            for si, sc in enumerate(scenes):
+                scene_num = sc.get('scene_number', f'SCENE-{si+1:03d}')
+                location = sc.get('location', '')
+                scene_type = sc.get('scene_type', '')
+                body = sc.get('script_body', '')
+                scene_bodies.append(
+                    f"【场景编号】{scene_num}\n"
+                    f"【场景地点】{location}\n"
+                    f"【场景类型】{scene_type}\n\n"
+                    f"{body}"
+                )
+            full_body = "\n\n" + "—" * 30 + "\n\n".join(scene_bodies)
 
             # Don't duplicate episode markers if LLM already generated them
             if re.match(r'\s*(?:\*\*)?第\s*[一二三四五六七八九十百千\d]+\s*集', full_body):
                 episode_content = full_body
             else:
-                first_scene = scenes[0] if scenes else {}
                 episode_content = (
-                    f"{ep_title}\n\n"
-                    f"【场景数量】{len(scenes)}\n"
-                    f"【场景类型】{first_scene.get('scene_type', '')}\n"
-                    f"【场景地点】{first_scene.get('location', '')}\n\n"
+                    f"{ep_title}\n"
+                    f"【场景数量】{len(scenes)}\n\n"
                     f"{full_body}"
                 )
             parts.append(episode_content)
