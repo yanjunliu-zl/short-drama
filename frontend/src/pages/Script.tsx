@@ -190,7 +190,7 @@ const Script: React.FC = () => {
       const urlWorkId = searchParams.get('workId');
       let saved: any = null;
 
-      if (urlWorkId) {
+      if (urlWorkId && urlWorkId !== 'default') {
         // Fetch pipeline directly from backend (bypass localStorage complexity)
         try {
           const resp = await pipelineService.getPipelineState(urlWorkId);
@@ -1688,7 +1688,7 @@ const Script: React.FC = () => {
       }));
 
       // Save directly to localStorage so Scene page can load immediately
-      const wId = getWorkId() || 'default';
+      const wId = getWorkId();
       persistState('scenes', extractedScenes);
       persistState('characters', extractedCharacters);
       persistState('props', extractedProps);

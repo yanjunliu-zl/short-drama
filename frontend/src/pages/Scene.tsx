@@ -82,12 +82,14 @@ const Scene: React.FC = () => {
   // 从 localStorage / pipeline 加载持久化数据
   useEffect(() => {
     const initLoad = async () => {
-      const urlWorkId = searchParams.get('workId') || getWorkId();
-      if (urlWorkId) {
-        setWorkId(urlWorkId);
-        await restoreFromBackend(urlWorkId);
+      const urlWorkId = searchParams.get('workId');
+      const storedWorkId = getWorkId();
+      const validWorkId = urlWorkId || (storedWorkId?.startsWith('wk_') ? storedWorkId : '');
+      if (validWorkId) {
+        setWorkId(validWorkId);
+        await restoreFromBackend(validWorkId);
       }
-      // Even without workId, try loading from localStorage (set by Script page)
+      // Try loading directly from localStorage (set by Script page)
 
       // 优先从 pipeline localStorage 加载（workId 感知）
       const savedScenes = loadState('scenes');
