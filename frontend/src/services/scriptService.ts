@@ -147,6 +147,17 @@ export const scriptService = {
     return response.data
   },
 
+  // Async entity extraction — returns task_id immediately, poll getExtractionStatus()
+  extractEntitiesAsync: async (content: string, scriptId?: number | string): Promise<{ task_id: string }> => {
+    const response = await api.post('/v1/scripts/extract-entities', { content, script_id: scriptId })
+    return response.data
+  },
+
+  getExtractionStatus: async (taskId: string): Promise<{ status: string; progress: number; result?: any; error?: string }> => {
+    const response = await api.get(`/v1/scripts/extract-entities/${taskId}/status`)
+    return response.data
+  },
+
   /** 上传完整剧本并自动分集 (JSON) */
   uploadAndSplitScript: async (data: {
     title: string

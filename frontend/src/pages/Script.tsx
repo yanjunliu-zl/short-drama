@@ -1634,28 +1634,43 @@ const Script: React.FC = () => {
         return;
       }
       message.loading({ content: '正在提取角色、场景、道具...', key: 'extract', duration: 0 });
-      const data = await scriptService.extractEntities(fullText, scriptId!);
-      message.destroy('extract');
 
+      // Submit extraction task (async)
+      const { task_id } = await scriptService.extractEntitiesAsync(fullText, scriptId!);
+
+      // Poll for completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await scriptService.getExtractionStatus(task_id);
+          if (status.status === 'completed') {
+            clearInterval(pollInterval);
+            message.destroy('extract');
+            const data = status.result;
+            showExtractionResult(data);
+          } else if (status.status === 'failed') {
+            clearInterval(pollInterval);
+            message.destroy('extract');
+            message.error(status.error || '提取失败');
+          }
+        } catch { clearInterval(pollInterval); message.destroy('extract'); }
+      }, 2000);
+    } catch (e: any) {
+      message.destroy('extract');
+      message.error(e?.message || '提取请求失败');
+    }
+  };
+
+  const showExtractionResult = (data: any) => {
       // 构建场景数据（从地点列表）
       const extractedScenes = (data.locations || []).map((loc: any, idx: number) => ({
         id: idx + 1,
         name: typeof loc === 'string' ? loc : (loc.name || ''),
         description: typeof loc === 'object' ? (loc.description || '') : '',
-        type: '室内',
-        environment: '',
-        size: '中等',
-        tags: [],
+        type: '室内', environment: '', size: '中等', tags: [],
       }));
-
-      // 构建角色数据
       const extractedCharacters = (data.characters || []).map((c: any, idx: number) => ({
-        id: idx + 1,
-        name: c.name || '',
-        description: c.description || '',
-        age: 25,
-        gender: c.gender || (c.role === '反派' ? '男' : ''),
-        occupation: '',
+        id: idx + 1, name: c.name || '', description: c.description || '',
+        age: 25, gender: c.gender || (c.role === '反派' ? '男' : ''), occupation: '',
         personality: c.description || '',
         appearance: '',
         tags: [c.role || '配角'],

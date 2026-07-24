@@ -361,28 +361,55 @@ async def clear_cache():
 @router.post("/extract-entities")
 async def extract_entities(
     request: dict,
+    background_tasks: BackgroundTasks,
     script_service: ScriptService = Depends(get_script_service)
 ):
-    """从剧本内容中提取主体（角色、地点、道具）。
-    支持传入 script_id 复用剧本生成时已提取的角色和地点数据，仅对道具做 LLM 提取。"""
+    """从剧本内容中提取主体（角色、地点、道具）— 异步模式。
+
+    立即返回 task_id，后台执行 LLM 提取，前端轮询 /extract-entities/{task_id}/status。
+    """
     content = request.get("content", "")
     script_id = request.get("script_id")
-    content_len = len(content) if content else 0
-    logger.info(f"[API] POST /extract-entities script_id={script_id} content_len={content_len}")
-    t0 = time.time()
+    task_id = str(uuid.uuid4())
+    logger.info(f"[API] POST /extract-entities task_id={task_id} script_id={script_id} content_len={len(content) if content else 0}")
 
+    if not content:
+        raise HTTPException(status_code=400, detail="Content is required")
+
+    # Set initial status via Redis
+    from app.services.script_service import _task_set
+    await _task_set(f"extract:{task_id}", {"status": "processing", "progress": 0})
+
+    # Process in background
+    background_tasks.add_task(
+        _do_extract_entities,
+        task_id=task_id, content=content, script_id=script_id,
+        script_service=script_service,
+    )
+
+    return {"task_id": task_id, "status": "processing", "message": "提取任务已提交"}
+
+
+async def _do_extract_entities(
+    task_id: str, content: str, script_id, script_service
+):
+    """Background task: run entity extraction and store results in Redis."""
+    from app.services.novel2script_v2_service import Novel2ScriptV2Service
+    from app.services.script_service import _task_set
+
+    t0 = time.time()
     try:
-        from app.services.novel2script_v2_service import Novel2ScriptV2Service
         mock_mode = getattr(script_service.ai_service, '_mock_mode', False)
         n2s_v2 = Novel2ScriptV2Service(
             llm=script_service.ai_service.llm if not mock_mode else None,
-            mock_mode=mock_mode,
-            config=settings,
+            mock_mode=mock_mode, config=settings,
         )
 
-        # 如果有 script_id，尝试从数据库获取预提取的角色和事件
-        pre_extracted_characters = None
-        pre_extracted_locations = None
+        await _task_set(f"extract:{task_id}", {"status": "processing", "progress": 50})
+
+        # Check for pre-extracted data if script_id provided
+        pre_extracted_chars = None
+        pre_extracted_locs = None
         if script_id:
             try:
                 async with script_service._get_db() as db:
@@ -390,59 +417,44 @@ async def extract_entities(
                     script_result = await db.execute(stmt)
                     script = script_result.scalar_one_or_none()
                     if script and script.characters:
-                        pre_extracted_characters = script.characters
-                        logger.info(f"[extract-entities] 从DB加载预提取角色: {len(pre_extracted_characters)}个 script_id={script_id}")
+                        pre_extracted_chars = script.characters
                     if script and script.analysis_result:
-                        events = script.analysis_result
-                        pre_extracted_locations = script_service._derive_locations_from_events(events)
-                        logger.info(f"[extract-entities] 从事件派生地点: {len(pre_extracted_locations)}个 script_id={script_id}")
+                        pre_extracted_locs = script_service._derive_locations_from_events(script.analysis_result)
             except Exception as e:
-                logger.warning(f"[extract-entities] 加载预提取实体失败 script_id={script_id}: {e}，回退到LLM提取")
+                logger.warning(f"[extract-entities] pre-extract failed: {e}")
 
-        # 如果有预提取的角色和地点，仅对道具做 LLM 提取
-        if pre_extracted_characters is not None and pre_extracted_locations is not None:
-            if not content:
-                logger.info(f"[extract-entities] 使用预提取数据（无道具）耗时={time.time()-t0:.1f}s")
-                return {
-                    "characters": pre_extracted_characters,
-                    "locations": pre_extracted_locations,
-                    "props": [],
-                }
-            # 仅提取道具
-            try:
-                props_result = await n2s_v2._extract_entities_from_script(content, [], {})
-                result = {
-                    "characters": pre_extracted_characters,
-                    "locations": pre_extracted_locations,
-                    "props": props_result.get("props", []),
-                }
-                logger.info(f"[extract-entities] 预提取+道具LLM完成 "
-                            f"角色={len(result['characters'])} 地点={len(result['locations'])} "
-                            f"道具={len(result['props'])} 耗时={time.time()-t0:.1f}s")
-                return result
-            except Exception as e:
-                logger.warning(f"[extract-entities] 道具LLM提取失败: {e}，返回无道具结果")
-                return {
-                    "characters": pre_extracted_characters,
-                    "locations": pre_extracted_locations,
-                    "props": [],
-                }
-
-        # 无预提取数据，走完整 LLM 提取
-        if not content:
-            raise HTTPException(status_code=400, detail="Content is required")
-
+        # Run LLM extraction
         result = await n2s_v2._extract_entities_from_script(content, [], {})
-        logger.info(f"[extract-entities] 完整LLM提取完成 "
-                    f"角色={len(result.get('characters',[]))} "
-                    f"地点={len(result.get('locations',[]))} "
-                    f"道具={len(result.get('props',[]))} 耗时={time.time()-t0:.1f}s")
-        return result
-    except HTTPException:
-        raise
+
+        # Merge pre-extracted data
+        if pre_extracted_chars is not None and pre_extracted_locs is not None:
+            result["characters"] = pre_extracted_chars
+            result["locations"] = pre_extracted_locs
+
+        elapsed = time.time() - t0
+        logger.info(f"[extract-entities] 完成 task={task_id} 角色={len(result.get('characters',[]))} "
+                    f"地点={len(result.get('locations',[]))} 道具={len(result.get('props',[]))} "
+                    f"耗时={elapsed:.1f}s")
+
+        await _task_set(f"extract:{task_id}", {
+            "status": "completed", "progress": 100,
+            "result": result, "elapsed_ms": int(elapsed * 1000),
+        })
     except Exception as e:
-        logger.error(f"[API] POST /extract-entities 异常 script_id={script_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"[extract-entities] 失败 task={task_id}: {e}")
+        await _task_set(f"extract:{task_id}", {
+            "status": "failed", "progress": 0, "error": str(e),
+        })
+
+
+@router.get("/extract-entities/{task_id}/status")
+async def extract_entities_status(task_id: str):
+    """查询实体提取任务状态"""
+    from app.services.script_service import _task_get
+    data = await _task_get(f"extract:{task_id}")
+    if not data:
+        return {"status": "not_found"}
+    return data
 
 
 @router.post("/upload", response_model=ScriptSplitResponse)
