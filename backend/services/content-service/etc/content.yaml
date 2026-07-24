@@ -1,6 +1,7 @@
 Name: content-service
 Host: 0.0.0.0
 Port: 8081
+MaxBytes: 10485760
 
 # 日志配置
 Log:
