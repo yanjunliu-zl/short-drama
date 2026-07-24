@@ -188,15 +188,14 @@ const Script: React.FC = () => {
   useEffect(() => {
     const initLoad = async () => {
       const urlWorkId = searchParams.get('workId');
+      let saved: any = null;
 
       if (urlWorkId) {
         // Fetch pipeline directly from backend (bypass localStorage complexity)
         try {
           const resp = await pipelineService.getPipelineState(urlWorkId);
           const data = (resp as any)?.data;
-          if (data?.script) {
-            saved = data.script;
-          }
+          if (data?.script) saved = data.script;
         } catch {}
       } else {
         clearPipelineStorage(userId);
