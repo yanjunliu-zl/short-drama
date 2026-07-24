@@ -357,6 +357,10 @@ services:
       <<: *env-base
       APP_ENV: development
       MODEL_PATH: /app/models
+      http_proxy: http://host.docker.internal:7897
+      https_proxy: http://host.docker.internal:7897
+      NO_PROXY: localhost,127.0.0.1,minio,mysql,redis,rabbitmq,.internal
+      no_proxy: localhost,127.0.0.1,minio,mysql,redis,rabbitmq,.internal
     ports:
       - "8000:8000"
     volumes:
