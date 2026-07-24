@@ -1750,14 +1750,16 @@ const Script: React.FC = () => {
                     a.download = `script_${scriptId}_exports.json`; a.click();
                     URL.revokeObjectURL(url);
                   } else {
-                    const exp = (result as any)?.export;
-                    message.success(`导出成功 (${exp?.target}, ${exp?.format})`);
-                    const blob = new Blob([exp?.content || JSON.stringify(exp, null, 2)], {
-                      type: exp?.format === 'raw_text' ? 'text/plain' : 'application/json',
+                    const data = (result as any)?.data || result;
+                    const exp = data?.export;
+                    const exportedContent = exp?.content || data?.content || '';
+                    message.success(`导出成功 (${exp?.target || key}, ${exp?.format || 'raw_text'})`);
+                    const blob = new Blob([exportedContent], {
+                      type: 'text/plain',
                     });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a'); a.href = url;
-                    a.download = `script_${scriptId}_${key}.${exp?.format === 'raw_text' ? 'txt' : 'json'}`;
+                    a.download = `script_${scriptId}_${key}.txt`;
                     a.click(); URL.revokeObjectURL(url);
                   }
                 } catch (e: any) {
