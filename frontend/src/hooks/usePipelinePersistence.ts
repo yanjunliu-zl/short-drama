@@ -84,10 +84,24 @@ export function usePipelinePersistence() {
       try {
         const response = await pipelineService.getPipelineState(workId)
         if (response.data) {
-          // Only clear after successful fetch, not before
+          // Save backup of current localStorage first
+          const backup: Record<string, any> = {}
+          for (const key of SLICE_KEYS) {
+            const val = localStorage.getItem(storageKey(userId, key))
+            if (val) try { backup[key] = JSON.parse(val) } catch {}
+          }
+
+          // Clear and restore from backend
           clearPipelineStorage(userId)
           for (const key of SLICE_KEYS) {
-            const value = (response.data as any)[key]
+            let value = (response.data as any)[key]
+            // Merge: backend metadata + local full content
+            if (backup[key] && value && typeof value === 'object' && !Array.isArray(value)) {
+              // If backend has no episodes/content but local does, keep local
+              if (!value.episodes && !value.content && (backup[key].episodes || backup[key].content)) {
+                value = { ...backup[key], scriptId: value.scriptId, title: value.title }
+              }
+            }
             if (value) {
               localStorage.setItem(storageKey(userId, key), JSON.stringify(value))
             }
