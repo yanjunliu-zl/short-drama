@@ -208,7 +208,7 @@ services:
       - "9080:9080"   # HTTP
       - "9443:9443"   # HTTPS
     volumes:
-      - ./backend/api-gateway/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./backend/api-gateway/apisix/config.yaml:/usr/local/apisix/conf/config.yaml
       - ./backend/api-gateway/apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
     environment:
       APISIX_STAND_ALONE: "true"   # Standalone mode (no etcd needed for dev)
@@ -223,17 +223,14 @@ services:
       retries: 5
 
   etcd:
-    image: bitnami/etcd:3.5.15
+    image: quay.io/coreos/etcd:v3.5.15
     container_name: shortdrama-etcd
     restart: unless-stopped
-    environment:
-      ALLOW_NONE_AUTHENTICATION: "yes"
-      ETCD_ADVERTISE_CLIENT_URLS: "http://etcd:2379"
-      ETCD_LISTEN_CLIENT_URLS: "http://0.0.0.0:2379"
+    command: etcd --advertise-client-urls=http://etcd:2379 --listen-client-urls=http://0.0.0.0:2379
     ports:
       - "2379:2379"
     volumes:
-      - etcd_data:/bitnami/etcd
+      - etcd_data:/etcd-data
     networks:
       - shortdrama-network
     healthcheck:
@@ -247,7 +244,7 @@ services:
     container_name: shortdrama-apisix-dashboard
     restart: unless-stopped
     ports:
-      - "9000:9000"
+      - "9002:9000"
     volumes:
       - ./backend/api-gateway/apisix/dashboard-conf.yaml:/usr/local/apisix-dashboard/conf/conf.yaml:ro
     networks:
@@ -602,9 +599,9 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
 
   # Celery Worker (视频处理)

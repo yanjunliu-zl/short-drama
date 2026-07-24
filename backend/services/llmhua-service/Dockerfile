@@ -2,31 +2,22 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Configure apt to use Aliyun mirror (for China network)
-RUN echo "deb http://mirrors.aliyun.com/debian trixie main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/debian trixie-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/debian-security trixie-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list
+ARG APT_PROXY=http://host.docker.internal:7897
 
 # 安装系统依赖 (包括 Pillow 和 mysql 构建依赖)
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    libjpeg-dev \
-    zlib1g-dev \
-    libfreetype6-dev \
-    liblcms2-dev \
-    libopenjp2-7-dev \
-    libtiff5-dev \
-    libwebp-dev \
+RUN apt-get update -o Acquire::http::Proxy=${APT_PROXY} && \
+    apt-get install -y -o Acquire::http::Proxy=${APT_PROXY} --fix-missing --no-install-recommends \
+    build-essential curl libjpeg-dev zlib1g-dev libfreetype-dev \
+    liblcms2-dev libopenjp2-7-dev libtiff-dev libwebp-dev \
+    && apt-get install -f -y -o Acquire::http::Proxy=${APT_PROXY} \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
 COPY requirements.txt .
 
-# 安装Python依赖 (使用国内镜像加速)
+# 安装Python依赖 (通过代理访问PyPI)
 RUN pip install --no-cache-dir -r requirements.txt \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    --trusted-host pypi.tuna.tsinghua.edu.cn
+    --proxy http://host.docker.internal:7897
 
 # 复制应用代码
 COPY app ./app
@@ -37,8 +28,5 @@ RUN useradd -m -u 1000 appuser
 RUN chown -R appuser:appuser /app
 USER appuser
 
-# 暴露端口
 EXPOSE 8002
-
-# 启动命令
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002"]

@@ -2,12 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Configure apt Aliyun mirror
-RUN echo "deb http://mirrors.aliyun.com/debian trixie main" > /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/debian-security trixie-security main" >> /etc/apt/sources.list
+# Proxy for apt — ENV doesn't work for apt, must use -o flag
+ARG APT_PROXY=http://host.docker.internal:7897
 
 # 安装系统依赖
-RUN apt-get update && apt-get install -y \
+RUN apt-get update -o Acquire::http::Proxy=${APT_PROXY} && \
+    apt-get install -y -o Acquire::http::Proxy=${APT_PROXY} \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 
 # 安装Python依赖
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --proxy http://host.docker.internal:7897 -r requirements.txt
 
 # 复制应用代码
 COPY app ./app

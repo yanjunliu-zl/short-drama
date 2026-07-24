@@ -25,8 +25,36 @@ export default defineConfig({
     host: true,
     strictPort: true,
     proxy: {
+      '/api/v1/recommendations': {
+        target: 'http://localhost:8004',
+        changeOrigin: true,
+      },
+      '/api/v1/search': {
+        target: 'http://localhost:8005',
+        changeOrigin: true,
+      },
+      '/api/v1/scripts': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/api/v1/storyboard': {
+        target: 'http://localhost:8003',
+        changeOrigin: true,
+      },
+      '/api/v1/assets': {
+        target: 'http://localhost:8003',
+        changeOrigin: true,
+      },
+      '/api/v1/llmhua': {
+        target: 'http://localhost:8002',
+        changeOrigin: true,
+      },
+      '/api/v1/videos': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
       '/api': {
-        target: 'http://localhost:80',
+        target: 'http://localhost:8082',
         changeOrigin: true,
       },
     },

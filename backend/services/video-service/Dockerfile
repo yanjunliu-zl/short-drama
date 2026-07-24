@@ -1,74 +1,10 @@
-# 构建阶段
-FROM python:3.10-slim AS builder
-
-# 使用阿里云镜像
-RUN echo "deb http://mirrors.aliyun.com/debian/ bookworm main non-free contrib" > /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/debian/ bookworm-updates main non-free contrib" >> /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/debian/ bookworm-backports main non-free contrib" >> /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/debian-security bookworm-security main non-free contrib" >> /etc/apt/sources.list
-
-# 安装系统依赖
-RUN apt-get update -o Acquire::Retries=3 && apt-get install -y --fix-missing \
-    gcc \
-    g++ \
-    libpq-dev \
-    libmariadb-dev \
-    pkg-config \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# 设置工作目录
+FROM golang:1.21-alpine AS builder
 WORKDIR /app
+COPY main.go .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /server main.go
 
-# 使用清华大学PyPI镜像
-ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-
-# 复制依赖文件
-COPY requirements.txt .
-
-# 升级pip
-RUN pip install --upgrade pip
-# 安装Python依赖
-RUN pip install --no-cache-dir --user -r requirements.txt
-
-# 运行阶段
-FROM python:3.10-slim
-
-# 使用阿里云镜像
-RUN echo "deb http://mirrors.aliyun.com/debian/ bookworm main non-free contrib" > /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/debian/ bookworm-updates main non-free contrib" >> /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/debian/ bookworm-backports main non-free contrib" >> /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/debian-security bookworm-security main non-free contrib" >> /etc/apt/sources.list
-
-# 安装运行时依赖
-RUN apt-get update -o Acquire::Retries=3 && apt-get install -y --fix-missing \
-    libpq5 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# 创建非root用户
-RUN groupadd -g 1001 appuser && useradd -u 1001 -g appuser -s /bin/bash -m appuser
-
-# 设置工作目录
-WORKDIR /app
-
-# 从构建阶段复制Python包
-COPY --from=builder /root/.local /home/appuser/.local
-ENV PATH=/home/appuser/.local/bin:$PATH
-
-# 复制应用代码
-COPY . .
-
-# 设置权限
-RUN chown -R appuser:appuser /app
-USER appuser
-
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# 暴露端口
+FROM scratch
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /server /server
 EXPOSE 8000
-
-# 启动命令
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/server"]

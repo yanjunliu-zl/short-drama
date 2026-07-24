@@ -288,6 +288,13 @@ class Novel2ScriptV2Service:
 
         logger.info(f"Semantic chunking: {len(all_chunks)} chunks from {len(chapters)} chapters")
 
+        # Handle edge case: input too short → no chunks
+        if len(all_chunks) == 0:
+            # Create a single dummy chunk from the raw novel text
+            dummy_text = novel_text[:8192] if novel_text else " "
+            all_chunks = [{"text": dummy_text, "metadata": {"chapter": "full", "scene_type": "full"}}]
+            logger.warning(f"No chunks produced — using whole text as single chunk ({len(dummy_text)} chars)")
+
         # Build FAISS dense index
         embeddings = self._get_embeddings()
         chunk_texts = [c["text"] for c in all_chunks]
