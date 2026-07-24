@@ -239,12 +239,13 @@ const Script: React.FC = () => {
                 setEpisodes(mapped);
                 if (mapped.length > 0) setActiveEpisodeId(mapped[0].id);
               }
+              // Set completion state AFTER episodes are populated
+              setGeneratedScriptTitle(saved.generatedScriptTitle || '');
+              setGenerationStatus('completed');
+              setGenerationProgress(100);
+              if (saved.scriptId) setScriptId(saved.scriptId);
             }).catch(() => {});
           }
-          setGeneratedScriptTitle(saved.generatedScriptTitle || '');
-          setGenerationStatus('completed');
-          setGenerationProgress(100);
-          if (saved.scriptId) setScriptId(saved.scriptId);
         } else if (saved.generationStatus === 'generating' && saved.taskId) {
           scriptService.getGenerationStatus(saved.taskId).then((status) => {
             if (status && status.status !== 'failed') {
