@@ -224,7 +224,8 @@ const Script: React.FC = () => {
           } else if (saved.scriptId) {
             // Pipeline stored reference only — fetch full script from API
             scriptService.getScript(String(saved.scriptId)).then((resp: any) => {
-              const s = resp?.data || resp;
+              // API returns {task_id, status, script: {content, episodes, title}}
+              const s = resp?.data?.script || resp?.script || resp?.data || resp;
               if (s?.content) parseScriptToEpisodes(s.content, s.title || '');
               if (s?.episodes) { setEpisodes(s.episodes); setActiveEpisodeId(s.episodes[0]?.id); }
             }).catch(() => {});
