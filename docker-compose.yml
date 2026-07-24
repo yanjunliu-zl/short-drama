@@ -349,6 +349,7 @@ services:
       dockerfile: Dockerfile
       args:
         APT_PROXY: ${APT_PROXY:-}
+        PIP_PROXY: ${PIP_PROXY:-}
     container_name: shortdrama-script-service
     restart: unless-stopped
     logging: *logging
@@ -428,6 +429,7 @@ services:
       dockerfile: Dockerfile
       args:
         APT_PROXY: ${APT_PROXY:-}
+        PIP_PROXY: ${PIP_PROXY:-}
     container_name: shortdrama-storyboard-service
     restart: unless-stopped
     environment:

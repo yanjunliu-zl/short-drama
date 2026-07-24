@@ -1,21 +1,32 @@
 FROM python:3.10-slim
 
 ARG APT_PROXY=
+ARG PIP_PROXY=
 
-# 安装依赖 (单阶段构建 — 避免 Trixie 多阶段 apt 兼容问题)
-RUN apt-get update -o Acquire::http::Proxy=${APT_PROXY} -o Acquire::Retries=3 && \
-    apt-get install -y -o Acquire::http::Proxy=${APT_PROXY} --fix-missing --no-install-recommends \
-    gcc g++ libpq-dev libmariadb-dev pkg-config \
-    libopenblas-dev liblapack-dev cmake ninja-build git \
-    libpq5 curl ca-certificates \
-    && apt-get install -f -y -o Acquire::http::Proxy=${APT_PROXY} \
-    && rm -rf /var/lib/apt/lists/*
+RUN if [ -n "${APT_PROXY}" ]; then \
+      apt-get update -o Acquire::http::Proxy=${APT_PROXY} -o Acquire::Retries=3 && \
+      apt-get install -y -o Acquire::http::Proxy=${APT_PROXY} --fix-missing --no-install-recommends \
+      gcc g++ libpq-dev libmariadb-dev pkg-config \
+      libopenblas-dev liblapack-dev cmake ninja-build git \
+      libpq5 curl ca-certificates && \
+      apt-get install -f -y -o Acquire::http::Proxy=${APT_PROXY}; \
+    else \
+      apt-get update -o Acquire::Retries=3 && \
+      apt-get install -y --fix-missing --no-install-recommends \
+      gcc g++ libpq-dev libmariadb-dev pkg-config \
+      libopenblas-dev liblapack-dev cmake ninja-build git \
+      libpq5 curl ca-certificates; \
+    fi && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir --proxy http://host.docker.internal:7897 -r requirements.txt
+    if [ -n "${PIP_PROXY}" ]; then \
+      pip install --no-cache-dir --proxy ${PIP_PROXY} -r requirements.txt; \
+    else \
+      pip install --no-cache-dir -r requirements.txt; \
+    fi
 
 COPY . .
 RUN python3 patch_openai.py && \

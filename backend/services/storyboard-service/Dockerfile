@@ -6,16 +6,23 @@ WORKDIR /app
 ARG APT_PROXY=
 
 # 安装系统依赖
-RUN apt-get update -o Acquire::http::Proxy=${APT_PROXY} && \
-    apt-get install -y -o Acquire::http::Proxy=${APT_PROXY} \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+RUN if [ -n "${APT_PROXY}" ]; then \
+      apt-get update -o Acquire::http::Proxy=${APT_PROXY} && \
+      apt-get install -y -o Acquire::http::Proxy=${APT_PROXY} build-essential; \
+    else \
+      apt-get update && apt-get install -y build-essential; \
+    fi && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
 COPY requirements.txt .
 
+ARG PIP_PROXY=
 # 安装Python依赖
-RUN pip install --no-cache-dir --proxy http://host.docker.internal:7897 -r requirements.txt
+RUN if [ -n "${PIP_PROXY}" ]; then \
+      pip install --no-cache-dir --proxy ${PIP_PROXY} -r requirements.txt; \
+    else \
+      pip install --no-cache-dir -r requirements.txt; \
+    fi
 
 # 复制应用代码
 COPY app ./app
