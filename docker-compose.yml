@@ -347,6 +347,8 @@ services:
     build:
       context: ./backend/services/script-service
       dockerfile: Dockerfile
+      args:
+        APT_PROXY: ${APT_PROXY:-}
     container_name: shortdrama-script-service
     restart: unless-stopped
     logging: *logging
@@ -424,6 +426,8 @@ services:
     build:
       context: ./backend/services/storyboard-service
       dockerfile: Dockerfile
+      args:
+        APT_PROXY: ${APT_PROXY:-}
     container_name: shortdrama-storyboard-service
     restart: unless-stopped
     environment:
@@ -464,6 +468,8 @@ services:
     build:
       context: ./backend/services/llmhua-service
       dockerfile: Dockerfile
+      args:
+        APT_PROXY: ${APT_PROXY:-}
     container_name: shortdrama-llmhua-service
     restart: unless-stopped
     environment:

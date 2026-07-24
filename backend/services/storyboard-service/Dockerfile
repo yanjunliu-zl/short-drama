@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Proxy for apt — ENV doesn't work for apt, must use -o flag
-ARG APT_PROXY=http://host.docker.internal:7897
+ARG APT_PROXY=
 
 # 安装系统依赖
 RUN apt-get update -o Acquire::http::Proxy=${APT_PROXY} && \

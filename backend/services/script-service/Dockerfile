@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-ARG APT_PROXY=http://host.docker.internal:7897
+ARG APT_PROXY=
 
 # 安装依赖 (单阶段构建 — 避免 Trixie 多阶段 apt 兼容问题)
 RUN apt-get update -o Acquire::http::Proxy=${APT_PROXY} -o Acquire::Retries=3 && \
