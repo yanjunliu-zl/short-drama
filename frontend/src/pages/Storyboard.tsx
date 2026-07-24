@@ -70,6 +70,18 @@ const Storyboard: React.FC = () => {
         if (oldData) { try { data = JSON.parse(oldData); } catch {} }
       }
 
+      // Load episodes from script pipeline if storyboard data is absent
+      if (!data || !data.episodes || data.episodes.length === 0) {
+        const scriptData = loadState('script');
+        if (scriptData?.episodes?.length > 0) {
+          data = { episodes: scriptData.episodes.map((ep: any) => ({
+            id: ep.id || `ep-${ep.number || 1}`, title: ep.title || `第${ep.number || 1}集`,
+            number: ep.number || ep.episode_number || 1, description: ep.description || ep.content || '',
+            shots: [],  // No shots yet — user will generate
+          })) };
+        }
+      }
+
       // 3. 展示数据
       if (data && data.episodes && data.episodes.length > 0) {
         const loadedEpisodes: Episode[] = data.episodes.map((ep: any) => ({
