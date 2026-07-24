@@ -771,6 +771,7 @@ const Script: React.FC = () => {
       // 仅保存到已有 workId，不创建新作品（创建由 handleUploadAndSplit/handleGenerate 负责）
       (async () => {
       const workId = getWorkId();
+      if (!workId || !workId.startsWith('wk_')) return;
       if (workId) {
         try {
           localStorage.setItem(`pipeline_${userId}_script`, JSON.stringify(scriptData));

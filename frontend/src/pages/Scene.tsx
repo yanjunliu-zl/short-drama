@@ -146,7 +146,7 @@ const Scene: React.FC = () => {
       }));
       (async () => {
         const wId = getWorkId();
-        if (!wId) return;
+        if (!wId || !wId.startsWith('wk_')) return;
         try {
           const resp = await pipelineService.getPipelineState(wId);
           const existing = (resp as any)?.data || {};
@@ -501,7 +501,7 @@ const Scene: React.FC = () => {
       // 异步保存到后端 pipeline state
       (async () => {
         const wId = getWorkId();
-        if (!wId) return;
+        if (!wId || !wId.startsWith('wk_')) return;
         try {
           const resp = await pipelineService.getPipelineState(wId);
           const existing = (resp as any)?.data || {};
