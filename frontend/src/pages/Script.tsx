@@ -215,10 +215,17 @@ const Script: React.FC = () => {
 
       if (saved) {
         if (saved.generationStatus === 'completed' && (saved.episodes?.length > 0 || saved.content || saved.scriptId)) {
-          // Has full data: load immediately
+          // Has full data: load immediately, map API format to frontend Episode type
           if (saved.episodes?.length > 0) {
-            setEpisodes(saved.episodes || []);
-            setActiveEpisodeId(saved.episodes[0].id);
+            const mapped = saved.episodes.map((ep: any, i: number) => ({
+              id: ep.id || `ep-${i + 1}-${Date.now().toString(36)}`,
+              title: ep.title || `第${i + 1}集`,
+              number: ep.episode_number || ep.number || (i + 1),
+              description: ep.content || ep.description || '',
+              scenes: ep.scenes || [], characters: ep.characters || [],
+            }));
+            setEpisodes(mapped);
+            if (mapped.length > 0) setActiveEpisodeId(mapped[0].id);
           } else if (saved.content) {
             parseScriptToEpisodes(saved.content, saved.generatedScriptTitle || '');
           } else if (saved.scriptId) {
