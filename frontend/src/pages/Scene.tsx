@@ -82,13 +82,11 @@ const Scene: React.FC = () => {
   // 从 localStorage / pipeline 加载持久化数据
   useEffect(() => {
     const initLoad = async () => {
-      const urlWorkId = searchParams.get('workId');
+      const urlWorkId = searchParams.get('workId') || getWorkId();
       if (urlWorkId) {
-        // 从后端恢复该项目的数据
         setWorkId(urlWorkId);
         await restoreFromBackend(urlWorkId);
       } else {
-        // 无活跃作品，清空显示
         setScenes([]);
         setCharacters([]);
         setProps([]);
