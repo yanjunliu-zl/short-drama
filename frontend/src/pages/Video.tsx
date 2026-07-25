@@ -211,7 +211,7 @@ const Video: React.FC = () => {
     setCharModalTarget(frameType); setCharModalOpen(true); setCharLoading(true);
     try {
       const res = await assetService.listCharacters({ limit: 50 });
-      if (res?.data) setCharacters(res.data as CharacterAsset[]);
+      if (res?.data) setCharacters((res.data as any).data || (res.data as any));
     } catch { message.error('加载角色库失败'); }
     setCharLoading(false);
   }, []);
@@ -238,7 +238,7 @@ const Video: React.FC = () => {
     setMaterialModalTarget(frameType); setMaterialModalOpen(true); setSceneLoading(true);
     try {
       const res = await assetService.listScenes({ limit: 50 });
-      if (res?.data) setScenes(res.data as SceneTemplate[]);
+      if (res?.data) setScenes((res.data as any).data || (res.data as any));
     } catch { message.error('加载素材库失败'); }
     setSceneLoading(false);
   }, []);
@@ -283,6 +283,60 @@ const Video: React.FC = () => {
     if (!cur?.firstFrame && !cur?.lastFrame) { message.info('暂无图片可收藏'); return; }
     message.success('已收藏');
   }, [selectedTask, frameImages, shotFrameKey]);
+
+  /** 上传图片作为帧图 */
+  const handleUploadFrame = useCallback((file: File, frameType: string) => {
+    if (!selectedTask) return false;
+    const sk = shotFrameKey(selectedTask);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      setFrameImages(prev => {
+        const cur = prev[sk] || {};
+        if (frameType === 'first' || frameType === 'perspective')
+          return { ...prev, [sk]: { ...cur, firstFrame: dataUrl } };
+        if (frameType === 'last')
+          return { ...prev, [sk]: { ...cur, lastFrame: dataUrl } };
+        return prev;
+      });
+      message.success('图片上传成功');
+    };
+    reader.readAsDataURL(file);
+    return false;
+  }, [selectedTask, shotFrameKey]);
+
+  /** 透视/视角：上传或 AI 生成 */
+  const handlePerspectiveAction = useCallback((action: 'upload' | 'generate') => {
+    if (action === 'upload') {
+      setPerspectiveModalOpen(true);
+    } else {
+      if (!selectedTask) return;
+      const desc = selectedTask.shotDescription || '分镜画面';
+      setGeneratingFrame(`${shotFrameKey(selectedTask)}_perspective`);
+      scriptService.generatePreviewImage({ description: `多角度视图：${desc}`, category: 'scene', style: visualStyle })
+        .then(resp => {
+          if (!resp?.task_id) throw new Error('No task_id');
+          const poll = setInterval(async () => {
+            try {
+              const status = await scriptService.getPreviewImageStatus(resp.task_id);
+              if (status?.status === 'completed' && status.image_url) {
+                clearInterval(poll);
+                setPerspectiveImage(status.image_url);
+                setGeneratingFrame(null);
+                message.success('视角图生成完成');
+              } else if (status?.status === 'failed') {
+                clearInterval(poll); setGeneratingFrame(null); message.error('生成失败');
+              }
+            } catch (e: any) {
+              if (e?.response?.status === 404) { clearInterval(poll); setGeneratingFrame(null); }
+            }
+          }, 2000);
+        }).catch((e: any) => {
+          setGeneratingFrame(null);
+          message.error(e?.message || '生成失败');
+        });
+    }
+  }, [selectedTask, visualStyle, shotFrameKey]);
 
   // 当前选中镜头的帧图
   const currentFrames = selectedTask ? (frameImages[shotFrameKey(selectedTask)] || {}) : {} as { firstFrame?: string; lastFrame?: string };

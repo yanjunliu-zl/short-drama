@@ -849,8 +849,8 @@ const Script: React.FC = () => {
         episodes: episodesData,
       });
 
-      // 同步保存到 localStorage
-      saveState('script', { title: generatedScriptTitle, episodes: episodes, scriptId }, getWorkId() || undefined);
+      // 同步保存到 localStorage（使用 hook 的 persistState，支持 backend pipeline sync）
+      persistState('script', { title: generatedScriptTitle, episodes: episodes, scriptId }, getWorkId() || undefined);
 
       // 同步到后端 pipeline state
       const wId = getWorkId();
