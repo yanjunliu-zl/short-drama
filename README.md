@@ -1,16 +1,22 @@
 # Short Drama Platform
 
-AI-powered short drama creation platform — end-to-end automated production from idea to final cut. Enterprise-grade distributed architecture with multi-model LLM routing, industrial RAG pipeline, real-time recommendation engine, and cloud-native operations.
+AI-powered short drama creation platform — end-to-end automated production from novel to video. Enterprise-grade distributed architecture with multi-model LLM routing, industrial RAG pipeline, and cloud-native operations.
 
 ## Features
 
 ### Case Square — Discover & Search
-Browse trending short dramas, personalized recommendations, and full-text search.
+Browse trending short dramas with full-text search powered by Elasticsearch.
 
 ![Case Square](assets/main.png)
 
 ### Script Generation — AI-Powered Creation
-Upload novels, paste ideas, or start from scratch. Multi-model AI generates complete scripts with character profiles, episode outlines, and shot-level storyboards. Supports streaming SSE output for real-time progress.
+Three creation modes to fit any workflow:
+
+- **From Novel**: Upload a long-form novel (200+ chapters). The V2 industrial RAG pipeline auto-detects chapters, builds a dual-index knowledge base (FAISS dense + BM25 sparse), extracts character graphs and story frameworks, then generates adapted short drama scripts chapter-by-chapter with cross-chapter consistency.
+- **From Outline**: Input a brief idea or outline. AI expands it into a complete script with character profiles, episode outlines, and shot-level storyboards.
+- **Free Creation**: Fill in title, theme, and style. AI creates a complete script from scratch.
+
+All modes support SSE streaming for real-time progress feedback.
 
 ![Script Generation](assets/script.png)
 
@@ -84,12 +90,15 @@ The platform provides a complete AI creation pipeline, accessible from the front
 Case Square → Script Generation → Script Editor → Scene Extraction → Storyboard → Video → Final Cut
 ```
 
-**Script Generation** — three modes:
-- From Outline: Input a brief idea, AI expands into a full script (characters, episode outlines, storyboard)
-- From Novel: Upload novel text, AI detects chapters and adapts each one
-- Free Creation: Fill in title/theme/style, AI creates from scratch
+**Script Generation** — three modes with industrial RAG pipeline:
 
-**Streaming**: All generation APIs support `stream=true` for real-time SSE output.
+| Mode | Input | Key Capability |
+|------|-------|---------------|
+| **From Novel** | Long-form novel (200+ chapters) | V2 dual-index RAG (FAISS + BM25), chapter detection, character graph, cross-chapter consistency |
+| **From Outline** | Brief idea or outline | AI expands into full script with character profiles, episode outlines, storyboard |
+| **Free Creation** | Title, theme, style | AI creates complete script from scratch |
+
+The novel-to-script pipeline uses semantic chunking (scene-aware, not fixed-size), hybrid RAG retrieval (dense + sparse + RRF fusion), and multi-model routing with circuit-breaker failover. All generation APIs support SSE streaming (`stream=true`).
 
 ## API Overview
 
@@ -135,10 +144,9 @@ curl -X POST http://localhost/api/v1/llmhua/shots-to-video \
 ### Other
 ```bash
 GET  /api/v1/cases?page=1&pageSize=10&sortBy=views
-GET  /api/v1/recommendations/recommend?user_id=1&limit=6
-POST /api/v1/scenes/ -d '{"script_content":"...","extract_type":"all"}'
-GET  /api/v1/comments/:case_id
-POST /api/v1/comments/:case_id
+POST /api/v1/scripts/extract-entities -d '{"script_content":"...","extract_type":"all"}'
+GET  /api/v1/assets/characters?limit=50
+GET  /api/v1/assets/scenes?limit=50
 ```
 
 ## Architecture
@@ -147,12 +155,12 @@ POST /api/v1/comments/:case_id
 Frontend (:3000) → APISIX (:9080) → Microservices
                                                      ├── user-service       (Go, Auth)
                                                      ├── content-service    (Go, Cases/Search)
-                                                     ├── script-service     (Python, AI Script)
+                                                     ├── script-service     (Python, AI Script + RAG)
                                                      ├── storyboard-service (Python, Storyboard)
+                                                     ├── asset-service      (Python, Characters/Scenes/Shots)
                                                      ├── llmhua-service     (Python, Image/Video)
                                                      ├── video-service      (Python, Video Proc)
-                                                     ├── final-cut-service  (Go, Final Cut)
-                                                     └── recommendation     (Python, Recommend)
+                                                     └── final-cut-service  (Go, Final Cut)
 
 Infrastructure:     MySQL 8.0 + Redis 7 + RabbitMQ + MinIO + Kafka + Elasticsearch + ClickHouse
 AI:                 DeepSeek/OpenAI/Anthropic/vLLM multi-model routing
