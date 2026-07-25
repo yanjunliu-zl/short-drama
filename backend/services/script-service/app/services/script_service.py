@@ -320,7 +320,7 @@ class ScriptService:
                 return None
 
             request_dict = request.dict(exclude_unset=True) if hasattr(request, 'dict') else vars(request)
-            for field in ['title', 'content', 'status']:
+            for field in ['title', 'content', 'status', 'episodes']:
                 if field in request_dict and request_dict[field] is not None:
                     setattr(script, field, request_dict[field])
 

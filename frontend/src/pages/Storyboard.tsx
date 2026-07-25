@@ -57,7 +57,7 @@ const Storyboard: React.FC = () => {
     const loadData = async () => {
       const urlWorkId = searchParams.get('workId');
       const storedWorkId = getWorkId();
-      const validWorkId = urlWorkId || (storedWorkId?.startsWith('wk_') ? storedWorkId : '');
+      const validWorkId = (urlWorkId?.startsWith('wk_') ? urlWorkId : '') || (storedWorkId?.startsWith('wk_') ? storedWorkId : '');
       if (validWorkId) {
         setWorkId(validWorkId);
         await restoreFromBackend(validWorkId);
@@ -76,7 +76,8 @@ const Storyboard: React.FC = () => {
         if (scriptData?.episodes?.length > 0) {
           data = { episodes: scriptData.episodes.map((ep: any) => ({
             id: ep.id || `ep-${ep.number || 1}`, title: ep.title || `第${ep.number || 1}集`,
-            number: ep.number || ep.episode_number || 1, description: ep.description || ep.content || '',
+            number: ep.number || ep.episode_number || 1,
+            description: ep.description || (ep.content ? ep.content.slice(0, 80) + (ep.content.length > 80 ? '…' : '') : ''),
             shots: [],  // No shots yet — user will generate
           })) };
         }
@@ -104,9 +105,9 @@ const Storyboard: React.FC = () => {
         try { setReferenceImages(JSON.parse(savedRefs)); } catch {}
       }
       // 也尝试从后端 pipeline state 加载
-      if (urlWorkId) {
+      if (validWorkId) {
         try {
-          const resp = await pipelineService.getPipelineState(urlWorkId);
+          const resp = await pipelineService.getPipelineState(validWorkId);
           const pipeData = (resp as any)?.data;
           if (pipeData?.referenceImages) {
             setReferenceImages(pipeData.referenceImages);
@@ -494,9 +495,18 @@ const Storyboard: React.FC = () => {
         )}
       />
       {currentShots.length === 0 && (
-        <div style={{ textAlign: 'center', padding: 40, color: '#aeaeb2' }}>
-          <CameraOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.3 }} />
-          <p>暂无分镜头，点击"添加分镜头"按钮开始创建</p>
+        <div style={{ textAlign: 'center', padding: 60, color: '#86868b' }}>
+          <CameraOutlined style={{ fontSize: 48, marginBottom: 16, opacity: 0.4 }} />
+          <p style={{ fontSize: 14, marginBottom: 8 }}>暂无分镜头数据</p>
+          <p style={{ fontSize: 12, color: '#aeaeb2', marginBottom: 16 }}>
+            请先在「场景」页面使用"智能分镜"生成分镜数据，或点击上方"添加分镜头"手动创建
+          </p>
+          <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => {
+            const wId = getWorkId();
+            navigate(wId ? `/scene?workId=${wId}` : '/scene');
+          }}>
+            前往场景页面生成分镜
+          </Button>
         </div>
       )}
     </div>
@@ -603,7 +613,7 @@ const Storyboard: React.FC = () => {
               </Space>
             </div>
             {episode.description && (
-              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>
                 {episode.description}
               </Text>
             )}

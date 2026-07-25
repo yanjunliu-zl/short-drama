@@ -10,22 +10,27 @@ Browse trending short dramas, personalized recommendations, and full-text search
 ![Case Square](assets/main.png)
 
 ### Script Generation — AI-Powered Creation
-Upload novels, paste ideas, or start from scratch. Multi-model AI generates complete scripts with character profiles, episode outlines, and shot-level storyboards.
+Upload novels, paste ideas, or start from scratch. Multi-model AI generates complete scripts with character profiles, episode outlines, and shot-level storyboards. Supports streaming SSE output for real-time progress.
 
 ![Script Generation](assets/script.png)
 
+### Script Editor — View & Edit
+Review generated scripts by episode, edit content inline, and save changes back to the cloud. Export to Xiaoyunque, LibTV, JuriLu, or download as JSON / plain text.
+
+![Script Editor](assets/scriptboard.png)
+
 ### Scene & Character Extraction
-Auto-extract scenes, characters, and props from scripts. AI generates scene preview images for visual reference.
+Auto-extract scenes, characters, and props from scripts. AI generates preview images with multi-angle views. One-click smart storyboarding preserves all shot markers from the source script.
 
 ![Scene Extraction](assets/scene.png)
 
 ### Storyboard — Shot-Level Planning
-AI breaks down each episode into detailed shots with camera angles, lighting, movement, and cinematography presets.
+AI enriches each shot with camera angles, lighting, movement, dialogue, characters, and cinematography presets. Full shot list with timeline overview and batch video generation.
 
 ![Storyboard](assets/storyboard.png)
 
 ### AI Video Generation
-Generate images and videos from storyboard shots. Batch process entire episodes with character consistency and style controls.
+Generate images and videos from storyboard shots with first-frame / last-frame controls. Character library and material library for visual consistency. Batch process entire episodes with style controls.
 
 ![Video Generation](assets/video.png)
 
@@ -76,7 +81,7 @@ Database tables are auto-created on first startup (MySQL auto-runs init.sql).
 The platform provides a complete AI creation pipeline, accessible from the frontend pages in order:
 
 ```
-Case Square → Script Generation → Scene Extraction → Storyboard → Video → Final Cut
+Case Square → Script Generation → Script Editor → Scene Extraction → Storyboard → Video → Final Cut
 ```
 
 **Script Generation** — three modes:

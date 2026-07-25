@@ -107,6 +107,7 @@ const Script: React.FC = () => {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [generatedScriptTitle, setGeneratedScriptTitle] = useState<string>('');
   const [scriptId, setScriptId] = useState<number | null>(null);
+  const [savingScript, setSavingScript] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const workCreatedRef = useRef(false); // 防止 StrictMode 重复创建作品
 
@@ -820,6 +821,63 @@ const Script: React.FC = () => {
     setEditingEpisode(episode);
     setIsDrawerOpen(true);
   };
+
+  /** 保存剧本：将当前 episodes（含编辑后的内容）持久化到后端 + localStorage */
+  const handleSaveScript = useCallback(async () => {
+    if (!scriptId) { message.warning('请先生成剧本'); return; }
+    setSavingScript(true);
+    try {
+      // 序列化 episodes：去掉本地临时字段，映射到后端 EpisodeUpdateItem 格式
+      const episodesData = uniqueEpisodes.map(ep => ({
+        episode_number: ep.number,
+        title: ep.title,
+        content: ep.description || '',
+        scenes: ep.scenes.map(s => ({
+          id: s.id, title: s.title, description: s.description,
+          location: s.location, timeOfDay: s.timeOfDay,
+          characters: s.characters, content: s.content, order: s.order,
+        })),
+        characters: ep.characters.map(c => ({
+          id: c.id, name: c.name, description: c.description,
+          age: c.age, gender: c.gender, role: c.role,
+        })),
+      }));
+
+      // 保存到后端
+      await scriptService.updateScript(String(scriptId), {
+        title: generatedScriptTitle,
+        episodes: episodesData,
+      });
+
+      // 同步保存到 localStorage
+      saveState('script', { title: generatedScriptTitle, episodes: episodes, scriptId }, getWorkId() || undefined);
+
+      // 同步到后端 pipeline state
+      const wId = getWorkId();
+      if (wId) {
+        try {
+          const resp = await pipelineService.getPipelineState(wId);
+          const existing = (resp as any)?.data || {};
+          existing.script = { title: generatedScriptTitle, episodes: episodes, scriptId };
+          existing.updatedAt = new Date().toISOString();
+          await pipelineService.savePipelineState(wId, existing);
+        } catch {}
+      }
+
+      message.success('剧本已保存');
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail || e?.message || '保存失败');
+    }
+    setSavingScript(false);
+  }, [scriptId, uniqueEpisodes, episodes, generatedScriptTitle, getWorkId, saveState]);
+
+  /** 更新当前剧集 description（中间文本编辑区） */
+  const handleEpisodeContentChange = useCallback((newContent: string) => {
+    if (!currentEpisode) return;
+    setEpisodes(prev => prev.map(ep =>
+      ep.id === currentEpisode.id ? { ...ep, description: newContent } : ep
+    ));
+  }, [currentEpisode]);
 
   const handleDeleteEpisode = (id: string) => {
     Modal.confirm({
@@ -1760,6 +1818,13 @@ const Script: React.FC = () => {
           <Tag color="success" style={{ fontSize: 12 }}>已生成</Tag>
         </div>
         <Space>
+          <Button
+            icon={<SaveOutlined />}
+            onClick={handleSaveScript}
+            loading={savingScript}
+          >
+            {savingScript ? '保存中...' : '保存剧本'}
+          </Button>
           <Dropdown
             menu={{
               items: [
@@ -1851,91 +1916,38 @@ const Script: React.FC = () => {
 
         {/* 中间剧本内容 */}
         <div style={{ flex: 1, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '12px 24px', borderBottom: '1px solid #f5f5f7', display: 'flex', justifyContent: 'flex-end' }}>
-            <Button size="small" onClick={() => setSettingsOpen(!settingsOpen)}>
-              {settingsOpen ? '收起设置' : '全局设置'}
-            </Button>
-          </div>
           <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px' }}>
-            <div style={{
-              background: '#fafafa', borderRadius: 6, padding: '24px 28px',
-              fontFamily: '"Noto Serif SC", STSong, serif', fontSize: 14, lineHeight: 2,
-              whiteSpace: 'pre-wrap', color: '#1d1d1f', minHeight: 300,
-            }}>
-              {currentEpisode?.description || '选择左侧集数查看剧本内容'}
-            </div>
+            {currentEpisode ? (
+              <TextArea
+                value={currentEpisode.description || ''}
+                onChange={(e) => handleEpisodeContentChange(e.target.value)}
+                placeholder="在此编辑剧本内容…"
+                style={{
+                  fontFamily: '"Noto Serif SC", STSong, serif',
+                  fontSize: 14,
+                  lineHeight: 2,
+                  color: '#1d1d1f',
+                  minHeight: 300,
+                  height: '100%',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 6,
+                  padding: '24px 28px',
+                  resize: 'vertical',
+                  background: '#fafafa',
+                }}
+              />
+            ) : (
+              <div style={{
+                background: '#fafafa', borderRadius: 6, padding: '24px 28px',
+                fontFamily: '"Noto Serif SC", STSong, serif', fontSize: 14, lineHeight: 2,
+                color: '#9ca3af', minHeight: 300, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                选择左侧集数查看剧本内容
+              </div>
+            )}
           </div>
         </div>
 
-        {/* 右侧全局设置 */}
-        {settingsOpen && (
-          <div style={{ width: 300, backgroundColor: '#fff', borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.05)', overflowY: 'auto' }}>
-            <div style={{ padding: '16px', borderBottom: '1px solid #f5f5f7' }}>
-              <Title level={5} style={{ margin: 0 }}>
-                <SettingOutlined style={{ marginRight: 6 }} />
-                全局设置
-              </Title>
-            </div>
-            <div style={{ padding: '12px 16px' }}>
-              <Form layout="vertical" size="small">
-                <Form.Item label="视频比例">
-                  <Select value={scriptSettings.videoRatio} onChange={(v) => updateSetting('videoRatio', v)}>
-                    {videoRatioOptions.map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
-                  </Select>
-                </Form.Item>
-                <Form.Item label="画质">
-                  <Select value={scriptSettings.videoQuality} onChange={(v) => updateSetting('videoQuality', v)}>
-                    <Option value="4k">4K</Option>
-                    <Option value="1080p">1080p</Option>
-                    <Option value="720p">720p</Option>
-                  </Select>
-                </Form.Item>
-                <Form.Item label="帧率">
-                  <Select value={scriptSettings.frameRate} onChange={(v) => updateSetting('frameRate', v)}>
-                    <Option value={24}>24 fps</Option>
-                    <Option value={30}>30 fps</Option>
-                    <Option value={60}>60 fps</Option>
-                  </Select>
-                </Form.Item>
-                <Divider style={{ margin: '8px 0' }} />
-                <Form.Item label="创作模式">
-                  <Select value={scriptSettings.creationMode} onChange={(v) => updateSetting('creationMode', v)}>
-                    <Option value="ai">AI 生成</Option>
-                    <Option value="assist">AI 辅助</Option>
-                    <Option value="manual">手动</Option>
-                  </Select>
-                </Form.Item>
-                <Form.Item label="角色数量">
-                  <InputNumber min={1} max={10} value={scriptSettings.aiCharacterCount} onChange={(v) => updateSetting('aiCharacterCount', v)} style={{ width: '100%' }} />
-                </Form.Item>
-                <Form.Item label="剧本时长(分钟)">
-                  <InputNumber min={1} max={60} value={scriptSettings.scriptLength} onChange={(v) => updateSetting('scriptLength', v)} style={{ width: '100%' }} />
-                </Form.Item>
-                <Divider style={{ margin: '8px 0' }} />
-                <Form.Item label="视频风格">
-                  <Select value={scriptSettings.styleCategory} onChange={(v) => updateSetting('styleCategory', v)} placeholder="选择风格" allowClear>
-                    <Option value="古风写实">古风写实</Option>
-                    <Option value="赛博朋克">赛博朋克</Option>
-                    <Option value="都市情感">都市情感</Option>
-                    <Option value="日漫">日漫</Option>
-                    <Option value="3D国风">3D国风</Option>
-                    <Option value="皮克斯风格">皮克斯风格</Option>
-                    <Option value="水墨画">水墨画</Option>
-                  </Select>
-                </Form.Item>
-                <Form.Item label="风格描述">
-                  <TextArea rows={3} value={scriptSettings.styleDescription}
-                    onChange={(e) => updateSetting('styleDescription', e.target.value)}
-                    placeholder="描述想要的视频风格..." />
-                </Form.Item>
-                <Button type="primary" block icon={<SaveOutlined />}
-                  onClick={() => message.success('设置已保存')}>
-                  保存设置
-                </Button>
-              </Form>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* 多版本对比弹窗 */}

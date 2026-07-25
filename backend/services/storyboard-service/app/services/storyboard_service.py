@@ -185,7 +185,25 @@ class StoryboardAIService:
             for ep_idx, ep_text in enumerate(episode_texts):
                 ep_num = ep_idx + 1
 
-                # 超长集：按场景拆分为多段，逐段生成后合并
+                # ── 优先尝试从剧本中解析已有镜号标记 ──
+                parsed_shots = self._parse_script_shot_markers(ep_text)
+                if len(parsed_shots) >= 3:
+                    logger.info(
+                        f"第{ep_num}集: 从剧本解析到 {len(parsed_shots)} 个镜号，使用富化模式"
+                    )
+                    # 按 prompt 长度分批：完整正文 + 每批 N 个镜号，确保不截断
+                    enriched_episodes = await self._enrich_shots_in_batches(
+                        ep_text, parsed_shots, ep_num, global_shot_id, request
+                    )
+                    for ep in enriched_episodes:
+                        global_shot_id += len(ep.get("shots", []))
+                        all_episodes.append(ep)
+                        logger.info(
+                            f"第{ep_num}集完成: {len(ep.get('shots', []))}镜头 (富化模式)"
+                        )
+                    continue
+
+                # ── 原有逻辑：无镜号标记时，由 LLM 创建分镜 ──
                 if len(ep_text) > max_chars:
                     chunks = self._split_episode_to_scene_chunks(ep_text, max_chars)
                     logger.info(f"生成第{ep_num}集分镜... ({len(chunks)}段, 总{len(ep_text)}字)")
@@ -216,7 +234,6 @@ class StoryboardAIService:
                             chunk_start_shot_id += len(chunk_shots)
                             ep_shots.append(ep)
 
-                    # 合并本集所有分段
                     merged = self._merge_episode_shots(ep_shots, ep_num)
                     if merged.get("episodes"):
                         merged_ep = merged["episodes"][0]
@@ -842,6 +859,384 @@ class StoryboardAIService:
                 "style": request.get('style', '写实风格'),
             }
         }
+
+    # ── 镜号解析（从剧本中提取已有的镜头标记） ──
+
+    # 匹配镜号 header："镜号：N | 镜头类型：xxx | 运镜：xxx | 时长：Xs | 画面：xxx"
+    SHOT_MARKER_HEADER_RE = re.compile(
+        r'镜号[：:](\d+)\s*\|\s*镜头类型[：:](.*?)\s*\|\s*运镜[：:](.*?)\s*\|\s*时长[：:](.*?)\s*\|\s*画面[：:](.*?)$',
+        re.MULTILINE
+    )
+
+    # 运镜 → 摄像机角度映射
+    MOVEMENT_TO_ANGLE = {
+        '推': '正面平视', '拉': '正面平视', '摇': '摇镜头',
+        '移': '跟踪拍摄', '跟': '跟踪拍摄', '升': '仰视',
+        '降': '俯视', '固定': '正面平视',
+    }
+
+    def _parse_script_shot_markers(self, text: str) -> List[Dict[str, Any]]:
+        """从剧本内容中提取镜号标记，并捕获每个镜号后的完整正文（含对白）。
+
+        返回按镜号排序的镜头列表，每个镜头含 shot_number / shot_type /
+        camera_movement / duration / description / camera_angle / context。
+        context 是镜号 header 之后到下一个镜号之前（或文末）的全部内容，
+        其中包含角色、对白、音效等辅助信息。
+        """
+        # 找出所有镜号 header 的位置
+        header_positions = []  # [(shot_number, start, end, parsed_fields)]
+        for match in self.SHOT_MARKER_HEADER_RE.finditer(text):
+            shot_num = int(match.group(1))
+            shot_type = match.group(2).strip()
+            camera_movement = match.group(3).strip()
+            duration_str = match.group(4).strip()
+            description = match.group(5).strip()
+
+            duration = 5
+            dur_match = re.search(r'(\d+)', duration_str)
+            if dur_match:
+                duration = max(1, min(60, int(dur_match.group(1))))
+
+            camera_angle = self.MOVEMENT_TO_ANGLE.get(camera_movement, '正面平视')
+
+            header_positions.append({
+                'shot_number': shot_num,
+                'shot_type': shot_type,
+                'camera_movement': camera_movement,
+                'duration': duration,
+                'description': description,
+                'camera_angle': camera_angle,
+                'start': match.start(),
+                'end': match.end(),
+            })
+
+        if not header_positions:
+            return []
+
+        # 为每个镜号截取正文：从 header 结束位置到下一个镜号 header 开始位置
+        shots = []
+        for i, hp in enumerate(header_positions):
+            content_start = hp['end']
+            content_end = header_positions[i + 1]['start'] if i + 1 < len(header_positions) else len(text)
+            context = text[content_start:content_end].strip()
+
+            shots.append({
+                'shot_number': hp['shot_number'],
+                'shot_type': hp['shot_type'],
+                'camera_movement': hp['camera_movement'],
+                'duration': hp['duration'],
+                'description': hp['description'],
+                'camera_angle': hp['camera_angle'],
+                'context': context,  # 镜号后面的正文（含对白）
+            })
+
+        # 按镜号去重
+        seen = set()
+        unique_shots = []
+        for s in shots:
+            if s['shot_number'] not in seen:
+                seen.add(s['shot_number'])
+                unique_shots.append(s)
+        unique_shots.sort(key=lambda x: x['shot_number'])
+        return unique_shots
+
+    def _build_shot_enrichment_system_prompt(self, request: Dict[str, Any]) -> str:
+        """构建镜头富化系统提示词（基于已解析的镜号，补充细节）"""
+        style = request.get('style', '写实风格')
+        scene_refs = request.get('sceneRefs', [])
+        character_names = request.get('characterNames', [])
+
+        scene_refs_str = "、".join(scene_refs) if scene_refs else "根据剧本自动推断"
+        character_names_str = "、".join(character_names) if character_names else "根据剧本自动推断"
+
+        return f"""你是一个专业的影视分镜师，负责为已有的镜头补充详细的拍摄信息。
+
+## 工作要求
+- 保留所有已有镜头，不要增删镜号
+- 为每个镜头补充：出场角色、对白、音效、背景音乐、备注、扩写画面描述
+- 扩写画面描述时要包含构图、光线、色彩、人物位置等细节
+- 保持原有的镜头类型和时长，仅在不合理时微调
+
+## 分镜风格
+{style}
+
+## 可用场景
+{scene_refs_str}
+
+## 可用角色
+{character_names_str}
+
+## 输出格式
+{{"shots": [{{"number": 1, "shotType": "...", "duration": 5, ...}}]}}
+每个镜头必须包含：number, shotType, duration, cameraAngle, sceneRef, characters,
+description(扩写), dialogue, soundEffects, music, notes"""
+
+    # 单次 LLM 调用的安全 prompt 上限（字符数，为输出预留空间）
+    _MAX_PROMPT_CHARS = 38000
+
+    async def _enrich_shots_in_batches(self, episode_text: str, parsed_shots: List[Dict],
+                                        ep_num: int, start_shot_id: int,
+                                        request: Dict[str, Any]) -> List[Dict]:
+        """将镜号分批发送给 LLM 富化，每批都带完整剧本正文（不截断）。
+
+        如果单批能容纳所有镜号 → 一次调用；否则分成多批，每批处理一部分镜号。
+        """
+        system_prompt = self._build_shot_enrichment_system_prompt(request)
+        base_overhead = len(system_prompt) + len(episode_text) + 1000
+
+        # 计算每批能放多少个镜号
+        shots_per_batch = max(3, (self._MAX_PROMPT_CHARS - base_overhead) // 300)
+
+        if len(parsed_shots) <= shots_per_batch:
+            # 单批全处理
+            human_prompt = self._build_shot_enrichment_human_prompt(
+                episode_text, parsed_shots, ep_num, request,
+                batch_info=""
+            )
+            try:
+                response = await self.llm.ainvoke([
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=human_prompt)
+                ])
+                shot_data = self._parse_enrichment_response(
+                    response.content, parsed_shots, ep_num, start_shot_id
+                )
+            except Exception as e:
+                logger.warning(f"第{ep_num}集富化失败: {e}")
+                shot_data = self._parsed_shots_to_episode(parsed_shots, ep_num, start_shot_id)
+
+            if shot_data.get("episodes"):
+                return shot_data["episodes"]
+            return []
+
+        # 多批处理
+        logger.info(f"第{ep_num}集 {len(parsed_shots)}镜号 分{(len(parsed_shots) + shots_per_batch - 1) // shots_per_batch}批处理")
+        all_enriched_shots = []
+        batch_start = start_shot_id
+
+        for batch_idx in range(0, len(parsed_shots), shots_per_batch):
+            batch_shots = parsed_shots[batch_idx:batch_idx + shots_per_batch]
+            batch_info = f"(第{batch_idx // shots_per_batch + 1}批，镜号{batch_shots[0]['shot_number']}-{batch_shots[-1]['shot_number']})"
+            human_prompt = self._build_shot_enrichment_human_prompt(
+                episode_text, batch_shots, ep_num, request, batch_info=batch_info
+            )
+            try:
+                response = await self.llm.ainvoke([
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=human_prompt)
+                ])
+                batch_data = self._parse_enrichment_response(
+                    response.content, batch_shots, ep_num, batch_start
+                )
+            except Exception as e:
+                logger.warning(f"第{ep_num}集{batch_info}富化失败: {e}")
+                batch_data = self._parsed_shots_to_episode(batch_shots, ep_num, batch_start)
+
+            if batch_data.get("episodes"):
+                batch_shots_list = batch_data["episodes"][0].get("shots", [])
+                all_enriched_shots.extend(batch_shots_list)
+                batch_start += len(batch_shots_list)
+
+        cn = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
+        return [{
+            "id": f"ep-{ep_num}",
+            "title": f"第{cn[ep_num] if ep_num <= 10 else ep_num}集",
+            "number": ep_num,
+            "shots": all_enriched_shots,
+            "description": "",
+        }]
+
+    def _build_shot_enrichment_human_prompt(self, episode_text: str, parsed_shots: List[Dict],
+                                            ep_num: int, request: Dict[str, Any],
+                                            batch_info: str = "") -> str:
+        """构建镜头富化用户提示词。
+
+        发送完整剧本正文（不截断）作为参考，LLM 从正文中提取对白/角色。
+        batch_info: 分批信息，空字符串表示单批全处理。
+        """
+        title = request.get('title', '未命名剧本')
+
+        shots_text = ""
+        for s in parsed_shots:
+            shots_text += (
+                f"镜号{s['shot_number']}: {s['shot_type']} | "
+                f"运镜={s['camera_movement']} | 时长={s['duration']}s | "
+                f"画面={s['description'][:200]}\n"
+            )
+
+        return f"""剧本：{title} 第{ep_num}集 {batch_info}
+
+以下 {len(parsed_shots)} 个镜头需要补充信息。请从下方完整剧本正文中提取对白和角色。
+
+=== 需处理的镜号列表 ===
+{shots_text}
+
+=== 完整剧本正文（含所有对白/角色/动作，已按镜号组织） ===
+{episode_text}
+
+请为上述 {len(parsed_shots)} 个镜头补充完整信息，输出JSON数组 {{"shots": [...]}}。
+重要：
+- 只处理上面列出的 {len(parsed_shots)} 个镜号
+- 从剧本正文中找到每个镜号对应的对白填入 dialogue
+- 对白格式保留原文（如"角色名：台词"或"角色名（情绪）：台词"）
+- 提取出场角色填入 characters 数组
+- 如确定无对白则 dialogue 留空
+- 扩写 description 包含构图、光线、色彩等细节"""
+
+    def _parse_enrichment_response(self, content: str, parsed_shots: List[Dict],
+                                    ep_num: int, start_shot_id: int) -> Dict[str, Any]:
+        """解析LLM富化响应，将LLM补充的字段合并到预解析的镜头结构中"""
+        try:
+            json_str = content
+            if "```json" in content:
+                json_str = content.split("```json")[1].split("```")[0]
+            elif "```" in content:
+                json_str = content.split("```")[1].split("```")[0]
+            data = json.loads(json_str)
+
+            # 支持两种格式：{"shots": [...]} 或 {"episodes": [{"shots": [...]}]}
+            llm_shots = data.get("shots", [])
+            if not llm_shots:
+                eps = data.get("episodes", [])
+                if eps:
+                    llm_shots = eps[0].get("shots", [])
+
+            # 以 LLM 返回的镜头为准，缺失的用预解析数据补充
+            enriched_shots = []
+            for i, ps in enumerate(parsed_shots):
+                # 尝试按镜号匹配LLM返回的镜头
+                llm_shot = None
+                for ls in llm_shots:
+                    if ls.get("number") == ps['shot_number']:
+                        llm_shot = ls
+                        break
+                # 如果镜号匹配不到，按索引取
+                if llm_shot is None and i < len(llm_shots):
+                    llm_shot = llm_shots[i]
+
+                shot_id = start_shot_id + ps['shot_number']
+                if llm_shot:
+                    enriched_shots.append({
+                        "id": shot_id,
+                        "number": ps['shot_number'],
+                        "shotType": llm_shot.get("shotType", ps['shot_type']),
+                        "duration": int(llm_shot.get("duration", ps['duration'])),
+                        "cameraAngle": llm_shot.get("cameraAngle", ps['camera_angle']),
+                        "sceneRef": llm_shot.get("sceneRef", ""),
+                        "characters": llm_shot.get("characters", []) if isinstance(llm_shot.get("characters"), list) else [],
+                        "description": llm_shot.get("description", ps['description']),
+                        "dialogue": llm_shot.get("dialogue", ""),
+                        "soundEffects": llm_shot.get("soundEffects", []) if isinstance(llm_shot.get("soundEffects"), list) else [],
+                        "music": llm_shot.get("music", ""),
+                        "notes": llm_shot.get("notes", ""),
+                    })
+                else:
+                    # LLM没返回这个镜头，从 context 中提取对话作为兜底
+                    ctx = ps.get('context', '')
+                    chars, dialogue = self._extract_dialogue_from_context(ctx)
+                    enriched_shots.append({
+                        "id": shot_id,
+                        "number": ps['shot_number'],
+                        "shotType": ps['shot_type'],
+                        "duration": ps['duration'],
+                        "cameraAngle": ps['camera_angle'],
+                        "sceneRef": "",
+                        "characters": chars,
+                        "description": ps['description'],
+                        "dialogue": dialogue,
+                        "soundEffects": [],
+                        "music": "",
+                        "notes": "",
+                    })
+
+            cn = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
+            return {"episodes": [{
+                "id": f"ep-{ep_num}",
+                "title": f"第{cn[ep_num] if ep_num <= 10 else ep_num}集",
+                "number": ep_num,
+                "shots": enriched_shots,
+                "description": "",
+            }]}
+
+        except json.JSONDecodeError:
+            logger.warning(f"第{ep_num}集富化JSON解析失败，使用预解析镜头")
+        except Exception as e:
+            logger.warning(f"第{ep_num}集富化解析异常: {e}")
+
+        # Fallback: 直接用预解析数据生成镜头
+        return self._parsed_shots_to_episode(parsed_shots, ep_num, start_shot_id)
+
+    def _extract_dialogue_from_context(self, context: str) -> tuple:
+        """从镜号正文上下文中提取角色和对白。
+
+        返回 (characters: List[str], dialogue: str)。
+        支持常见对白格式：角色名：台词 / 角色名（情绪）：台词
+        """
+        if not context:
+            return [], ""
+
+        characters = []
+        dialogues = []
+
+        # 匹配对白格式：角色名：台词 或 角色名（情绪）：台词
+        dialogue_re = re.compile(
+            r'([^\s△（(\n]{1,10})(?:\([^)]*\))?[：:]\s*(.+?)(?=\n[^\s△（(\n]{1,10}(?:\([^)]*\))?[：:]|\n\s*\n|$)',
+            re.DOTALL
+        )
+        for dm in dialogue_re.finditer(context):
+            char_name = dm.group(1).strip()
+            line = dm.group(2).strip().replace('\n', ' ')
+            if char_name and line and len(char_name) < 10:
+                if char_name not in characters:
+                    characters.append(char_name)
+                dialogues.append(f"{char_name}：{line}")
+
+        # 也尝试更简单的匹配：任意 "XX：YY" 格式（宽松匹配）
+        if not dialogues:
+            simple_re = re.compile(r'([^\s：:]{1,10})[：:]\s*(.+?)(?=\n|$)')
+            for sm in simple_re.finditer(context):
+                char_name = sm.group(1).strip()
+                line = sm.group(2).strip()
+                if char_name and line and len(char_name) < 10:
+                    if char_name not in characters:
+                        characters.append(char_name)
+                    dialogues.append(f"{char_name}：{line}")
+
+        return characters, '\n'.join(dialogues) if dialogues else ""
+
+    def _parsed_shots_to_episode(self, parsed_shots: List[Dict], ep_num: int,
+                                  start_shot_id: int) -> Dict[str, Any]:
+        """将预解析的镜头直接转换为episode结构（无需LLM，纯程序化）。
+
+        会从 context 字段中提取角色和对白作为兜底。
+        """
+        shots = []
+        for ps in parsed_shots:
+            shot_id = start_shot_id + ps['shot_number']
+            ctx = ps.get('context', '')
+            chars, dialogue = self._extract_dialogue_from_context(ctx)
+            shots.append({
+                "id": shot_id,
+                "number": ps['shot_number'],
+                "shotType": ps['shot_type'],
+                "duration": ps['duration'],
+                "cameraAngle": ps['camera_angle'],
+                "sceneRef": "",
+                "characters": chars,
+                "description": ps['description'],
+                "dialogue": dialogue,
+                "soundEffects": [],
+                "music": "",
+                "notes": "",
+            })
+        cn = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十']
+        return {"episodes": [{
+            "id": f"ep-{ep_num}",
+            "title": f"第{cn[ep_num] if ep_num <= 10 else ep_num}集",
+            "number": ep_num,
+            "shots": shots,
+            "description": "",
+        }]}
 
     def _create_default_shot(self, shot_id: int, number: int, description: str) -> Dict[str, Any]:
         """创建默认镜头结构"""

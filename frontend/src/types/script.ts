@@ -70,6 +70,13 @@ export interface ScriptUpdateRequest {
   description?: string
   content?: string
   status?: ScriptStatus
+  episodes?: Array<{
+    episode_number?: number
+    title?: string
+    content?: string
+    scenes?: Array<Record<string, any>>
+    characters?: Array<Record<string, any>>
+  }>
 }
 
 export interface ScriptResponse {

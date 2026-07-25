@@ -93,8 +93,7 @@ export function usePipelinePersistence() {
             if (val) try { backup[key] = JSON.parse(val) } catch {}
           }
 
-          // Clear and restore from backend
-          clearPipelineStorage(userId)
+          // Restore from backend: overwrite matching keys, keep local data for keys backend doesn't have
           for (const key of SLICE_KEYS) {
             let value = (response.data as any)[key]
             // Merge: backend metadata + local full content
@@ -103,6 +102,10 @@ export function usePipelinePersistence() {
               if (!value.episodes && !value.content && (backup[key].episodes || backup[key].content)) {
                 value = { ...backup[key], scriptId: value.scriptId, title: value.title }
               }
+            }
+            // Fallback: if backend doesn't have this key, keep local backup
+            if (!value && backup[key]) {
+              value = backup[key]
             }
             if (value) {
               localStorage.setItem(storageKey(userId, key), JSON.stringify(value))
@@ -122,15 +125,23 @@ export function usePipelinePersistence() {
     [userId],
   )
 
-  /** Get the current active workId from localStorage */
+  /** Get the current active workId from localStorage (filters invalid values like 'default') */
   const getWorkId = useCallback((): string | null => {
-    return localStorage.getItem(storageKey(userId, 'workId'))
+    const id = localStorage.getItem(storageKey(userId, 'workId'))
+    if (id && !id.startsWith('wk_')) {
+      // Clean up invalid workId so it won't be used again
+      localStorage.removeItem(storageKey(userId, 'workId'))
+      return null
+    }
+    return id || null
   }, [userId])
 
-  /** Set the current active workId */
+  /** Set the current active workId (only accepts valid wk_ prefixed IDs) */
   const setWorkId = useCallback(
     (workId: string) => {
-      localStorage.setItem(storageKey(userId, 'workId'), workId)
+      if (workId && workId.startsWith('wk_')) {
+        localStorage.setItem(storageKey(userId, 'workId'), workId)
+      }
     },
     [userId],
   )

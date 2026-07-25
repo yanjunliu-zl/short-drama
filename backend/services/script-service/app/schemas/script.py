@@ -53,11 +53,21 @@ class ScriptCreateRequest(BaseModel):
 
 
 # 剧本更新请求
+class EpisodeUpdateItem(BaseModel):
+    """单集剧本更新"""
+    episode_number: Optional[int] = Field(default=None, description="集号，从1开始")
+    title: Optional[str] = Field(default=None, description="集标题")
+    content: Optional[str] = Field(default=None, description="该集完整剧本内容")
+    scenes: Optional[List[Dict[str, Any]]] = Field(default=None, description="场景列表")
+    characters: Optional[List[Dict[str, Any]]] = Field(default=None, description="角色列表")
+
+
 class ScriptUpdateRequest(BaseModel):
     """剧本更新请求"""
     title: Optional[str] = Field(default=None, description="剧本标题")
     content: Optional[str] = Field(default=None, description="剧本内容")
     status: Optional[str] = Field(default=None, description="状态: 草稿, 进行中, 已完成")
+    episodes: Optional[List[EpisodeUpdateItem]] = Field(default=None, description="分集列表（含场景/角色）")
 
 
 # 剧本响应

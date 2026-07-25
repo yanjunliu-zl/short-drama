@@ -84,7 +84,7 @@ const Scene: React.FC = () => {
     const initLoad = async () => {
       const urlWorkId = searchParams.get('workId');
       const storedWorkId = getWorkId();
-      const validWorkId = urlWorkId || (storedWorkId?.startsWith('wk_') ? storedWorkId : '');
+      const validWorkId = (urlWorkId?.startsWith('wk_') ? urlWorkId : '') || (storedWorkId?.startsWith('wk_') ? storedWorkId : '');
       if (validWorkId) {
         setWorkId(validWorkId);
         await restoreFromBackend(validWorkId);
@@ -193,9 +193,11 @@ const Scene: React.FC = () => {
                 episodes: result.episodes,
                 generatedAt: new Date().toISOString(),
               };
+              // Always save to localStorage first (survives even without valid workId)
+              localStorage.setItem(`pipeline_${userId}_storyboard`, JSON.stringify(storyboardData));
               const wId = getWorkId();
               if (wId) {
-                // 直接保存 storyboard（不通过 saveAllToBackend，避免 buildFullState 遗漏）
+                // 同步到后端
                 try {
                   const resp = await pipelineService.getPipelineState(wId);
                   const existing = (resp as any)?.data || {};
@@ -207,9 +209,7 @@ const Scene: React.FC = () => {
                   }
                   existing.updatedAt = new Date().toISOString();
                   await pipelineService.savePipelineState(wId, existing);
-                  // 同步写 localStorage
-                  localStorage.setItem(`pipeline_${userId}_storyboard`, JSON.stringify(storyboardData));
-                } catch (e) { console.error('Save storyboard failed:', e); }
+                } catch (e) { console.error('Save storyboard to backend failed:', e); }
               }
               navigate(wId ? `/storyboard?workId=${wId}` : '/storyboard');
             }
