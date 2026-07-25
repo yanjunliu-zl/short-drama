@@ -51,6 +51,55 @@ pytest                                 # Python
 curl localhost:9080/api/v1/cases       # APISIX gateway
 ```
 
+## API Reference
+
+### Script Generation
+```bash
+# Sync generation from outline (V2 pipeline)
+curl -X POST http://localhost/api/v1/scripts/generate/from-outline-sync \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Rebirth in the City","outline":"A cultivator reborn in modern city","theme":"Fantasy","length":"Short","style":"Ancient"}'
+
+# Novel to script
+curl -X POST http://localhost/api/v1/scripts/generate/from-novel \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Adaptation","novel_content":"...","theme":"Romance","length":"Long"}'
+
+# Stream (SSE)
+curl -X POST http://localhost/api/v1/scripts/generate/from-outline-sync \
+  -d '{"stream":true, "title":"...","outline":"...","theme":"...","length":"Short"}'
+```
+
+### Storyboard
+```bash
+curl -X POST http://localhost/api/v1/storyboard/shots/generate \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test","script":"...","episodeCount":1,"style":"Realistic"}'
+```
+
+### Image / Video
+```bash
+# Scene image
+curl -X POST http://localhost/api/v1/llmhua/images/generate \
+  -d '{"scene_description":"Ancient palace interior","storyboard_id":"sb-1","scene_number":1,"style":"Ancient"}'
+
+# Image to video
+curl -X POST http://localhost/api/v1/llmhua/videos/generate \
+  -d '{"image_url":"http://...","prompt":"Slow camera push-in","duration":5.0}'
+
+# Batch shots to video
+curl -X POST http://localhost/api/v1/llmhua/shots-to-video \
+  -d '{"episodes":[...],"style":"Realistic"}'
+```
+
+### Other Endpoints
+```bash
+GET  /api/v1/cases?page=1&pageSize=10&sortBy=views
+POST /api/v1/scripts/extract-entities -d '{"script_content":"...","extract_type":"all"}'
+GET  /api/v1/assets/characters?limit=50
+GET  /api/v1/assets/scenes?limit=50
+```
+
 ## Access Points
 
 | Service | URL | Credentials |
