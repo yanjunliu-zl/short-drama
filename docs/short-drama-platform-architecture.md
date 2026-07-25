@@ -80,9 +80,11 @@ The Short Drama Platform is an end-to-end AI-powered content creation system tha
 
 **storyboard-service (Python/FastAPI, :8001)**
 - Shot-level storyboard generation from scripts
+- **Shot Marker Enrichment**: parses script markers (镜号) to preserve all shots, then LLM fills dialogue, characters, and cinematography details
 - 5-layer cinematography prompt builder (camera, lighting, subject, mood, style)
 - 17 film style presets with per-shot differentiation
-- Programmatic fallback on AI failure
+- Smart batching: auto-splits long episodes, full-context enrichment without truncation
+- Programmatic fallback on AI failure with context-aware dialogue extraction
 
 **llmhua-service (Python/FastAPI, :8002)**
 - AI image generation via Seedream 4.5 (Volcano Ark API)
@@ -204,9 +206,16 @@ PromptOptimizer (DSPy-inspired):
 ### 3.4 Storyboard & Video Pipeline
 
 ```
-Script → Episode Splitting (第N集 regex)
+Script Generation → Episode Content (per-episode text with shot markers)
   ↓
-Per-Episode LLM → Shot JSON (type, angle, movement, duration)
+Shot Marker Parser (镜号 regex): extracts all shot numbers, types, movements, durations
+  ↓
+Enrichment Mode (when ≥3 markers found):
+  Full episode text + parsed shot list → LLM fills dialogue/characters/sound/music
+  Preserves ALL shots (no artificial 6-12 limit) — full context, no truncation
+  Fallback: regex dialogue extraction from shot context blocks
+  ↓
+Legacy Mode (no markers): LLM creates 6-12 shots per episode from scratch
   ↓
 PromptBuilder (5-layer enrichment):
   Layer 1: Camera (shot type, angle, movement, rig, DOF, focus)
@@ -215,9 +224,11 @@ PromptBuilder (5-layer enrichment):
   Layer 3: Mood (emotion tags, narrative function, atmosphere)
   Layer 5: Style (visual style + 17 cinematography profiles)
   ↓
-Shot → Image (Seedream 4.5, 1920×1080 16:9)
+Video Page: first/last frame controls, AI frame generation, character library, material library
   ↓
-Image → Video (Seedance 2.0, adaptive duration by dialogue)
+Shot → Image (Seedream 4.5)
+  ↓
+Image → Video (Seedance 2.0, adaptive duration)
   ↓
 Batch Processing (Semaphore=3 per episode, shared seed per scene)
 ```

@@ -8,7 +8,7 @@
 
 This document traces the complete journey of a novel through the platform's AI pipeline — from raw text to finished video. The pipeline leverages an **Agentic AI Harness** (multi-agent collaboration with tool calling, plan-execute, and self-correction) rather than a traditional linear workflow. Each stage is detailed with exact code paths, data transformations, and architectural decisions.
 
-**Pipeline Overview**: Novel → Chapters → RAG Index → Multi-Agent Script Generation → Scene Extraction → Shot-Level Storyboard → Image Generation → Video Generation → Final Cut
+**Pipeline Overview**: Novel → Chapters → RAG Index → Multi-Agent Script Generation → Scene Extraction → Shot Marker Enrichment → Storyboard → Image Generation → Video Generation (Frame Controls) → Final Cut
 
 ---
 
@@ -354,9 +354,20 @@ Optional: Seedance generates scene preview images for each scene
 
 ## 6. Storyboard Generation
 
-### 6.1 Shot-Level Decomposition
+### 6.1 Shot-Level Decomposition (Dual Mode)
 
-The storyboard service takes the generated script and produces detailed shots:
+The storyboard service supports two generation modes:
+
+**Enrichment Mode** (primary, when script contains shot markers):
+The service first parses the script for shot markers (`镜号：N | 镜头类型：xxx | 运镜：xxx | 时长：Xs | 画面：xxx`) using regex. When ≥3 markers are found per episode, it enters enrichment mode:
+- All N shots are preserved (no artificial 6-12 cap)
+- Full episode text (no truncation) is sent as context
+- LLM enriches each shot with dialogue, characters, sound effects, music, notes
+- Smart batching handles very long episodes (>38K chars) by splitting shots into batches while keeping full context
+- Fallback: regex-based dialogue extraction from inter-shot context blocks
+
+**Legacy Mode** (fallback, when no markers found):
+LLM creates 6-12 shots per episode from scratch, as before.
 
 ```
 POST /api/v1/storyboard/shots/generate
@@ -371,9 +382,30 @@ POST /api/v1/storyboard/shots/generate
 }
 ```
 
-### 6.2 Five-Layer Cinematography Prompt Builder
+### 6.2 Shot Marker Parsing
 
-Each shot is enriched with `PromptBuilder` (`prompt_builder.py`):
+The `_parse_script_shot_markers()` method extracts structured data from script-embedded shot markers:
+
+```
+Script text:
+  镜号：1 | 镜头类型：远景 | 运镜：推 | 时长：5s | 画面：后山全景，夕阳余晖
+  [inter-shot content: dialogue, character cues, actions...]
+  镜号：2 | 镜头类型：中景 | 运镜：固定 | 时长：4s | 画面：萧炎盘坐修炼
+  ...
+
+Parsed output: [
+  {shot_number: 1, shot_type: "远景", camera_movement: "推", duration: 5,
+   description: "后山全景，夕阳余晖",
+   context: "[inter-shot content with dialogue]" },
+  {shot_number: 2, ...},
+]
+```
+
+The `context` field captures everything between shot markers — dialogue, character names, sound cues — which the LLM uses to populate enrichment fields.
+
+### 6.3 Five-Layer Cinematography Prompt Builder
+
+Each shot is further enriched with `PromptBuilder` (`prompt_builder.py`):
 
 ```
 Shot: {type: "远景", angle: "仰视", duration: 5, ...}
@@ -476,7 +508,19 @@ Shared seed per scene:
 
 ## 8. Video Generation
 
-### 8.1 Image-to-Video Pipeline
+### 8.1 Frontend Frame Controls
+
+The Video page (`Video.tsx`) provides per-shot controls before generation:
+
+- **First/Last Frame Mode**: Radio toggle for `仅首帧` / `仅尾帧` / `首+尾` — dynamically shows/hides frame thumbnails and adjusts AI generation targets
+- **AI Frame Generation**: Calls `POST /api/v1/llmhua/preview-image` with shot description, polls until complete, stores in local state
+- **Character Library**: Opens modal, loads `GET /api/v1/assets/characters`, clicking a character applies its `reference_images` as frame image
+- **Material Library**: Opens modal, loads `GET /api/v1/assets/scenes`, clicking a scene applies its `reference_images` as frame image
+- **Perspective/Keyframe Upload**: Drag-and-drop upload or AI generate multi-angle reference views
+- **Regenerate / Copy / Star**: Quick actions for frame iteration and sharing
+- **Tooltips**: All buttons have descriptive tooltips explaining their purpose
+
+### 8.2 Image-to-Video Pipeline
 
 ```
 SeedanceService.generate_video():
