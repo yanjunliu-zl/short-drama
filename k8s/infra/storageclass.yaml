@@ -1,0 +1,25 @@
+# StorageClass — cloud-agnostic, works on AWS EBS / GCE PD / Azure Disk / local
+# Replace provisioner and parameters for your cloud provider.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: shortdrama-storage
+  labels:
+    app: shortdrama
+provisioner: kubernetes.io/no-provisioner  # Use local-path / ebs.csi.aws.com / pd.csi.storage.gke.io
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+# --- AWS EBS ---
+# provisioner: ebs.csi.aws.com
+# parameters:
+#   type: gp3
+#   encrypted: "true"
+# --- GCE PD ---
+# provisioner: pd.csi.storage.gke.io
+# parameters:
+#   type: pd-ssd
+# --- Azure Disk ---
+# provisioner: disk.csi.azure.com
+# parameters:
+#   skuName: Premium_LRS

@@ -1,0 +1,177 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 自定义全局样式 */
+@layer base {
+  :root {
+    --primary-color: #0066cc;
+    --primary-hover: #0052a3;
+    --primary-active: #003d7a;
+    --info-color: #007aff;
+    --success-color: #34c759;
+    --warning-color: #ff9500;
+    --error-color: #ff3b30;
+    --background-color: #ffffff;
+    --surface-color: #f5f5f7;
+    --border-color: #e5e5ea;
+    --border-dark: #d2d2d7;
+    --text-primary: #1d1d1f;
+    --text-secondary: #86868b;
+    --text-tertiary: #aeaeb2;
+    --text-placeholder: #aeaeb2;
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background-color: var(--background-color);
+    color: var(--text-primary);
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  #root {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* 滚动条样式 */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--surface-color);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-dark);
+    border-radius: 4px;
+    border: 2px solid var(--surface-color);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-tertiary);
+  }
+}
+
+@layer components {
+  .container-responsive {
+    @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8;
+  }
+
+  .card-shadow {
+    @apply shadow-subtle hover:shadow-card transition-shadow duration-300;
+  }
+
+  .glass-effect {
+    @apply bg-white/80 backdrop-blur-xl border border-surface-500 shadow-elevated;
+  }
+
+  .gradient-primary {
+    @apply bg-primary-500;
+  }
+
+  .gradient-success {
+    @apply bg-success-500;
+  }
+
+  .gradient-warning {
+    @apply bg-warning-500;
+  }
+
+  .gradient-error {
+    @apply bg-error-500;
+  }
+
+  .gradient-tech {
+    @apply bg-gradient-to-r from-primary-600 via-info-500 to-primary-500;
+  }
+
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary-600 to-info-500;
+  }
+
+  .text-gradient-tech {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary-600 via-info-500 to-primary-400;
+  }
+
+  .btn-primary {
+    @apply px-4 py-2 bg-primary-500 text-white rounded-lg hover:bg-primary-600 active:bg-primary-700
+           focus:outline-none focus:ring-2 focus:ring-primary-400 focus:ring-offset-2 focus:ring-offset-white
+           transition-all duration-200 font-medium shadow-subtle hover:shadow-card;
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2 bg-surface-200 text-surface-900 rounded-lg hover:bg-surface-300
+           focus:outline-none focus:ring-2 focus:ring-surface-400 focus:ring-offset-2 focus:ring-offset-white
+           transition-colors duration-200 font-medium border border-surface-500;
+  }
+
+  .btn-tech {
+    @apply px-4 py-2 bg-success-500 text-white rounded-lg hover:bg-success-600 active:bg-success-700
+           focus:outline-none focus:ring-2 focus:ring-success-400 focus:ring-offset-2 focus:ring-offset-white
+           transition-all duration-200 font-medium shadow-subtle hover:shadow-card;
+  }
+
+  .input-base {
+    @apply w-full px-3 py-2 border border-surface-500 rounded-lg focus:outline-none
+           focus:ring-2 focus:ring-primary-400 focus:border-primary-400 transition-colors
+           duration-200 bg-white text-surface-900 placeholder:text-surface-700;
+  }
+
+  .table-header {
+    @apply bg-surface-200 text-surface-900 font-semibold px-4 py-3 text-left border-b border-surface-500;
+  }
+
+  .table-cell {
+    @apply px-4 py-3 border-t border-surface-500 bg-white text-surface-800;
+  }
+}
+
+/* 动画类 */
+.fade-in {
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+.slide-up {
+  animation: slideUp 0.3s ease-out;
+}
+
+.slide-down {
+  animation: slideDown 0.3s ease-out;
+}
+
+/* 工具类 */
+.text-balance {
+  text-wrap: balance;
+}
+
+.hover-lift {
+  transition: transform 0.2s ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-2px);
+}
+
+/* 打印样式 */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

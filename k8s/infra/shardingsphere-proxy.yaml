@@ -1,0 +1,154 @@
+# ShardingSphere-Proxy — MySQL 分库分表中间件
+# 将单库 MySQL 透明拆分为 4 个分片，应用层无感知。
+#
+# 分片策略: 按 user_id 取模 (user_id % 4)
+# 每片: 独立的 MySQL 实例 (可部署为 StatefulSet 或云 DB)
+#
+# 部署:
+#   kubectl apply -f k8s/infra/shardingsphere-proxy.yaml
+# 连接:
+#   MYSQL_HOST=shardingsphere-proxy  MYSQL_PORT=3307
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shardingsphere-config
+  namespace: shortdrama
+data:
+  server.yaml: |
+    mode:
+      type: Cluster
+      repository:
+        type: ZooKeeper
+        props:
+          namespace: governance
+          server-lists: zookeeper:2181
+    authority:
+      users:
+        - user: admin
+          password: admin123
+      privilege:
+        type: ALL_PERMITTED
+    props:
+      proxy-frontend-database-protocol-type: MySQL
+
+  config-sharding.yaml: |
+    databaseName: shortdrama
+
+    dataSources:
+      ds_0:
+        url: jdbc:mysql://mysql-shard-0:3306/shortdrama?serverTimezone=UTC
+        username: admin
+        password: admin123
+        connectionTimeoutMilliseconds: 30000
+        idleTimeoutMilliseconds: 60000
+        maxLifetimeMilliseconds: 1800000
+        maxPoolSize: 50
+        minPoolSize: 10
+      ds_1:
+        url: jdbc:mysql://mysql-shard-1:3306/shortdrama?serverTimezone=UTC
+        username: admin
+        password: admin123
+        maxPoolSize: 50
+        minPoolSize: 10
+      ds_2:
+        url: jdbc:mysql://mysql-shard-2:3306/shortdrama?serverTimezone=UTC
+        username: admin
+        password: admin123
+        maxPoolSize: 50
+        minPoolSize: 10
+      ds_3:
+        url: jdbc:mysql://mysql-shard-3:3306/shortdrama?serverTimezone=UTC
+        username: admin
+        password: admin123
+        maxPoolSize: 50
+        minPoolSize: 10
+
+    rules:
+      - !SHARDING
+        tables:
+          scripts:
+            actualDataNodes: ds_${0..3}.scripts
+            databaseStrategy:
+              standard:
+                shardingColumn: user_id
+                shardingAlgorithmName: user_id_mod
+            keyGenerateStrategy:
+              column: id
+              keyGeneratorName: snowflake
+          user_case_interactions:
+            actualDataNodes: ds_${0..3}.user_case_interactions
+            databaseStrategy:
+              standard:
+                shardingColumn: user_id
+                shardingAlgorithmName: user_id_mod
+          generation_tasks:
+            actualDataNodes: ds_${0..3}.generation_tasks
+            databaseStrategy:
+              standard:
+                shardingColumn: user_id
+                shardingAlgorithmName: user_id_mod
+
+        shardingAlgorithms:
+          user_id_mod:
+            type: MOD
+            props:
+              sharding-count: "4"
+
+        keyGenerators:
+          snowflake:
+            type: SNOWFLAKE
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shardingsphere-proxy
+  namespace: shortdrama
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: shardingsphere-proxy
+  template:
+    metadata:
+      labels:
+        app: shardingsphere-proxy
+    spec:
+      containers:
+        - name: proxy
+          image: apache/shardingsphere-proxy:5.4.0
+          ports:
+            - containerPort: 3307
+          env:
+            - name: PORT
+              value: "3307"
+          volumeMounts:
+            - name: config
+              mountPath: /opt/shardingsphere-proxy/conf
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits: { cpu: "2", memory: "2Gi" }
+          livenessProbe:
+            tcpSocket: { port: 3307 }
+            initialDelaySeconds: 60
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket: { port: 3307 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap:
+            name: shardingsphere-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shardingsphere-proxy
+  namespace: shortdrama
+spec:
+  ports:
+    - port: 3307
+      targetPort: 3307
+  selector:
+    app: shardingsphere-proxy

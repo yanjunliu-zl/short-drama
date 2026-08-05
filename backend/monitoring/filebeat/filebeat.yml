@@ -1,0 +1,25 @@
+# Filebeat — Docker logs → Elasticsearch
+filebeat.inputs:
+  - type: docker
+    containers.ids: "*"
+    multiline.pattern: '^{'
+    multiline.negate: true
+    multiline.match: after
+    json.keys_under_root: true
+    json.add_error_key: true
+    processors:
+      - add_docker_metadata:
+          host: "unix:///var/run/docker.sock"
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+  index: "shortdrama-logs-%{+yyyy.MM.dd}"
+
+setup.ilm.enabled: true
+setup.ilm.rollover_alias: "shortdrama-logs"
+setup.ilm.pattern: "{now/d}-000001"
+setup.ilm.policy_name: "shortdrama-logs-policy"
+
+logging.level: warning
+logging.to_files: false
+logging.to_stderr: true

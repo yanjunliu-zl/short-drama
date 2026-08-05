@@ -1,0 +1,163 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: shortdrama
+  labels:
+    app: rabbitmq
+spec:
+  clusterIP: None  # Headless for StatefulSet peer discovery
+  ports:
+    - port: 5672
+      name: amqp
+    - port: 15672
+      name: management
+    - port: 15692
+      name: prometheus
+    - port: 4369
+      name: epmd
+    - port: 25672
+      name: clustering
+  selector:
+    app: rabbitmq
+---
+# RabbitMQ 3-node cluster with K8s peer discovery
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  namespace: shortdrama
+spec:
+  serviceName: rabbitmq
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:3-management-alpine
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: RABBITMQ_USER
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: shortdrama-secrets
+                  key: RABBITMQ_PASSWORD
+            - name: RABBITMQ_DEFAULT_VHOST
+              valueFrom:
+                configMapKeyRef:
+                  name: shortdrama-config
+                  key: RABBITMQ_VHOST
+            # K8s peer discovery
+            - name: RABBITMQ_USE_LONGNAME
+              value: "true"
+            - name: RABBITMQ_NODENAME
+              value: "rabbit@$(POD_NAME).rabbitmq.$(POD_NAMESPACE).svc.cluster.local"
+            - name: K8S_SERVICE_NAME
+              value: rabbitmq
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: RABBITMQ_ERLANG_COOKIE
+              value: "shortdrama-secret-cookie"
+          ports:
+            - containerPort: 5672
+              name: amqp
+            - containerPort: 15672
+              name: management
+            - containerPort: 15692
+              name: prometheus
+            - containerPort: 4369
+              name: epmd
+            - containerPort: 25672
+              name: clustering
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1
+              memory: 1Gi
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "ping"]
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "check_running"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+            - name: rabbitmq-config
+              mountPath: /etc/rabbitmq/rabbitmq.conf
+              subPath: rabbitmq.conf
+      volumes:
+        - name: rabbitmq-config
+          configMap:
+            name: rabbitmq-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+---
+# RabbitMQ cluster configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-config
+  namespace: shortdrama
+data:
+  rabbitmq.conf: |
+    # Cluster formation via K8s peer discovery
+    cluster_formation.peer_discovery_backend = rabbit_peer_discovery_k8s
+    cluster_formation.k8s.host = kubernetes.default.svc.cluster.local
+    cluster_formation.k8s.address_type = hostname
+    cluster_formation.k8s.service_name = rabbitmq
+    cluster_formation.node_cleanup.interval = 30
+    cluster_formation.node_cleanup.only_log_warning = true
+    cluster_partition_handling = autoheal
+
+    # Quorum queues for data safety
+    queue_master_locator = min-masters
+
+    # Prometheus metrics
+    prometheus.return_per_object_metrics = true
+    collect_statistics_interval = 10000
+
+    # Management
+    management.load_definitions = /etc/rabbitmq/definitions.json
+  enabled_plugins: |
+    [rabbitmq_management,rabbitmq_prometheus,rabbitmq_peer_discovery_k8s].
+---
+# Enable plugins via separate ConfigMap (loaded by init container)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-plugins
+  namespace: shortdrama
+data:
+  enabled_plugins: "[rabbitmq_management,rabbitmq_prometheus,rabbitmq_peer_discovery_k8s]."

@@ -1,0 +1,144 @@
+# ============================================================
+# Production Overlay — 分布式 + 水平扩展 + 高可用
+# ============================================================
+# 单机多实例:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --scale script-service=3
+#
+# Docker Swarm (多机):
+#   docker stack deploy -c docker-compose.yml -c docker-compose.prod.yml shortdrama
+#
+# 关键特性:
+#   - MySQL 读副本 (读写分离)
+#   - Redis Sentinel (自动故障转移)
+#   - 无状态服务多副本 (APISIX 自动负载均衡)
+#   - 资源限制 (防 OOM)
+# ============================================================
+
+services:
+  # ═══════════════════════════════════════════
+  # MySQL 读副本
+  # ═══════════════════════════════════════════
+  mysql-read:
+    image: mysql:8.0
+    container_name: shortdrama-mysql-read
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-shortdrama}
+    ports:
+      - "3308:3306"
+    volumes:
+      - ./backend/config/mysql/conf.d:/etc/mysql/conf.d:ro
+    networks:
+      - shortdrama-network
+    command: >
+      --read-only
+      --server-id=2
+      --log-bin=mysql-bin
+      --relay-log=relay-log
+      --report-host=mysql-read
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+    deploy:
+      replicas: 1
+      resources:
+        limits: { cpus: '1', memory: 1G }
+        reservations: { cpus: '0.25', memory: 256M }
+
+  # ═══════════════════════════════════════════
+  # Redis Sentinel
+  # ═══════════════════════════════════════════
+  redis-sentinel:
+    image: redis:7-alpine
+    container_name: shortdrama-redis-sentinel
+    restart: unless-stopped
+    ports:
+      - "26379:26379"
+    volumes:
+      - ./backend/config/redis/sentinel.conf:/usr/local/etc/redis/sentinel.conf
+    networks:
+      - shortdrama-network
+    command: redis-sentinel /usr/local/etc/redis/sentinel.conf
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 1
+      resources:
+        limits: { cpus: '0.1', memory: 64M }
+
+  # ═══════════════════════════════════════════
+  # 无状态应用服务 — 可水平扩展 (APISIX 负载均衡)
+  # ═══════════════════════════════════════════
+
+  script-service:
+    deploy:
+      replicas: ${SCRIPT_SERVICE_REPLICAS:-2}
+      resources:
+        limits: { cpus: '4', memory: 2G }
+        reservations: { cpus: '0.5', memory: 512M }
+
+  storyboard-service:
+    deploy:
+      replicas: ${STORYBOARD_SERVICE_REPLICAS:-2}
+      resources:
+        limits: { cpus: '2', memory: 1G }
+
+  render-service:
+    deploy:
+      replicas: ${RENDER_SERVICE_REPLICAS:-2}
+      resources:
+        limits: { cpus: '2', memory: 2G }
+
+  search-service:
+    deploy:
+      replicas: ${SEARCH_SERVICE_REPLICAS:-2}
+      resources:
+        limits: { cpus: '0.5', memory: 256M }
+
+  recommendation-service:
+    deploy:
+      replicas: ${RECOMMENDATION_SERVICE_REPLICAS:-2}
+      resources:
+        limits: { cpus: '1', memory: 512M }
+
+  # ═══════════════════════════════════════════
+  # Go 服务
+  # ═══════════════════════════════════════════
+
+  user-service:
+    deploy:
+      replicas: 2
+      resources:
+        limits: { cpus: '0.5', memory: 256M }
+
+  content-service:
+    deploy:
+      replicas: 2
+      resources:
+        limits: { cpus: '0.5', memory: 512M }
+
+  final-cut-service:
+    deploy:
+      replicas: 1
+      resources:
+        limits: { cpus: '1', memory: 512M }
+
+  # 基础设施 — 单实例 + 资源限制
+  mysql:
+    deploy:
+      resources:
+        limits: { cpus: '2', memory: 2G }
+        reservations: { cpus: '0.5', memory: 512M }
+
+  redis:
+    deploy:
+      resources:
+        limits: { cpus: '0.5', memory: 512M }
+
+  rabbitmq:
+    deploy:
+      resources:
+        limits: { cpus: '1', memory: 1G }

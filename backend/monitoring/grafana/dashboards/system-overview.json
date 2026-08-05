@@ -1,0 +1,279 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": [],
+      "title": "主机概览",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 75 }, { "color": "red", "value": 90 }] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "orientation": "auto", "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" } },
+      "targets": [{ "expr": "100 - (avg by(instance)(rate(node_cpu_seconds_total{mode=\"idle\"}[2m])) * 100)", "legendFormat": "CPU", "refId": "A" }],
+      "title": "CPU 使用率",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 92 }] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 1 },
+      "id": 2,
+      "options": { "orientation": "auto", "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" } },
+      "targets": [{ "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100", "legendFormat": "内存", "refId": "A" }],
+      "title": "内存使用率",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 75 }, { "color": "red", "value": 90 }] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 1 },
+      "id": 3,
+      "options": { "orientation": "auto", "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" } },
+      "targets": [{ "expr": "100 - ((node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}) * 100)", "legendFormat": "磁盘", "refId": "A" }],
+      "title": "磁盘使用率",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 15, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": { "type": "linear" }, "showPoints": "never", "spanNulls": false, "stacking": { "group": "A", "mode": "none" } },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 80 }] },
+          "unit": "percent"
+        }
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 1 },
+      "id": 4,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "100 - (avg by(instance)(rate(node_cpu_seconds_total{mode=\"idle\"}[2m])) * 100)", "legendFormat": "CPU %", "refId": "A" }, { "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100", "legendFormat": "内存 %", "refId": "B" }],
+      "title": "资源趋势 (24h)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 200,
+      "panels": [],
+      "title": "容器概览",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "CPU %" }, "properties": [{ "id": "unit", "value": "percent" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "basic" } }] },
+          { "matcher": { "id": "byName", "options": "内存 MB" }, "properties": [{ "id": "unit", "value": "decbytes" }] }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 10 },
+      "id": 5,
+      "options": { "cellHeight": "sm", "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false } },
+      "targets": [
+        { "expr": "sum(rate(container_cpu_usage_seconds_total{name=~\".+\"}[2m])) by (name) * 100", "format": "table", "instant": true, "legendFormat": "__auto", "refId": "A" },
+        { "expr": "sum(container_memory_usage_bytes{name=~\".+\"}) by (name) / 1024 / 1024", "format": "table", "instant": true, "legendFormat": "__auto", "refId": "B" }
+      ],
+      "title": "容器资源使用",
+      "transformations": [
+        { "id": "merge", "options": {} },
+        { "id": "organize", "options": { "renameByName": { "Value #A": "CPU %", "Value #B": "内存 MB", "name": "容器" } } }
+      ],
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+      "id": 300,
+      "panels": [],
+      "title": "服务健康",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [{ "options": { "0": { "color": "red", "text": "DOWN", "index": 1 }, "1": { "color": "green", "text": "UP", "index": 0 } }, "type": "value" }],
+          "max": 1, "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 0.5 }] }
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 21 },
+      "id": 6,
+      "options": { "orientation": "horizontal", "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" } },
+      "targets": [{ "expr": "service_health_status", "legendFormat": "{{service}}", "refId": "A" }],
+      "title": "服务健康状态",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "请求数/s", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "scaleDistribution": { "type": "linear" }, "showPoints": "never", "spanNulls": false, "stacking": { "group": "A", "mode": "none" } },
+          "mappings": [],
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 21 },
+      "id": 7,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "sum(rate(http_requests_total[2m])) by (service)", "legendFormat": "{{service}}", "refId": "A" }],
+      "title": "请求速率 (by service)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "id": 400,
+      "panels": [],
+      "title": "请求延迟与错误",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "秒", "axisPlacement": "auto", "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "showPoints": "never", "spanNulls": true, "stacking": { "group": "A", "mode": "none" } },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "id": 8,
+      "options": { "legend": { "calcs": ["mean", "p90"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "histogram_quantile(0.90, sum(rate(http_request_duration_seconds_bucket[2m])) by (le, service))", "legendFormat": "p90 {{service}}", "refId": "A" }, { "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[2m])) by (le, service))", "legendFormat": "p50 {{service}}", "refId": "B" }],
+      "title": "请求延迟 P50/P90",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "showPoints": "never", "stacking": { "group": "A", "mode": "none" } },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "id": 9,
+      "options": { "legend": { "calcs": ["max"], "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "sum(rate(http_exceptions_total[2m])) by (exception_type, service)", "legendFormat": "{{service}}:{{exception_type}}", "refId": "A" }],
+      "title": "异常率",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "id": 500,
+      "panels": [],
+      "title": "基础设施",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "showPoints": "never", "stacking": { "group": "A", "mode": "none" } }
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 37 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "redis_connected_clients", "legendFormat": "Redis 连接数", "refId": "A" }, { "expr": "redis_used_memory_bytes / 1024 / 1024", "legendFormat": "Redis 内存 MB", "refId": "B" }],
+      "title": "Redis",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "showPoints": "never", "stacking": { "group": "A", "mode": "none" } }
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 37 },
+      "id": 11,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "mysql_global_status_threads_connected", "legendFormat": "MySQL 连接数", "refId": "A" }, { "expr": "rate(mysql_global_status_questions[2m])", "legendFormat": "MySQL QPS", "refId": "B" }],
+      "title": "MySQL",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5, "showPoints": "never", "stacking": { "group": "A", "mode": "none" } }
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 37 },
+      "id": 12,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [{ "expr": "rabbitmq_queue_messages_ready", "legendFormat": "就绪消息", "refId": "A" }, { "expr": "rate(rabbitmq_consumers[2m])", "legendFormat": "消费者数", "refId": "B" }],
+      "title": "RabbitMQ",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["shortdrama", "system"],
+  "templating": {
+    "list": [
+      {
+        "current": { "text": "Prometheus", "value": "prometheus" },
+        "name": "DS_PROMETHEUS",
+        "query": "prometheus",
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Short Drama — 系统监控",
+  "uid": "shortdrama-system",
+  "version": 1
+}

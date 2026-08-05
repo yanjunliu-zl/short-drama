@@ -1,0 +1,136 @@
+groups:
+  - name: shortdrama
+    rules:
+      # ========= 服务健康 =========
+      - alert: ServiceDown
+        expr: service_health_status == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: service
+        annotations:
+          summary: "服务 {{ $labels.service }} 宕机"
+          description: "{{ $labels.service }} 健康检查失败已超过 2 分钟"
+
+      - alert: HighErrorRate
+        expr: sum(rate(http_exceptions_total[5m])) by (service) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          category: application
+        annotations:
+          summary: "{{ $labels.service }} 异常率过高"
+          description: "{{ $labels.service }} 异常率 {{ $value }}/s，持续 5 分钟"
+
+      - alert: HighLatency
+        expr: histogram_quantile(0.90, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, service)) > 5
+        for: 5m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "{{ $labels.service }} P90 延迟 > 5s"
+          description: "{{ $labels.service }} P90 延迟 {{ $value }}s，持续 5 分钟"
+
+      - alert: LLMTimeout
+        expr: histogram_quantile(0.90, sum(rate(http_request_duration_seconds_bucket{endpoint=~".*generate.*|.*extract.*"}[10m])) by (le, service)) > 60
+        for: 10m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "{{ $labels.service }} 生成类接口 P90 延迟 > 60s"
+          description: "可能 LLM 超时或过载"
+
+      # ========= 主机资源 =========
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 10m
+        labels:
+          severity: warning
+          category: host
+        annotations:
+          summary: "CPU 使用率 > 90%"
+          description: "主机 CPU 使用率 {{ $value }}%，持续 10 分钟"
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 92
+        for: 5m
+        labels:
+          severity: critical
+          category: host
+        annotations:
+          summary: "内存使用率 > 92%"
+          description: "主机内存使用率 {{ $value }}%，持续 5 分钟"
+
+      - alert: HighDiskUsage
+        expr: 100 - ((node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100) > 90
+        for: 10m
+        labels:
+          severity: warning
+          category: host
+        annotations:
+          summary: "磁盘使用率 > 90%"
+          description: "根分区使用率 {{ $value }}%，持续 10 分钟"
+
+      - alert: DiskWillFill
+        expr: predict_linear(node_filesystem_avail_bytes{mountpoint="/"}[1h], 24 * 3600) < 0
+        for: 10m
+        labels:
+          severity: critical
+          category: host
+        annotations:
+          summary: "磁盘预计 24h 内耗尽"
+          description: "根分区按当前增长速率将在 24 小时内耗尽"
+
+      # ========= 基础设施 =========
+      - alert: MySQLDown
+        expr: mysql_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: infra
+        annotations:
+          summary: "MySQL 不可用"
+          description: "MySQL exporter 报告数据库不可达"
+
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: infra
+        annotations:
+          summary: "Redis 不可用"
+          description: "Redis exporter 报告缓存不可达"
+
+      - alert: RabbitMQDown
+        expr: rabbitmq_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: infra
+        annotations:
+          summary: "RabbitMQ 不可用"
+          description: "消息队列不可达"
+
+      # ========= 容器 =========
+      - alert: ContainerOOM
+        expr: increase(container_oom_events_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          category: container
+        annotations:
+          summary: "容器 OOM 事件"
+          description: "过去 1 小时内容器发生 OOM: {{ $labels.name }}"
+
+      - alert: ContainerRestarting
+        expr: rate(container_last_seen{container_state="running"}[10m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+          category: container
+        annotations:
+          summary: "容器可能已停止"
+          description: "{{ $labels.name }} 在过去 10 分钟内未被检测到运行"

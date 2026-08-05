@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shortdrama-config
+  namespace: shortdrama
+data:
+  APP_ENV: "production"
+  LOG_LEVEL: "INFO"
+  # 数据库（覆盖值在 secrets 中）
+  DB_HOST: "mysql"
+  DB_PORT: "3306"
+  DB_NAME: "shortdrama"
+  # Redis
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  # RabbitMQ
+  RABBITMQ_HOST: "rabbitmq"
+  RABBITMQ_PORT: "5672"
+  RABBITMQ_VHOST: "/"
+  # MinIO
+  STORAGE_TYPE: "minio"
+  STORAGE_ENDPOINT: "minio:9000"
+  STORAGE_BUCKET: "short-drama"
+  STORAGE_REGION: "us-east-1"
+  STORAGE_PUBLIC_ENDPOINT: "http://minio:9000"
+  # DeepSeek
+  DEEPSEEK_API_BASE: "https://api.deepseek.com"
+  DEEPSEEK_MODEL: "deepseek-chat"
+  # Seedance
+  SEEDANCE_API_URL: "https://ark.cn-beijing.volces.com/api/v3"
+  SEEDANCE_MODEL: "doubao-seedream-4-5-251128"
+  SEEDANCE_VIDEO_MODEL: "doubao-seedance-2-0-260128"
+  # 分镜服务
+  STORYBOARD_MAX_TOKENS: "8000"
+  STORYBOARD_MAX_SCRIPT_CHARS: "12000"
+  STORYBOARD_TEMPERATURE: "0.7"
+  STORYBOARD_TIMEOUT: "60"

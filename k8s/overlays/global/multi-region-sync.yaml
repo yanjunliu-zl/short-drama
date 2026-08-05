@@ -1,0 +1,275 @@
+# 多区域数据同步配置 — 3 区域全球部署
+# 区域: us-east-1 (北美), ap-southeast-1 (新加坡), eu-west-1 (欧洲)
+#
+# 数据同步策略:
+#   - TiDB: 多区域集群, 每个区域本地读写, CDC 异步同步
+#   - MinIO: 跨区域复制 (CRR), 图片/视频就近访问
+#   - Redis: 全球多活 (Active-Active), CRDT 冲突解决
+#   - Kafka: MirrorMaker 2 跨区域复制事件
+---
+# TiDB 多区域集群
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tidb-global-config
+  namespace: shortdrama
+data:
+  topology.yaml: |
+    global:
+      user: tidb
+      group: tidb
+      arch: amd64
+
+    pd_servers:
+      - host: pd-us-1
+        client_port: 2379
+        peer_port: 2380
+      - host: pd-sg-1
+        client_port: 2379
+        peer_port: 2380
+      - host: pd-eu-1
+        client_port: 2379
+        peer_port: 2380
+
+    tidb_servers:
+      # US-East (primary read/write)
+      - host: tidb-us-1
+        port: 4000
+      - host: tidb-us-2
+        port: 4000
+      # AP-Southeast (local read, async write to US)
+      - host: tidb-sg-1
+        port: 4000
+      # EU-West (local read)
+      - host: tidb-eu-1
+        port: 4000
+
+    tikv_servers:
+      # US-East — 3 replicas (Raft majority)
+      - host: tikv-us-1
+        port: 20160
+        deploy_dir: /data/tikv
+        data_dir: /data/tikv/data
+      - host: tikv-us-2
+        port: 20160
+      - host: tikv-us-3
+        port: 20160
+      # Singapore — 3 replicas
+      - host: tikv-sg-1
+        port: 20160
+      - host: tikv-sg-2
+        port: 20160
+      - host: tikv-sg-3
+        port: 20160
+      # EU — 3 replicas
+      - host: tikv-eu-1
+        port: 20160
+      - host: tikv-eu-2
+        port: 20160
+      - host: tikv-eu-3
+        port: 20160
+
+    # Placement Rules: pin data to nearest region
+    placement_rules:
+      - id: us-primary
+        role: voter
+        count: 3
+        label_constraints:
+          - key: region
+            op: in
+            values: ["us-east-1"]
+      - id: sg-local
+        role: voter
+        count: 3
+        label_constraints:
+          - key: region
+            op: in
+            values: ["ap-southeast-1"]
+      - id: eu-local
+        role: voter
+        count: 3
+        label_constraints:
+          - key: region
+            op: in
+            values: ["eu-west-1"]
+
+---
+# TiCDC 跨区域 Changefeed
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ticdc-changefeeds
+  namespace: shortdrama
+data:
+  changefeeds.toml: |
+    # US → SG async replication
+    [us-to-sg]
+    sink-uri = "mysql://admin:password@tidb-sg-1:4000/"
+    start-ts = 0
+    filter-rules = ["*.*"]
+    # 只同步核心业务表
+    [us-to-sg.sink]
+    security = false
+
+    # US → EU async replication
+    [us-to-eu]
+    sink-uri = "mysql://admin:password@tidb-eu-1:4000/"
+    start-ts = 0
+
+---
+# MinIO Cross-Region Replication (CRR)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minio-replication-config
+  namespace: shortdrama
+data:
+  replication.json: |
+    {
+      "rules": [
+        {
+          "id": "media-us-to-sg",
+          "status": "Enabled",
+          "priority": 1,
+          "source": { "bucket": "short-drama-us" },
+          "destination": {
+            "bucket": "arn:aws:s3:::short-drama-sg",
+            "storageClass": "STANDARD"
+          },
+          "deleteMarkerReplication": { "status": "Disabled" }
+        },
+        {
+          "id": "media-us-to-eu",
+          "status": "Enabled",
+          "priority": 2,
+          "source": { "bucket": "short-drama-us" },
+          "destination": {
+            "bucket": "arn:aws:s3:::short-drama-eu"
+          }
+        }
+      ]
+    }
+
+---
+# Redis 全球多活 (Active-Active) — 读写就近, CRDT 冲突解决
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-global-config
+  namespace: shortdrama
+data:
+  redis-global.conf: |
+    # Redis Enterprise Active-Active 配置
+    # 每个区域独立 Redis Cluster, CRDT 自动同步
+
+    # US-East
+    cluster-us:
+      nodes: redis-us-1:6379, redis-us-2:6379, redis-us-3:6379
+      replicas: 2
+
+    # Singapore
+    cluster-sg:
+      nodes: redis-sg-1:6379, redis-sg-2:6379, redis-sg-3:6379
+      replicas: 2
+
+    # EU-West
+    cluster-eu:
+      nodes: redis-eu-1:6379, redis-eu-2:6379, redis-eu-3:6379
+      replicas: 2
+
+    # CRDT sync — 最后写入胜出 (LWW) + 向量时钟
+    sync:
+      mode: active-active
+      conflict_resolution: lww-crdt
+      max_lag_ms: 100
+      retry_interval_ms: 50
+
+---
+# Kafka MirrorMaker 2 — 跨区域事件复制
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-mm2-config
+  namespace: shortdrama
+data:
+  mm2.properties: |
+    clusters = us, sg, eu
+    us.bootstrap.servers = kafka-us-1:9092,kafka-us-2:9092,kafka-us-3:9092
+    sg.bootstrap.servers = kafka-sg-1:9092,kafka-sg-2:9092,kafka-sg-3:9092
+    eu.bootstrap.servers = kafka-eu-1:9092,kafka-eu-2:9092,kafka-eu-3:9092
+
+    # US → SG
+    us->sg.enabled = true
+    us->sg.topics = ai-tasks-.*, user-events-.*
+    us->sg.sync.group.offsets.enabled = true
+
+    # US → EU
+    us->eu.enabled = true
+    us->eu.topics = ai-tasks-.*, user-events-.*
+
+    # Replication factor within each cluster
+    us.offsets.topic.replication.factor = 3
+    sg.offsets.topic.replication.factor = 3
+    eu.offsets.topic.replication.factor = 3
+
+---
+# CDN / Edge 配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cdn-edge-config
+  namespace: shortdrama
+data:
+  cloudfront.yaml: |
+    # AWS CloudFront — 全球 CDN 分发
+    Origins:
+      - Id: minio-us
+        DomainName: minio-us.shortdrama.com
+        S3OriginConfig: {}
+      - Id: api-us
+        DomainName: api-us.shortdrama.com
+        CustomOriginConfig:
+          HTTPPort: 80
+          OriginProtocolPolicy: https-only
+
+    Behaviors:
+      # 图片/视频 → CDN 缓存 (7天)
+      - PathPattern: /media/*
+        TargetOriginId: minio-us
+        ViewerProtocolPolicy: redirect-to-https
+        MinTTL: 86400
+        DefaultTTL: 604800
+        MaxTTL: 2592000
+        Compress: true
+
+      # API → 不缓存 (动态内容)
+      - PathPattern: /api/*
+        TargetOriginId: api-us
+        ViewerProtocolPolicy: https-only
+        AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+        CachePolicy: Managed-CachingDisabled
+
+      # 前端静态资源 → 长期缓存
+      - PathPattern: /assets/*
+        TargetOriginId: api-us
+        MinTTL: 2592000
+        DefaultTTL: 31536000
+
+    PriceClass: PriceClass_All  # 全球所有边缘节点
+
+  # Lambda@Edge — 边缘计算
+  edge-functions:
+    # 简单的推荐/热门内容在边缘返回
+    edge-recommend:
+      runtime: nodejs18.x
+      handler: index.handler
+      trigger: viewer-request
+      path: /api/v1/recommendations/recommend
+      cache_ttl: 60  # 边���缓存 60s
+
+    # A/B 测试分流
+    ab-test-router:
+      runtime: nodejs18.x
+      handler: index.handler
+      trigger: viewer-request
+      path: /api/v1/*

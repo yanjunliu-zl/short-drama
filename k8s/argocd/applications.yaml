@@ -1,0 +1,82 @@
+# ArgoCD ApplicationSet — GitOps multi-cluster deployment
+# Automatically deploys to all configured regions when manifests change in git.
+#
+# BEFORE DEPLOYING:
+#   Update the server URLs below to your actual Kubernetes API server addresses
+#   for each region. Example:
+#     us-east-1:  https://kubernetes.default.svc  (in-cluster)
+#     or:         https://ABC123.gr7.us-east-1.eks.amazonaws.com
+#     ap-southeast-1: https://DEF456.gr7.ap-southeast-1.eks.amazonaws.com
+#     eu-west-1: https://GHI789.gr7.eu-west-1.eks.amazonaws.com
+#
+#   Or use an external generator (cluster decision resource) for automatic discovery:
+#     https://argo-cd.readthedocs.io/en/stable/operator-manual/applicationset/Generators-Cluster-Decision-Resource/
+#
+# Install: kubectl apply -f k8s/argocd/applications.yaml
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: shortdrama
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          # TODO: Replace with actual cluster API server URLs before deploying
+          - region: us-east-1
+            server: https://kubernetes.default.svc  # in-cluster, or EKS API endpoint
+          # - region: ap-southeast-1
+          #   server: https://CHANGE_ME.ap-southeast-1.eks.amazonaws.com
+          # - region: eu-west-1
+          #   server: https://CHANGE_ME.eu-west-1.eks.amazonaws.com
+  template:
+    metadata:
+      name: shortdrama-{{region}}
+      namespace: argocd
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: shortdrama
+      source:
+        repoURL: https://github.com/yanjunliu-zl/short-drama.git
+        targetRevision: main
+        path: k8s/overlays/{{region}}
+      destination:
+        server: '{{server}}'
+        namespace: shortdrama
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+---
+# ArgoCD AppProject — security boundaries
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: shortdrama
+  namespace: argocd
+spec:
+  description: Short Drama Platform
+  sourceRepos:
+    - https://github.com/yanjunliu-zl/short-drama.git
+  destinations:
+    - namespace: shortdrama
+      server: '*'
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'

@@ -1,0 +1,167 @@
+# Kafka 3-node cluster — replaces RabbitMQ for trillion-level message throughput
+# Priority-based topic partitioning for AI task scheduling
+#
+# Priority 1: User real-time requests (latency < 2s)
+# Priority 2: Video generation tasks (latency < 5min)
+# Priority 3: Batch offline processing
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: shortdrama
+  labels:
+    app: kafka
+spec:
+  clusterIP: None  # Headless for StatefulSet
+  ports:
+    - port: 9092
+      name: internal
+    - port: 9093
+      name: external
+  selector:
+    app: kafka
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: shortdrama
+spec:
+  serviceName: kafka
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: apache/kafka:3.9.0
+          env:
+            - name: KAFKA_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: KAFKA_PROCESS_ROLES
+              value: "broker,controller"
+            - name: KAFKA_LISTENERS
+              value: "INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "INTERNAL://$(POD_NAME).kafka.shortdrama.svc.cluster.local:9092"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "INTERNAL"
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@kafka-0.kafka.shortdrama.svc.cluster.local:9093,2@kafka-1.kafka.shortdrama.svc.cluster.local:9093,3@kafka-2.kafka.shortdrama.svc.cluster.local:9093"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "3"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "3"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "2"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - containerPort: 9092
+              name: internal
+            - containerPort: 9093
+              name: external
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          livenessProbe:
+            tcpSocket:
+              port: 9092
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 9092
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kafka/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 100Gi
+---
+# Kafka topic initialization job — creates priority-partitioned topics
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-topic-init
+  namespace: shortdrama
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: kafka-init
+          image: apache/kafka:3.9.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              echo "Creating Kafka topics with priority partitions..."
+
+              # Priority 1: User real-time requests (latency < 2s)
+              # 3 partitions, high priority processing
+              kafka-topics.sh --bootstrap-server kafka-0.kafka:9092 \
+                --create --if-not-exists \
+                --topic ai-task-p1-realtime \
+                --partitions 6 \
+                --replication-factor 3 \
+                --config retention.ms=3600000 \
+                --config max.message.bytes=1048576
+
+              # Priority 2: Video generation (latency < 5min)
+              # 6 partitions for higher throughput
+              kafka-topics.sh --bootstrap-server kafka-0.kafka:9092 \
+                --create --if-not-exists \
+                --topic ai-task-p2-video \
+                --partitions 12 \
+                --replication-factor 3 \
+                --config retention.ms=7200000 \
+                --config max.message.bytes=5242880
+
+              # Priority 3: Batch offline processing
+              # 12 partitions for maximum parallelism
+              kafka-topics.sh --bootstrap-server kafka-0.kafka:9092 \
+                --create --if-not-exists \
+                --topic ai-task-p3-batch \
+                --partitions 24 \
+                --replication-factor 3 \
+                --config retention.ms=86400000 \
+                --config max.message.bytes=10485760
+
+              # Dead letter queue for failed tasks
+              kafka-topics.sh --bootstrap-server kafka-0.kafka:9092 \
+                --create --if-not-exists \
+                --topic ai-task-dlq \
+                --partitions 3 \
+                --replication-factor 3 \
+                --config retention.ms=604800000
+
+              echo "Topic creation complete."
+              kafka-topics.sh --bootstrap-server kafka-0.kafka:9092 --list
