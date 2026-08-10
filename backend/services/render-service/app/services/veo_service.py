@@ -303,6 +303,7 @@ class VeoService:
                 logger.info(f"Veo: video generated (sync, {elapsed:.1f}s)")
                 return {
                     "success": True,
+                    "status": "completed",
                     "video_url": video_url,
                     "provider": "veo",
                     "elapsed_ms": int(elapsed * 1000),
@@ -316,6 +317,7 @@ class VeoService:
             elapsed = time.time() - t0
             return {
                 "success": bool(video_url),
+                "status": "completed" if video_url else "failed",
                 "video_url": video_url or "",
                 "provider": "veo",
                 "task_id": task_id,
@@ -427,7 +429,7 @@ class VeoService:
 # ═══════════════════════════════════════════════════════════════
 
 class VideoProviderRouter:
-    """Video generation provider router — locale-aware routing.
+    """Video generation provider router — locale-aware + explicit model selection.
 
     Routes:
       - zh-CN → Seedance (ByteDance, best Chinese content)
@@ -435,6 +437,7 @@ class VideoProviderRouter:
       - ar-SA / tr-TR → Veo (Google, better multilingual support)
       - ja-JP / ko-KR → Seedance (closer to Asian aesthetics)
       - Other → Seedance (default)
+      - Explicit model="comfyui" → ComfyUI (local Minimax H3)
     """
 
     _LOCALE_PROVIDER: Dict[str, str] = {
@@ -450,12 +453,19 @@ class VideoProviderRouter:
         "th-TH": "seedance",
     }
 
-    def __init__(self, seedance_service=None, veo_service=None):
+    def __init__(self, seedance_service=None, veo_service=None, comfyui_service=None):
         self._seedance = seedance_service
         self._veo = veo_service
+        self._comfyui = comfyui_service
 
-    def get_provider(self, target_locale: str = "zh-CN") -> str:
-        """Get preferred video provider for locale."""
+    def get_provider(self, target_locale: str = "zh-CN", explicit_model: str = "") -> str:
+        """Get preferred video provider. Explicit model overrides locale routing."""
+        if explicit_model == "comfyui" and self._comfyui and self._comfyui.enabled:
+            return "comfyui"
+        if explicit_model == "veo" and self._veo:
+            return "veo"
+        if explicit_model == "seedance" and self._seedance:
+            return "seedance"
         return self._LOCALE_PROVIDER.get(target_locale, "seedance")
 
     async def generate_video(

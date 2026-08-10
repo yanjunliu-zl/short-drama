@@ -38,7 +38,17 @@ AI enriches each shot with camera angles, lighting, movement, dialogue, characte
 ### AI Video Generation
 Generate images and videos from storyboard shots with first-frame / last-frame controls. Character library and material library for visual consistency. Batch process entire episodes with style controls.
 
-![Video Generation](assets/video.png)
+**Video generation** uses an image-to-video (I2V) pipeline: the platform pre-generates a first-frame reference image at 9:16 portrait (720×1280), then feeds it into the video model as the starting frame for consistent, distortion-free output. Multiple video backends are supported with automatic locale-aware routing:
+
+| Provider | Model | Best For | Mode |
+|----------|-------|----------|------|
+| **ComfyUI** (local) | Minimax H3 | High-quality 9:16 portrait short drama | I2V with pre-generated first frame |
+| **Seedance** (ByteDance) | — | zh-CN, ja-JP, ko-KR markets | I2V |
+| **Veo 2** (Google) | veo-2.0-generate-preview | en-US, es-MX, ar-SA markets | I2V / T2V |
+
+First-frame images are generated via ComfyUI Flux.2 and automatically uploaded to the video backend's input pipeline.
+
+![Video Generation](assets/render.png)
 
 ### Final Cut — Assembly & Export
 Combine generated videos into a complete short drama with transitions, audio, and final rendering.
@@ -56,8 +66,18 @@ cp .env.example .env
 Edit `.env` with your API keys:
 
 ```env
-DEEPSEEK_API_KEY=sk-xxx          # Script generation / Storyboard (platform.deepseek.com)
-SEEDANCE_API_KEY=ark-xxx         # Image / Video generation (console.volcengine.com/ark)
+# LLM — Script generation / Storyboard
+DEEPSEEK_API_KEY=sk-xxx              # platform.deepseek.com
+
+# Video generation — pick one or more
+SEEDANCE_API_KEY=ark-xxx             # ByteDance Seedance (console.volcengine.com/ark)
+VEO_ENABLED=true                     # Google Veo 2 (requires GCP service account)
+GOOGLE_CLOUD_PROJECT=your-project
+GOOGLE_CLOUD_LOCATION=us-central1
+
+# ComfyUI — local video generation (Minimax H3 I2V)
+COMFYUI_BASE_URL=http://host.docker.internal:8188
+COMFYUI_ENABLED=true
 ```
 
 ### 2. Start Backend
@@ -100,6 +120,16 @@ Case Square → Script Generation → Script Editor → Scene Extraction → Sto
 
 The novel-to-script pipeline uses semantic chunking (scene-aware, not fixed-size), hybrid RAG retrieval (dense + sparse + RRF fusion), and multi-model routing with circuit-breaker failover. All generation APIs support SSE streaming (`stream=true`).
 
+**Video Generation** — image-to-video with pre-generated first frames:
+
+1. Frontend calls preview-image API to generate a first-frame reference image via ComfyUI Flux.2 at 9:16 portrait (720×1280).
+2. The first-frame URL is passed as `startImageUrl` to the batch video generation API.
+3. Backend downloads the first frame, uploads it to the ComfyUI input directory, and injects it into the Minimax H3 I2V workflow via the `LoadImage` → `MiniMaxH3ImageToVideo.first_frame` node chain.
+4. ComfyUI generates the video at 9:16 portrait with the first frame as the visual anchor.
+5. Results are streamed back via SSE or polled via task status endpoint.
+
+For international markets, the `VideoProviderRouter` automatically selects Seedance or Veo based on the target locale, with automatic fallback on failure.
+
 ## Architecture
 
 ```
@@ -115,6 +145,7 @@ Frontend (:3000) → APISIX (:9080) → Microservices
 
 Infrastructure:     MySQL 8.0 + Redis 7 + RabbitMQ + MinIO + Kafka + Elasticsearch + ClickHouse
 AI:                 DeepSeek/OpenAI/Anthropic/vLLM multi-model routing
+Video AI:           ComfyUI (Minimax H3 I2V) + Seedance (ByteDance) + Veo 2 (Google)
 Observability:      Prometheus + Grafana + Jaeger + OpenTelemetry (trace-log correlation)
 SRE:                Circuit breaker + graceful degradation + per-user rate limiting
 ```

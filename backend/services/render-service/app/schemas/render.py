@@ -34,6 +34,7 @@ class ImageToVideoRequest(BaseModel):
     fps: Optional[int] = Field(default=24, description="帧率")
     seed: Optional[int] = Field(default=None, description="随机种子")
     strength: Optional[float] = Field(default=None, description="图像强度")
+    model: Optional[str] = Field(default="comfyui", description="视频生成模型: comfyui(minimax-h3) / seedance / veo")
     user_id: Optional[str] = Field(default=None, description="用户ID")
     stream: bool = Field(default=False, description="是否启用SSE流式输出")
 
@@ -120,6 +121,7 @@ class ShotRequest(BaseModel):
     soundEffects: List[str] = Field(default=[], description="音效")
     music: str = Field(default="", description="背景音乐")
     notes: str = Field(default="", description="备注")
+    startImageUrl: Optional[str] = Field(default=None, description="首帧图URL（前端预生成，传入后跳过生图步骤直接用作I2V起始帧）")
 
 
 class ShotEpisodeRequest(BaseModel):
@@ -144,10 +146,10 @@ class ShotsToVideoRequest(BaseModel):
     episodes: List[ShotEpisodeRequest] = Field(..., description="分集镜头数据")
     referenceImages: Optional[ReferenceImagesInput] = Field(default=None, description="参考图像（角色/场景/道具预览图，用于保持一致性）")
     style: Optional[str] = Field(default="写实风格", description="整体风格")
-    width: Optional[int] = Field(default=1920, description="视频宽度")
-    height: Optional[int] = Field(default=1920, description="视频高度")
+    width: Optional[int] = Field(default=720, description="视频宽度")
+    height: Optional[int] = Field(default=1280, description="视频高度")
     fps: Optional[int] = Field(default=24, description="帧率")
-    model: Optional[str] = Field(default="seedance", description="视频生成模型: seedance / kling / wan / hunyuan")
+    model: Optional[str] = Field(default="comfyui", description="视频生成模型: comfyui(minimax-h3) / seedance / veo")
     characterLock: Optional[bool] = Field(default=True, description="角色一致性锁定：启用后同场景使用相同的参考图和种子")
     user_id: Optional[str] = Field(default=None, description="用户ID")
     stream: bool = Field(default=False, description="是否启用SSE流式输出")
@@ -183,9 +185,17 @@ class PreviewImageRequest(BaseModel):
     description: str = Field(..., description="图像描述（场景环境、角色外貌或道具外观）")
     category: str = Field(default="scene", description="类型: scene/character/prop")
     style: Optional[str] = Field(default="写实风格", description="图像风格")
-    width: Optional[int] = Field(default=1920, description="图像宽度")
-    height: Optional[int] = Field(default=1920, description="图像高度")
+    width: Optional[int] = Field(default=720, description="图像宽度")
+    height: Optional[int] = Field(default=1280, description="图像高度")
     stream: bool = Field(default=False, description="是否启用SSE流式输出")
+    reference_images: Optional[dict] = Field(default=None, description="参考图像: { characters: { name: url }, scenes: { name: url } }")
+    # 镜头级上下文（用于首帧/尾帧精细化提示词）
+    frame_type: Optional[str] = Field(default=None, description="帧类型: first(首帧) / last(尾帧)")
+    shot_type: Optional[str] = Field(default=None, description="景别: 远景/全景/中景/近景/特写")
+    characters: Optional[List[str]] = Field(default=None, description="镜头内角色名称列表")
+    lighting: Optional[str] = Field(default=None, description="光线描述")
+    emotion: Optional[List[str]] = Field(default=None, description="情绪标签")
+    camera_movement: Optional[str] = Field(default=None, description="运镜方式")
 
 
 class PreviewImageResponse(BaseModel):

@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -27,6 +28,7 @@ from app.schemas.render import (
     PreviewImageResponse,
 )
 from app.services.seedance_service import get_seedance_service, close_seedance_service
+from app.services.comfyui_service import ComfyUIService
 from app.core.config import settings
 from app.utils.sse import format_sse_event, EVENT_PROGRESS, EVENT_ERROR, EVENT_DONE
 
@@ -308,21 +310,82 @@ async def design_character(
 
 # ==================== 预览图像生成端点（场景/角色/道具） ====================
 
-def _build_preview_prompt(description: str, category: str, style: str) -> str:
-    """根据类型构建预览图像提示词"""
+def _build_preview_prompt(
+    description: str,
+    category: str,
+    style: str,
+    reference_images: Optional[dict] = None,
+    frame_type: Optional[str] = None,
+    shot_type: Optional[str] = None,
+    characters: Optional[list] = None,
+    lighting: Optional[str] = None,
+    emotion: Optional[list] = None,
+    camera_movement: Optional[str] = None,
+) -> str:
+    """根据类型构建预览图像提示词，支持参考图注入角色/场景视觉特征。"""
+    # 参考图视觉锚定
+    ref_hint = ""
+    if reference_images:
+        rchars = reference_images.get("characters", {})
+        rscenes = reference_images.get("scenes", {})
+        parts = []
+        if rchars:
+            parts.append(f"【角色视觉锚定】画面中出现的角色需匹配参考图外貌：{', '.join(rchars.keys())}")
+        if rscenes:
+            parts.append(f"【场景视觉锚定】环境布局需贴合参考图：{', '.join(rscenes.keys())}")
+        if parts:
+            ref_hint = "。" + "；".join(parts) + "。"
+
     if category == "character":
-        # 使用专业角色设计提示词
         from app.services.character_design_service import CharacterDesignService
         return CharacterDesignService.build_character_sheet_prompt(
             name=description[:30] if description else "角色",
-            description=description,
+            description=f"{description}{ref_hint}",
             style=style,
             language="zh",
         )
     elif category == "prop":
-        return f"一件道具的展示图，{description}。风格：{style}，白底产品图，高质量，细节清晰。"
-    else:  # scene
-        return f"一个场景环境图，{description}。风格：{style}，宽屏构图，高质量，适合短剧场景设定。"
+        return f"一件道具的展示图，{description}。风格：{style}，白底产品图，高质量，细节清晰。{ref_hint}"
+    else:
+        # ── scene: 首帧 / 尾帧精细化提示词 ──
+        parts: list[str] = []
+
+        # 帧类型决定叙事定位
+        if frame_type == "first":
+            parts.append("首帧（开场画面）：展现场景的起始状态和初始氛围。")
+        elif frame_type == "last":
+            parts.append("尾帧（结束画面）：展现场景的结束状态、动作结果和情绪落点。")
+        else:
+            parts.append("一个场景环境图。")
+
+        # 核心描述
+        parts.append(f"画面内容：{description}。")
+
+        # 景别
+        if shot_type:
+            parts.append(f"景别：{shot_type}。")
+
+        # 光线
+        if lighting:
+            parts.append(f"光线：{lighting}。")
+
+        # 情绪
+        if emotion:
+            parts.append(f"情绪氛围：{'、'.join(emotion)}。")
+
+        # 运镜
+        if camera_movement:
+            parts.append(f"运镜方式：{camera_movement}。")
+
+        # 角色（画面中出现的）
+        if characters:
+            parts.append(f"画面中出现的角色：{'、'.join(characters)}。")
+
+        # 风格与质量
+        parts.append(f"视觉风格：{style}。")
+        parts.append("高质量，电影感构图，适合短剧。")
+
+        return "".join(parts) + ref_hint
 
 
 @router.post("/preview-image", response_model=PreviewImageResponse)
@@ -334,25 +397,49 @@ async def generate_preview_image(
     """
     为场景/角色/道具生成预览图像。
 
-    根据描述和类别（scene/character/prop）构建合适的提示词，调用 Seedance 生成图像。
+    根据描述和类别（scene/character/prop）构建合适的提示词，优先使用 ComfyUI，不可用时回退 Seedance。
     设置 stream=true 启用 SSE 流式输出 (progress 事件)。
     """
     use_streaming = getattr(request, "stream", False) and settings.SSE_STREAMING_ENABLED
 
+    # ── 优先使用 ComfyUI ──
+    try:
+        from app.services.comfyui_service import ComfyUIService
+        _comfyui = ComfyUIService()
+        await _comfyui.initialize()
+        if _comfyui.enabled:
+            image_service = _comfyui
+            logger.info("[preview-image] Using ComfyUI")
+        else:
+            image_service = seedance_service
+            logger.info("[preview-image] ComfyUI not enabled, falling back to Seedance")
+    except Exception as e:
+        logger.warning(f"[preview-image] ComfyUI init failed ({e}), falling back to Seedance")
+        image_service = seedance_service
+
     if use_streaming:
-        prompt = _build_preview_prompt(request.description, request.category, request.style or "写实风格")
+        prompt = _build_preview_prompt(
+            request.description, request.category, request.style or "写实风格",
+            getattr(request, 'reference_images', None),
+            frame_type=getattr(request, 'frame_type', None),
+            shot_type=getattr(request, 'shot_type', None),
+            characters=getattr(request, 'characters', None),
+            lighting=getattr(request, 'lighting', None),
+            emotion=getattr(request, 'emotion', None),
+            camera_movement=getattr(request, 'camera_movement', None),
+        )
         logger.info(f"[API] POST /preview-image (stream) category={request.category}")
 
         async def event_generator():
             try:
                 yield format_sse_event({"stage": "starting", "progress": 0}, event=EVENT_PROGRESS)
-                result = await seedance_service.generate_image_from_scene(
+                result = await image_service.generate_image_from_scene(
                     scene_description=prompt,
                     style=request.style or "写实风格",
-                    width=request.width or 1024,
-                    height=request.height or 1024,
+                    width=request.width or 720,
+                    height=request.height or 1280,
                 )
-                if result and result.get("status") == "completed":
+                if result and (result.get("status") == "completed" or result.get("success")):
                     yield format_sse_event({"stage": "completed", "progress": 100}, event=EVENT_PROGRESS)
                     yield format_sse_event(result, event=EVENT_DONE)
                 else:
@@ -370,16 +457,25 @@ async def generate_preview_image(
     try:
         task_id = str(uuid.uuid4())
 
-        prompt = _build_preview_prompt(request.description, request.category, request.style or "写实风格")
+        prompt = _build_preview_prompt(
+            request.description, request.category, request.style or "写实风格",
+            getattr(request, 'reference_images', None),
+            frame_type=getattr(request, 'frame_type', None),
+            shot_type=getattr(request, 'shot_type', None),
+            characters=getattr(request, 'characters', None),
+            lighting=getattr(request, 'lighting', None),
+            emotion=getattr(request, 'emotion', None),
+            camera_movement=getattr(request, 'camera_movement', None),
+        )
 
         background_tasks.add_task(
             _generate_preview_image_task,
             task_id=task_id,
             prompt=prompt,
             style=request.style,
-            width=request.width or 1024,
-            height=request.height or 1024,
-            seedance_service=seedance_service
+            width=request.width or 720,
+            height=request.height or 1280,
+            image_service=image_service
         )
 
         return PreviewImageResponse(
@@ -397,11 +493,12 @@ async def _generate_preview_image_task(
     style: str,
     width: int,
     height: int,
-    seedance_service
+    image_service
 ):
-    """后台预览图像生成任务"""
+    """后台预览图像生成任务 — 仅提交 ComfyUI prompt，不轮询"""
     task_store = await get_task_store()
     try:
+        # 先创建任务记录，让前端轮询能立刻查到
         await task_store.create(task_id, {
             "status": "processing",
             "progress": 10,
@@ -410,31 +507,56 @@ async def _generate_preview_image_task(
             "task_type": "preview-image",
         })
 
-        result = await seedance_service.generate_image_from_scene(
-            scene_description=prompt,
-            style=style,
-            width=width,
-            height=height,
-        )
-
-        if result and result.get("status") == "completed":
-            await task_store.set(task_id, {
-                "status": "completed",
-                "progress": 100,
-                "result": result,
-                "end_time": time.time(),
-                "task_id": task_id,
-                "task_type": "preview-image",
-            })
+        # 如果 service 有 submit_image_prompt 方法就用（ComfyUI），否则走兼容路径
+        if hasattr(image_service, 'submit_image_prompt'):
+            result = await image_service.submit_image_prompt(
+                prompt=prompt,
+                width=width,
+                height=height,
+            )
+            if result.get("success"):
+                # 存下 prompt_id，状态端点会用它轮询 ComfyUI
+                await task_store.set(task_id, {
+                    "status": "processing",
+                    "progress": 30,
+                    "prompt_id": result["prompt_id"],
+                    "provider": "comfyui",
+                    "task_type": "preview-image",
+                })
+            else:
+                await task_store.set(task_id, {
+                    "status": "failed",
+                    "progress": 0,
+                    "error": f"ComfyUI submit failed: {result.get('error', '')}",
+                    "end_time": time.time(),
+                    "task_type": "preview-image",
+                })
         else:
-            err_detail = result.get("message", "") if result else "API返回为空"
-            await task_store.set(task_id, {
-                "status": "failed",
-                "progress": 0,
-                "error": f"Failed to generate preview image: {err_detail}",
-                "end_time": time.time(),
-                "task_type": "preview-image",
-            })
+            # Seedance fallback — 它返回同步结果
+            result = await image_service.generate_image_from_scene(
+                scene_description=prompt,
+                style=style,
+                width=width,
+                height=height,
+            )
+            if result and (result.get("status") == "completed" or result.get("success")):
+                await task_store.set(task_id, {
+                    "status": "completed",
+                    "progress": 100,
+                    "result": result,
+                    "end_time": time.time(),
+                    "task_id": task_id,
+                    "task_type": "preview-image",
+                })
+            else:
+                err_detail = result.get("error", "") or result.get("message", "") if result else "API返回为空"
+                await task_store.set(task_id, {
+                    "status": "failed",
+                    "progress": 0,
+                    "error": f"Failed to generate preview image: {err_detail}",
+                    "end_time": time.time(),
+                    "task_type": "preview-image",
+                })
 
     except Exception as e:
         logger.error(f"预览图像生成失败，任务ID: {task_id}, 错误: {e}")
@@ -449,16 +571,71 @@ async def _generate_preview_image_task(
 
 @router.get("/preview-image/{task_id}/status")
 async def get_preview_image_status(task_id: str):
-    """获取预览图像生成状态"""
+    """获取预览图像生成状态 — 如果 ComfyUI prompt 仍在处理，每次轮询时实时查询"""
     try:
         task_store = await get_task_store()
         task_info = await task_store.get(task_id)
         if not task_info:
             raise HTTPException(status_code=404, detail="Task not found")
 
+        status = task_info.get("status", "unknown")
+        prompt_id = task_info.get("prompt_id")
+        provider = task_info.get("provider")
+
+        # 如果是 ComfyUI 且仍在处理中，直接查 ComfyUI history
+        if status == "processing" and prompt_id and provider == "comfyui":
+            try:
+                comfyui_url = settings.COMFYUI_API_URL.rstrip("/")
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.get(f"{comfyui_url}/history/{prompt_id}")
+                    resp.raise_for_status()
+                    history = resp.json()
+                    prompt_data = history.get(prompt_id, {})
+                    outputs = prompt_data.get("outputs", {})
+                    hist_status = prompt_data.get("status", {})
+
+                    if hist_status.get("completed", False):
+                        image_url = ComfyUIService._extract_image_from_outputs(outputs)
+                        if image_url:
+                            await task_store.set(task_id, {
+                                "status": "completed",
+                                "progress": 100,
+                                "result": {"image_url": image_url, "prompt_id": prompt_id, "provider": "comfyui"},
+                                "end_time": time.time(),
+                                "task_type": "preview-image",
+                            })
+                            return {
+                                "task_id": task_id, "status": "completed", "progress": 100,
+                                "image_url": image_url, "error": None,
+                            }
+                        else:
+                            await task_store.set(task_id, {
+                                "status": "failed", "progress": 0,
+                                "error": "ComfyUI completed but no image output",
+                                "end_time": time.time(), "task_type": "preview-image",
+                            })
+                            return {
+                                "task_id": task_id, "status": "failed", "progress": 0,
+                                "image_url": None, "error": "ComfyUI completed but no image output",
+                            }
+
+                    if hist_status.get("status_str", "") == "error":
+                        await task_store.set(task_id, {
+                            "status": "failed", "progress": 0,
+                            "error": "ComfyUI execution error",
+                            "end_time": time.time(), "task_type": "preview-image",
+                        })
+                        return {
+                            "task_id": task_id, "status": "failed", "progress": 0,
+                            "image_url": None, "error": "ComfyUI execution error",
+                        }
+                    # else: still processing
+            except Exception as e:
+                logger.warning(f"ComfyUI status check for {prompt_id} failed: {e}")
+
         return {
             "task_id": task_id,
-            "status": task_info.get("status", "unknown"),
+            "status": status,
             "progress": task_info.get("progress", 0),
             "image_url": task_info.get("result", {}).get("image_url") if task_info.get("result") else None,
             "error": task_info.get("error"),
@@ -1000,7 +1177,7 @@ async def generate_shots_to_video(
             # Retry image generation up to 2 times with character seed
             img_result = None
             for attempt in range(2):
-                img_result = await seedance_service.generate_image_from_scene(
+                img_result = await image_service.generate_image_from_scene(
                     scene_description=img_prompt[:500],
                     style=request.style or "写实风格",
                     seed=char_seed,
@@ -1016,7 +1193,7 @@ async def generate_shots_to_video(
                 # #S5: Adaptive duration — longer dialogue = longer video
                 dialogue_len = len(shot.dialogue or "")
                 adaptive_duration = max(3, min(15, shot.duration or 5, int(dialogue_len / 3) + 3))
-                vid_result = await seedance_service.generate_video_from_image(
+                vid_result = await video_service.generate_video_from_image(
                     image_url=img_result["image_url"], prompt=vid_prompt,
                     duration=adaptive_duration,
                 )
@@ -1072,6 +1249,16 @@ async def generate_shots_to_video(
 
         total_shots = sum(len(ep.shots) for ep in request.episodes)
 
+        # 先创建 task 记录，避免前端轮询时 404
+        task_store = await get_task_store()
+        await task_store.create(task_id, {
+            "status": "processing",
+            "progress": 5,
+            "result": None,
+            "start_time": time.time(),
+            "task_type": "shots-to-video",
+        })
+
         background_tasks.add_task(
             _generate_shots_to_video_task,
             task_id=task_id,
@@ -1100,7 +1287,7 @@ async def _generate_shots_to_video_task(
     task_store = await get_task_store()
     try:
         total_shots = sum(len(ep.shots) for ep in request.episodes)
-        video_model = getattr(request, 'model', None) or 'seedance'
+        video_model = getattr(request, 'model', None) or 'comfyui'
         logger.info(f"[Task] shots-to-video task_id={task_id} model={video_model} shots={total_shots}")
 
         # ── 信用额度检查 ──
@@ -1123,11 +1310,46 @@ async def _generate_shots_to_video_task(
         except Exception as e:
             logger.warning(f"[Task] 额度检查失败（放行）: {e}")
 
-        # TODO: Multi-model routing — when adding new providers (Kling, Wan, Hunyuan):
-        #   if video_model == 'kling': video_service = kling_service
-        #   elif video_model == 'wan': video_service = wan_service
-        #   else: video_service = seedance_service
-        # For now only Seedance is available; model parameter is logged for future use
+        # ── Multi-model routing ──
+        image_service = seedance_service
+        video_service = seedance_service
+        if video_model == "comfyui":
+            from app.services.comfyui_service import ComfyUIService
+            _comfyui = ComfyUIService()
+            await _comfyui.initialize()
+            if _comfyui.enabled:
+                image_service = None  # ComfyUI I2V-only，需前端提供首帧图
+                video_service = _comfyui
+                logger.info("[Task] Using ComfyUI I2V (Minimax H3)")
+            else:
+                await task_store.update(task_id, {
+                    "status": "failed",
+                    "error": f"ComfyUI 不可用: COMFYUI_ENABLED=false 或无法连接到 {settings.COMFYUI_API_URL}",
+                })
+                logger.error("[Task] ComfyUI not available, aborting")
+                return
+        elif video_model == "veo":
+            try:
+                from app.services.veo_service import VeoService
+                _veo = VeoService()
+                await _veo.initialize()
+                if _veo.enabled:
+                    video_service = _veo
+                    image_service = _veo
+                else:
+                    await task_store.update(task_id, {
+                        "status": "failed",
+                        "error": "Veo not available: VEO_ENABLED=false",
+                    })
+                    logger.error("[Task] Veo not available, aborting")
+                    return
+            except Exception as e:
+                await task_store.update(task_id, {
+                    "status": "failed",
+                    "error": f"Veo init failed: {e}",
+                })
+                logger.error(f"[Task] Veo init failed, aborting: {e}")
+                return
 
         await task_store.create(task_id, {
             "status": "processing",
@@ -1181,7 +1403,8 @@ async def _generate_shots_to_video_task(
 
         async def _get_cached_result(shot_dict: dict, style: str, model: str) -> dict | None:
             """检查视频生成缓存，命中则直接返回已缓存的结果"""
-            key_data = f"{shot_dict.get('description','')}|{shot_dict.get('shotType','')}|{shot_dict.get('duration',5)}|{style}|{model}"
+            start_img = shot_dict.get('startImageUrl') or shot_dict.get('start_image_url') or ''
+            key_data = f"{shot_dict.get('description','')}|{shot_dict.get('shotType','')}|{shot_dict.get('duration',5)}|{style}|{model}|{start_img}"
             cache_key = f"vidcache:{hashlib.md5(key_data.encode()).hexdigest()}"
             try:
                 store = await get_task_store()
@@ -1194,7 +1417,8 @@ async def _generate_shots_to_video_task(
 
         async def _set_cached_result(shot_dict: dict, style: str, model: str, result: dict):
             """缓存视频生成结果（TTL=48h，节省重复生成成本）"""
-            key_data = f"{shot_dict.get('description','')}|{shot_dict.get('shotType','')}|{shot_dict.get('duration',5)}|{style}|{model}"
+            start_img = shot_dict.get('startImageUrl') or shot_dict.get('start_image_url') or ''
+            key_data = f"{shot_dict.get('description','')}|{shot_dict.get('shotType','')}|{shot_dict.get('duration',5)}|{style}|{model}|{start_img}"
             cache_key = f"vidcache:{hashlib.md5(key_data.encode()).hexdigest()}"
             try:
                 store = await get_task_store()
@@ -1249,19 +1473,11 @@ async def _generate_shots_to_video_task(
                     else:
                         shared_seed = abs(hash(scene_ref + str(shot_dict.get('number', 0)))) % (2**31)
 
-                    # Inject character consistency prompt segment
+                    # Inject character consistency prompt segment into BOTH prompts
                     char_consistency = _build_char_consistency_prompt(chars, ref_chars, ref_multiview)
                     if char_consistency:
                         image_prompt = f"{image_prompt}{char_consistency}"
-
-                    # Always generate a fresh image (don't skip — need the character IN the scene, not standalone)
-                    image_result = await seedance_service.generate_image_from_scene(
-                        scene_description=image_prompt,
-                        style=request.style,
-                        seed=shared_seed,
-                        width=request.width or 1920,
-                        height=request.height or 1920,
-                    )
+                        video_prompt = f"{video_prompt}{char_consistency}"
 
                     video_url = None
                     image_url = None
@@ -1269,32 +1485,64 @@ async def _generate_shots_to_video_task(
                     status = "failed"
                     error_msg = None
 
-                    if image_result and image_result.get("status") == "completed":
-                        image_url = image_result.get("image_url")        # MinIO URL (浏览器可访问)
-                        original_url = image_result.get("original_url")  # Ark 公网 URL (云端可访问)
+                    # 检查是否有前端预生成的首帧图 URL
+                    start_image_url = shot_dict.get('startImageUrl') or shot_dict.get('start_image_url')
 
-                        # 第二步：从图像生成视频 (Seedance 2.0 via Ark API)
-                        # 必须用原始公网 URL，Ark 云端无法访问 MinIO 内部地址
-                        # 使用 video_prompt（三层提示词的动作层）而非图像提示词
-                        video_result = await seedance_service.generate_video_from_image(
-                            image_url=original_url or image_url,
+                    if start_image_url:
+                        # ── 有首帧图：跳过生图，直接用首帧做 I2V ──
+                        logger.info(f"镜头 {shot_dict.get('number', '?')}: 使用首帧图直接 I2V")
+                        image_url = start_image_url
+                        video_result = await video_service.generate_video_from_image(
+                            image_url=start_image_url,
                             prompt=video_prompt,
                             duration=float(shot_dict.get('duration', 5)),
                         )
-
                         if video_result and video_result.get("status") == "completed":
                             video_url = video_result.get("video_url")
-                            file_size = video_result.get("file_size")
                             status = "completed"
                             completed_count += 1
                         else:
-                            # 视频生成失败 — 显式标记为 image_only，不伪装成 completed
-                            video_url = None
-                            status = "image_only"
-                            error_msg = "视频生成失败，仅保留预览图"
-                            # Do NOT increment completed_count — video wasn't completed
+                            error_msg = "I2V 视频生成失败（首帧图模式）"
+                            failed_count += 1
+                    elif image_service is None:
+                        # ComfyUI 无首帧图 → 无法生成
+                        error_msg = "缺少首帧图（ComfyUI I2V 模式需要前端预生成首帧）"
+                        failed_count += 1
+                    elif image_service is not None:
+                        # 原有流程：先图后视频
+                        image_result = await image_service.generate_image_from_scene(
+                            scene_description=image_prompt,
+                            style=request.style,
+                            seed=shared_seed,
+                            width=request.width or 1920,
+                            height=request.height or 1920,
+                        )
+
+                        if image_result and image_result.get("status") == "completed":
+                            image_url = image_result.get("image_url")
+                            original_url = image_result.get("original_url")
+
+                            vid_input_url = image_url if video_model == "comfyui" else (original_url or image_url)
+                            video_result = await video_service.generate_video_from_image(
+                                image_url=vid_input_url,
+                                prompt=video_prompt,
+                                duration=float(shot_dict.get('duration', 5)),
+                            )
+
+                            if video_result and video_result.get("status") == "completed":
+                                video_url = video_result.get("video_url")
+                                file_size = video_result.get("file_size")
+                                status = "completed"
+                                completed_count += 1
+                            else:
+                                video_url = None
+                                status = "image_only"
+                                error_msg = "视频生成失败，仅保留预览图"
+                        else:
+                            error_msg = "图像生成失败"
+                            failed_count += 1
                     else:
-                        error_msg = "图像生成失败"
+                        error_msg = "无可用的图像/视频生成服务"
                         failed_count += 1
 
                 except Exception as e:
@@ -1438,6 +1686,31 @@ async def get_shots_to_video_result(task_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== ComfyUI 代理 ====================
+
+@router.get("/comfyui-proxy")
+async def comfyui_proxy(filename: str = "", subfolder: str = "", type: str = "output"):
+    """代理 ComfyUI 文件，解决前端无法访问 host.docker.internal 的问题"""
+    if not filename:
+        raise HTTPException(status_code=400, detail="filename required")
+    comfyui_url = settings.COMFYUI_API_URL.rstrip("/")
+    target_url = f"{comfyui_url}/view?filename={filename}&subfolder={subfolder}&type={type}"
+    logger.info(f"[ComfyUI Proxy] → {target_url[:100]}")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(target_url)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "application/octet-stream")
+            return StreamingResponse(
+                resp.aiter_bytes(),
+                media_type=content_type,
+                headers={"Content-Disposition": f"inline; filename={filename}"},
+            )
+    except Exception as e:
+        logger.error(f"[ComfyUI Proxy] failed: {e}")
+        raise HTTPException(status_code=502, detail=f"ComfyUI proxy error: {e}")
 
 
 # ==================== 健康检查 ====================
