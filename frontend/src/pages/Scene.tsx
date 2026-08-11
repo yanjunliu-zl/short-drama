@@ -31,6 +31,7 @@ import {
 } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { scriptService } from '@/services/scriptService';
+import { assetService } from '@/services/assetService';
 import { usePipelinePersistence } from '@/hooks/usePipelinePersistence';
 
 const { Title, Text } = Typography;
@@ -80,6 +81,8 @@ const Scene: React.FC = () => {
   const [activeTab, setActiveTab] = useState('scenes');
   const [scenes, setScenes] = useState<SceneItem[]>([]);
   const dataLoaded = useRef(false); // guard: prevent auto-persist from overwriting before initLoad
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
+  const userSetExprRef = useRef<Set<string>>(new Set()); // track cid keys set by user this session — prevent mount overwrite
 
   // 从 pipeline 加载持久化数据 (backend-first with cache fallback)
   useEffect(() => {
@@ -102,6 +105,7 @@ const Scene: React.FC = () => {
             setScenes(scenesCached.list);
             if (scenesCached.previewImages) setPreviewImages(scenesCached.previewImages);
             if (scenesCached.expressionImages) setExpressionImages(scenesCached.expressionImages);
+            if (scenesCached.previewTasks) setPreviewTasks(scenesCached.previewTasks);
           }
         }
         const charactersCached = loadCached('characters');
@@ -118,7 +122,16 @@ const Scene: React.FC = () => {
             } else {
               if (scenesData.list) setScenes(scenesData.list);
               if (scenesData.previewImages) setPreviewImages(scenesData.previewImages);
-              if (scenesData.expressionImages) setExpressionImages(scenesData.expressionImages);
+              if (scenesData.previewTasks) setPreviewTasks(scenesData.previewTasks);
+              if (scenesData.expressionImages) setExpressionImages(prev => {
+                // Don't overwrite keys that user has already set in this session
+                const filtered: Record<string, Record<string, string>> = {};
+                const backendExpr = scenesData.expressionImages as Record<string, Record<string, string>>;
+                for (const [k, v] of Object.entries(backendExpr)) {
+                  if (!userSetExprRef.current.has(k)) filtered[k] = v;
+                }
+                return { ...filtered, ...prev }; // session-local keys win
+              });
             }
           }
           const charactersData = await loadState('characters', validWorkId);
@@ -128,6 +141,7 @@ const Scene: React.FC = () => {
         } catch { /* backend unavailable, use cache */ }
       }
       dataLoaded.current = true;
+      setInitialLoadDone(true);
     };
     initLoad();
   }, [searchParams]);
@@ -154,6 +168,10 @@ const Scene: React.FC = () => {
   const [shotGenerationStatus, setShotGenerationStatus] = useState<'idle' | 'generating' | 'completed' | 'failed'>('idle');
   const [shotGenerationProgress, setShotGenerationProgress] = useState(0);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Backend ID mappings (local frontend id → backend DB id) for persistence
+  const backendCharIds = useRef<Map<number, number>>(new Map());
+  const backendSceneIds = useRef<Map<number, number>>(new Map());
 
   // 智能分镜 — 轮询分镜生成状态
   const pollShotStatus = useCallback((id: string) => {
@@ -255,6 +273,10 @@ const Scene: React.FC = () => {
       return;
     }
 
+    if (scenes.length === 0 && characters.length === 0) {
+      message.warning('未检测到场景和角色数据，生成的镜头将无法自动关联场景和角色。建议先在剧本页提取角色与场景。');
+    }
+
     const title = (savedState as any).generatedScriptTitle || '未命名剧本';
 
     setShotGenerationStatus('generating');
@@ -332,9 +354,42 @@ const Scene: React.FC = () => {
           scene.id === editingScene.id ? updatedScene : scene
         ));
         message.success('场景已更新');
+        // Persist to backend DB
+        const backendId = backendSceneIds.current.get(editingScene.id);
+        if (backendId) {
+          assetService.updateScene(backendId, {
+            title: updatedScene.name,
+            description: updatedScene.description,
+            location: updatedScene.type || '',
+            timeOfDay: updatedScene.environment || '',
+            content: updatedScene.description || '',
+          }).catch(() => {});
+        } else {
+          assetService.createScene({
+            title: updatedScene.name,
+            description: updatedScene.description,
+            location: updatedScene.type || '',
+            timeOfDay: updatedScene.environment || '',
+            content: updatedScene.description || '',
+          }).then((res: any) => {
+            if (res?.id) backendSceneIds.current.set(updatedScene.id, res.id);
+          }).catch(() => {});
+        }
       } else {
-        setScenes([...scenes, updatedScene]);
+        const newId = Math.max(0, ...scenes.map(s => s.id)) + 1;
+        const newScene = { ...updatedScene, id: newId };
+        setScenes([...scenes, newScene]);
         message.success('场景已添加');
+        // Persist to backend DB
+        assetService.createScene({
+          title: newScene.name,
+          description: newScene.description,
+          location: newScene.type || '',
+          timeOfDay: newScene.environment || '',
+          content: newScene.description || '',
+        }).then((res: any) => {
+          if (res?.id) backendSceneIds.current.set(newId, res.id);
+        }).catch(() => {});
       }
       setIsSceneModalOpen(false);
       setEditingScene(null);
@@ -382,9 +437,44 @@ const Scene: React.FC = () => {
           char.id === editingCharacter.id ? updatedCharacter : char
         ));
         message.success('角色已更新');
+        // Persist to backend DB
+        const backendId = backendCharIds.current.get(editingCharacter.id);
+        const role = (updatedCharacter.tags && updatedCharacter.tags[0]) || '配角';
+        if (backendId) {
+          assetService.updateCharacter(backendId, {
+            name: updatedCharacter.name,
+            description: updatedCharacter.description,
+            age: updatedCharacter.age || 25,
+            gender: updatedCharacter.gender || '其他',
+            role,
+          }).catch(() => {});
+        } else {
+          assetService.createCharacter({
+            name: updatedCharacter.name,
+            description: updatedCharacter.description,
+            age: updatedCharacter.age || 25,
+            gender: updatedCharacter.gender || '其他',
+            role,
+          }).then((res: any) => {
+            if (res?.id) backendCharIds.current.set(updatedCharacter.id, res.id);
+          }).catch(() => {});
+        }
       } else {
-        setCharacters([...characters, updatedCharacter]);
+        const newId = Math.max(0, ...characters.map(c => c.id)) + 1;
+        const newChar = { ...updatedCharacter, id: newId };
+        setCharacters([...characters, newChar]);
         message.success('角色已添加');
+        // Persist to backend DB
+        const role = (newChar.tags && newChar.tags[0]) || '配角';
+        assetService.createCharacter({
+          name: newChar.name,
+          description: newChar.description,
+          age: newChar.age || 25,
+          gender: newChar.gender || '其他',
+          role,
+        }).then((res: any) => {
+          if (res?.id) backendCharIds.current.set(newId, res.id);
+        }).catch(() => {});
       }
       setIsCharacterModalOpen(false);
       setEditingCharacter(null);
@@ -442,6 +532,8 @@ const Scene: React.FC = () => {
   // 预览图像状态
   const [generatingPreview, setGeneratingPreview] = useState<Record<string, boolean>>({});
   const [previewImages, setPreviewImages] = useState<Record<string, string>>({});
+  // 正在生成中的 task_id，用于跨页面导航恢复轮询
+  const [previewTasks, setPreviewTasks] = useState<Record<string, string>>({});
   // 三视图: characterId → { front, side, threeQuarter }
   const [expressionImages, setExpressionImages] = useState<Record<string, Record<string, string>>>({});
   const [generatingThreeView, setGeneratingThreeView] = useState<Record<string, boolean>>({});
@@ -482,14 +574,16 @@ const Scene: React.FC = () => {
     });
 
     // Save each step atomically via hook (backend source of truth + cache sync)
-    saveState('scenes', { list: scenes, referenceImages, previewImages, expressionImages }, wId);
+    saveState('scenes', { list: scenes, referenceImages, previewImages, expressionImages, previewTasks }, wId);
     saveState('characters', enrichedChars, wId);
     saveState('props', props, wId);
-  }, [scenes, characters, props, previewImages, expressionImages]);
+  }, [scenes, characters, props, previewImages, expressionImages, previewTasks]);
 
   /** 为指定角色生成三视图（正面/侧面/3/4） */
   const handleGenerateThreeView = async (character: CharacterItem) => {
     const cid = `character_${character.id}`;
+    // Mark immediately so mount effect's async backend load won't overwrite
+    userSetExprRef.current.add(cid);
     setGeneratingThreeView(prev => ({ ...prev, [cid]: true }));
     const desc = `character reference sheet, ${character.name}, ${character.gender}, ${character.age} years old, ${character.appearance}, ${character.description}`.slice(0, 300);
 
@@ -500,31 +594,94 @@ const Scene: React.FC = () => {
     ];
 
     const results: Record<string, string> = {};
-    let completed = 0;
+
+    /** Poll a task with 404-retry (background task may not have created the record yet) */
+    const pollTask = (taskId: string, key: string): Promise<void> => {
+      let retries = 0;
+      const MAX_RETRIES = 3;
+      return new Promise<void>((resolve) => {
+        const attempt = () => {
+          scriptService.getPreviewImageStatus(taskId)
+            .then(s => {
+              if (s?.status === 'completed' && s.image_url) {
+                results[key] = s.image_url;
+                resolve();
+              } else if (s?.status === 'failed') {
+                resolve();
+              } else {
+                // still processing — keep polling
+                setTimeout(attempt, 2000);
+              }
+            })
+            .catch(() => {
+              retries++;
+              if (retries <= MAX_RETRIES) {
+                // 404 or network error — retry after 2s (background task may not be ready)
+                setTimeout(attempt, 2000);
+              } else {
+                resolve(); // give up after max retries
+              }
+            });
+        };
+        // First poll: wait 500ms for background task to create the record, then poll
+        setTimeout(attempt, 500);
+      });
+    };
+
     for (const v of views) {
       try {
         const resp = await scriptService.generatePreviewImage({ description: v.prompt, category: 'character', style: '写实风格' });
         if (resp?.task_id) {
-          await new Promise<void>((resolve) => {
-            const poll = setInterval(async () => {
-              try {
-                const s = await scriptService.getPreviewImageStatus(resp.task_id);
-                if (s?.status === 'completed' && s.image_url) { clearInterval(poll); results[v.key] = s.image_url; completed++; resolve(); }
-                else if (s?.status === 'failed') { clearInterval(poll); completed++; resolve(); }
-              } catch { clearInterval(poll); completed++; resolve(); }
-            }, 2000);
-          });
+          await pollTask(resp.task_id, v.key);
         }
-      } catch { completed++; }
+      } catch { /* skip this view on submit error */ }
     }
-    if (Object.keys(results).length > 0) {
+
+    const successCount = Object.keys(results).length;
+    if (successCount > 0) {
       setExpressionImages(prev => ({ ...prev, [cid]: results }));
       // 正面图作为卡片封面
       if (results.front) setPreviewImages(prev => ({ ...prev, [cid]: results.front }));
+      message.success(`${character.name} 三视图完成 (${successCount}/3)`);
+    } else {
+      message.error(`${character.name} 三视图生成失败，请重试`);
     }
     setGeneratingThreeView(prev => ({ ...prev, [cid]: false }));
-    message.success(`${character.name} 三视图完成 (${Object.keys(results).length}/3)`);
   };
+
+  // 轮询预览图任务直到完成（可被 mount 恢复调用）
+  const pollPreviewTask = useCallback((key: string, taskId: string, silent: boolean = false) => {
+    let retries = 0;
+    const MAX_RETRIES = 3;
+    const attempt = () => {
+      scriptService.getPreviewImageStatus(taskId)
+        .then(status => {
+          if (status?.status === 'completed' && status.image_url) {
+            setPreviewImages(prev => ({ ...prev, [key]: status.image_url! }));
+            setGeneratingPreview(prev => ({ ...prev, [key]: false }));
+            setPreviewTasks(prev => { const n = { ...prev }; delete n[key]; return n; });
+            if (!silent) message.success('预览图已生成');
+          } else if (status?.status === 'failed') {
+            setGeneratingPreview(prev => ({ ...prev, [key]: false }));
+            setPreviewTasks(prev => { const n = { ...prev }; delete n[key]; return n; });
+            if (!silent) message.error(status.error || '预览图生成失败');
+          } else {
+            setTimeout(attempt, 3000);
+          }
+        })
+        .catch(() => {
+          retries++;
+          if (retries <= MAX_RETRIES) {
+            setTimeout(attempt, 2000);
+          } else {
+            setGeneratingPreview(prev => ({ ...prev, [key]: false }));
+            setPreviewTasks(prev => { const n = { ...prev }; delete n[key]; return n; });
+            if (!silent) message.error('预览图状态查询失败');
+          }
+        });
+    };
+    setTimeout(attempt, 500);
+  }, []);
 
   // 预览图像生成
   const handlePreview = async (id: number, type: 'scene' | 'character' | 'prop', description: string) => {
@@ -536,32 +693,28 @@ const Scene: React.FC = () => {
       const resp = await scriptService.generatePreviewImage({ description, category: type });
       if (!resp?.task_id) throw new Error('No task_id');
 
-      // 轮询直到完成
-      const poll = setInterval(async () => {
-        try {
-          const status = await scriptService.getPreviewImageStatus(resp.task_id);
-          if (status?.status === 'completed' && status.image_url) {
-            clearInterval(poll);
-            setPreviewImages(prev => ({ ...prev, [key]: status.image_url! }));
-            setGeneratingPreview(prev => ({ ...prev, [key]: false }));
-            message.success('预览图已生成');
-          } else if (status?.status === 'failed') {
-            clearInterval(poll);
-            setGeneratingPreview(prev => ({ ...prev, [key]: false }));
-            message.error(status.error || '预览图生成失败');
-          }
-        } catch (e: any) {
-          if (e?.response?.status === 404) {
-            clearInterval(poll);
-            setGeneratingPreview(prev => ({ ...prev, [key]: false }));
-          }
-        }
-      }, 3000);
+      setPreviewTasks(prev => ({ ...prev, [key]: resp.task_id }));
+      pollPreviewTask(key, resp.task_id);
     } catch {
       setGeneratingPreview(prev => ({ ...prev, [key]: false }));
       message.error('预览图生成请求失败');
     }
   };
+
+  // 页面切回时恢复未完成的预览任务轮询
+  useEffect(() => {
+    if (!initialLoadDone) return;
+    const keys = Object.keys(previewTasks);
+    if (keys.length === 0) return;
+    keys.forEach(key => {
+      const taskId = previewTasks[key];
+      if (taskId) {
+        setGeneratingPreview(prev => ({ ...prev, [key]: true }));
+        pollPreviewTask(key, taskId, true);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialLoadDone]);
 
   // 构建预览描述
   const buildSceneDesc = (s: SceneItem) =>
@@ -585,9 +738,9 @@ const Scene: React.FC = () => {
           <Col xs={24} sm={12} lg={12} key={scene.id}>
             <Card
               cover={previewImages[`scene_${scene.id}`] ? (
-                <div style={{ height: 240, overflow: 'hidden', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ maxHeight: 300, overflow: 'hidden', background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <img src={previewImages[`scene_${scene.id}`]} alt={scene.name}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    style={{ width: '100%', height: 'auto', maxHeight: 300, objectFit: 'contain' }} />
                 </div>
               ) : undefined}
               actions={[
@@ -627,29 +780,58 @@ const Scene: React.FC = () => {
       </div>
 
       <Row gutter={[16, 16]}>
-        {characters.map((character) => (
+        {characters.map((character) => {
+          const cid = `character_${character.id}`;
+          const exprs = expressionImages[cid]; // { front, side, threeQuarter }
+          const hasThreeView = exprs && Object.keys(exprs).length > 0;
+          const previewUrl = previewImages[cid];
+          const viewLabels: Record<string, string> = { front: '正面', side: '侧面', threeQuarter: '3/4' };
+
+          return (
           <Col xs={24} sm={12} lg={8} key={character.id}>
             <Card
-              cover={previewImages[`character_${character.id}`] ? (
-                <div style={{ height: 280, overflow: 'hidden', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <img src={previewImages[`character_${character.id}`]} alt={character.name}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }} />
+              cover={hasThreeView ? (
+                <div style={{ background: '#111', padding: 8 }}>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {(['front', 'side', 'threeQuarter'] as const).map(viewKey => (
+                      <div key={viewKey} style={{ flex: 1, textAlign: 'center' }}>
+                        {exprs[viewKey] ? (
+                          <>
+                            <div style={{ height: 160, overflow: 'hidden', background: '#1a1a1a', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4 }}>
+                              <img src={exprs[viewKey]} alt={`${character.name} ${viewLabels[viewKey]}`}
+                                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                            </div>
+                            <Text style={{ fontSize: 10, color: '#9ca3af', display: 'block', marginTop: 2 }}>{viewLabels[viewKey]}</Text>
+                          </>
+                        ) : (
+                          <div style={{ height: 160, background: '#1a1a1a', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <LoadingOutlined style={{ color: '#555', fontSize: 18 }} />
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : previewUrl ? (
+                <div style={{ maxHeight: 320, overflow: 'hidden', background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <img src={previewUrl} alt={character.name}
+                    style={{ width: '100%', height: 'auto', maxHeight: 320, objectFit: 'contain' }} />
                 </div>
               ) : undefined}
               actions={[
                 <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => handleEditCharacter(character)}>编辑</Button>,
                 <Tooltip key="3view" title="生成三视图（正面/侧面/3/4），正面图作为预览，侧+3/4用于角色一致性锚定">
                   <Button type="link" icon={<PictureOutlined />}
-                    loading={generatingThreeView[`character_${character.id}`]}
+                    loading={generatingThreeView[cid]}
                     onClick={() => handleGenerateThreeView(character)}>
-                    {generatingThreeView[`character_${character.id}`] ? '生成中' : '三视图'}
+                    {generatingThreeView[cid] ? '生成中' : '三视图'}
                   </Button>
                 </Tooltip>,
                 <Button key="delete" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDeleteCharacter(character.id)}>删除</Button>,
               ]}
             >
               <Card.Meta
-                avatar={!previewImages[`character_${character.id}`] ? (
+                avatar={!previewUrl ? (
                   <Avatar style={{ backgroundColor: character.gender === '男' ? '#0066cc' : '#ff3b30', fontSize: 18 }} icon={<TeamOutlined />} />
                 ) : undefined}
                 title={<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -662,7 +844,8 @@ const Scene: React.FC = () => {
               />
             </Card>
           </Col>
-        ))}
+        );
+        })}
       </Row>
     </div>
   );
@@ -681,9 +864,9 @@ const Scene: React.FC = () => {
           <Col xs={24} sm={12} lg={8} key={prop.id}>
             <Card
               cover={previewImages[`prop_${prop.id}`] ? (
-                <div style={{ height: 240, overflow: 'hidden', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ maxHeight: 300, overflow: 'hidden', background: '#fafafa', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <img src={previewImages[`prop_${prop.id}`]} alt={prop.name}
-                    style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                    style={{ width: '100%', height: 'auto', maxHeight: 300, objectFit: 'contain' }} />
                 </div>
               ) : undefined}
               actions={[
@@ -914,6 +1097,7 @@ const Scene: React.FC = () => {
 
       {/* 角色编辑模态框 */}
       <Modal
+        key={editingCharacter?.id || 'new'}
         title={editingCharacter?.id ? '编辑角色' : '添加角色'}
         open={isCharacterModalOpen}
         onCancel={() => {

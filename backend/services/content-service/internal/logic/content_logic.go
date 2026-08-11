@@ -33,6 +33,29 @@ func NewContentLogic(repo repository.ContentRepository, redisClient *redis.Redis
 
 func (l *ContentLogic) CreateScene(ctx context.Context, req *types.CreateSceneRequest) (*types.Scene, error) {
 	logx.WithContext(ctx).Infof("[ContentLogic] CreateScene title=%s", req.Title)
+
+	// 检查是否已存在同名场景，存在则更新而非重复插入
+	existing, err := l.repo.FindSceneByTitle(ctx, req.Title)
+	if err == nil && existing != nil {
+		if req.Description != "" {
+			existing.Description = req.Description
+		}
+		if req.Location != "" {
+			existing.Location = req.Location
+		}
+		if req.TimeOfDay != "" {
+			existing.TimeOfDay = req.TimeOfDay
+		}
+		if req.Order > 0 {
+			existing.SortOrder = req.Order
+		}
+		if err := l.repo.UpdateScene(ctx, existing); err != nil {
+			return nil, fmt.Errorf("update existing scene: %w", err)
+		}
+		logx.WithContext(ctx).Infof("[ContentLogic] CreateScene upsert (updated): title=%s id=%d", req.Title, existing.ID)
+		return l.sceneToType(existing), nil
+	}
+
 	scene := &model.Scene{
 		Title:       req.Title,
 		Description: req.Description,
@@ -44,6 +67,7 @@ func (l *ContentLogic) CreateScene(ctx context.Context, req *types.CreateSceneRe
 		logx.WithContext(ctx).Errorf("[ContentLogic] CreateScene failed: %v", err)
 		return nil, fmt.Errorf("create scene: %w", err)
 	}
+	logx.WithContext(ctx).Infof("[ContentLogic] CreateScene insert (new): title=%s id=%d", req.Title, scene.ID)
 	return l.sceneToType(scene), nil
 }
 
@@ -111,6 +135,23 @@ func (l *ContentLogic) ListScenes(ctx context.Context, req *types.ListScenesRequ
 // ==============================
 
 func (l *ContentLogic) CreateCharacter(ctx context.Context, req *types.CreateCharacterRequest) (*types.Character, error) {
+	// 检查是否已存在同名角色，存在则更新而非重复插入
+	existing, err := l.repo.FindCharacterByName(ctx, req.Name)
+	if err == nil && existing != nil {
+		// Update existing character if new data is provided
+		if req.Description != "" {
+			existing.Description = req.Description
+		}
+		if req.Role != "" {
+			existing.Role = req.Role
+		}
+		if err := l.repo.UpdateCharacter(ctx, existing); err != nil {
+			return nil, fmt.Errorf("update existing character: %w", err)
+		}
+		logx.WithContext(ctx).Infof("[ContentLogic] CreateCharacter upsert (updated): name=%s id=%d", req.Name, existing.ID)
+		return l.charToType(existing), nil
+	}
+
 	char := &model.Character{
 		Name:        req.Name,
 		Description: req.Description,
@@ -119,6 +160,7 @@ func (l *ContentLogic) CreateCharacter(ctx context.Context, req *types.CreateCha
 	if err := l.repo.CreateCharacter(ctx, char); err != nil {
 		return nil, fmt.Errorf("create character: %w", err)
 	}
+	logx.WithContext(ctx).Infof("[ContentLogic] CreateCharacter insert (new): name=%s id=%d", req.Name, char.ID)
 	return l.charToType(char), nil
 }
 

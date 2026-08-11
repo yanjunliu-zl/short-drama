@@ -1,0 +1,16 @@
+version: v1
+plugins:
+  # Go protobuf + gRPC via remote plugins (no local installation needed)
+  - plugin: buf.build/protocolbuffers/go
+    out: gen/go
+    opt:
+      - paths=source_relative
+  - plugin: buf.build/grpc/go
+    out: gen/go
+    opt:
+      - paths=source_relative
+  # Python protobuf + gRPC via remote plugins
+  - plugin: buf.build/protocolbuffers/python
+    out: gen/python
+  - plugin: buf.build/grpc/python
+    out: gen/python

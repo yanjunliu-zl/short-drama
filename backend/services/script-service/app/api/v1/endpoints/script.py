@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
+import asyncio
 import json
 from typing import List, Optional
 from pydantic import BaseModel
@@ -9,7 +10,7 @@ import time
 import logging
 import re as _re_module
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.models import Script
 from app.schemas.script import (
@@ -50,8 +51,14 @@ async def _enqueue_task(
     except Exception as e:
         logger.debug(f"Task worker enqueue unavailable ({e}) — using BackgroundTasks")
 
-    # Fallback: direct async execution
-    background_tasks.add_task(fallback_fn)
+    # Fallback: schedule async task to current event loop
+    # Normalize: fallback_fn can be a callable/lambda (novel pattern) or a coroutine (eager)
+    if callable(fallback_fn):
+        coro = fallback_fn()
+    else:
+        coro = fallback_fn
+    task = asyncio.create_task(coro)
+    logger.info(f"[_enqueue_task] Fallback task created: {task_id} task_name={task.get_name()}")
     return False
 
 
@@ -215,10 +222,11 @@ async def get_script_status(
     """
     logger.info(f"[API] GET /{script_id}/status")
     try:
-        status = await script_service.get_generation_status(script_id)
+        from app.services.script_service import _task_get
+        status = await _task_get(script_id)
         if not status:
             logger.warning(f"[API] GET /{script_id}/status 任务未找到")
-            raise HTTPException(status_code=404, detail="Script not found")
+            raise HTTPException(status_code=404, detail="Task not found")
 
         logger.info(f"[API] GET /{script_id}/status 状态={status.get('status')} 进度={status.get('progress')}")
         return status
@@ -459,9 +467,31 @@ async def _do_extract_entities(
 
         await _task_set(f"extract:{task_id}", {"status": "processing", "progress": 50})
 
+        # If script_id not provided, try to recover by content matching
+        if not script_id and content:
+            try:
+                async with script_service._get_db() as db:
+                    # Trim leading whitespace and use first 150 chars for matching
+                    prefix = content.strip()[:150]
+                    # Escape SQL LIKE wildcards
+                    prefix_escaped = prefix.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+                    stmt = text(
+                        "SELECT id FROM scripts WHERE content LIKE :prefix ESCAPE '\\\\' "
+                        "ORDER BY id DESC LIMIT 1"
+                    )
+                    script_result = await db.execute(stmt, {"prefix": prefix_escaped + '%'})
+                    row = script_result.fetchone()
+                    if row:
+                        script_id = row[0]
+                        logger.info(f"[extract-entities] Recovered script_id={script_id} via content matching")
+            except Exception as e:
+                logger.warning(f"[extract-entities] Content-matching fallback failed: {e}")
+
         # Check for pre-extracted data if script_id provided
+        # V2 pipeline already stores entities in DB — skip expensive LLM re-extraction
         pre_extracted_chars = None
         pre_extracted_locs = None
+        pre_extracted_props = None
         if script_id:
             try:
                 async with script_service._get_db() as db:
@@ -469,19 +499,28 @@ async def _do_extract_entities(
                     script_result = await db.execute(stmt)
                     script = script_result.scalar_one_or_none()
                     if script and script.characters:
-                        pre_extracted_chars = script.characters
+                        chars = script.characters
+                        pre_extracted_chars = json.loads(chars) if isinstance(chars, str) else chars
                     if script and script.analysis_result:
-                        pre_extracted_locs = script_service._derive_locations_from_events(script.analysis_result)
+                        ar = script.analysis_result
+                        ar = json.loads(ar) if isinstance(ar, str) else ar
+                        # analysis_result = { events: [], locations: [...], props: [...] }
+                        pre_extracted_locs = ar.get("locations", [])
+                        pre_extracted_props = ar.get("props", [])
+                    if script and script.source_type == "novel":
+                        logger.info("[extract-entities] Novel source: using V2 pipeline entities from DB")
             except Exception as e:
                 logger.warning(f"[extract-entities] pre-extract failed: {e}")
 
-        # Run LLM extraction
-        result = await n2s_v2._extract_entities_from_script(content, [], {})
-
-        # Merge pre-extracted data
+        # Run LLM extraction only if no pre-extracted data (non-novel sources)
         if pre_extracted_chars is not None and pre_extracted_locs is not None:
-            result["characters"] = pre_extracted_chars
-            result["locations"] = pre_extracted_locs
+            result = {
+                "characters": pre_extracted_chars,
+                "locations": pre_extracted_locs,
+                "props": pre_extracted_props or [],
+            }
+        else:
+            result = await n2s_v2._extract_entities_from_script(content, [], {})
 
         elapsed = time.time() - t0
         logger.info(f"[extract-entities] 完成 task={task_id} 角色={len(result.get('characters',[]))} "
@@ -630,13 +669,47 @@ async def get_character_graph(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/generate/from-outline", response_model=ScriptSplitResponse)
-async def generate_from_outline_sync(
+async def _generate_outline_background(
+    task_id: str, request: ScriptFromOutlineRequest, style: str,
+    target_eps: int, full_context: str, plot_template, use_streaming: bool,
+    llm=None, mock_mode: bool = False,
+):
+    """Background task: run outline generation via ScriptGenerationEngine."""
+    from app.services.generation_engine import ScriptGenerationEngine
+    from app.core.config import settings as _bg_settings
+    from app.services.script_service import _task_set as _bg_task_set
+    try:
+        await _bg_task_set(task_id, {"status": "processing", "progress": 10, "title": request.title})
+        engine = ScriptGenerationEngine(
+            llm=llm if not mock_mode else None,
+            mock_mode=mock_mode, config=_bg_settings,
+        )
+        await _bg_task_set(task_id, {"status": "processing", "stage": "framework", "progress": 20})
+        result = await engine.generate_from_outline(
+            outline_text=request.outline, style=style,
+            target_episodes=target_eps, user_context=full_context,
+        )
+        episodes_data = result.get("episodes", [])
+        await _bg_task_set(task_id, {
+            "status": "completed", "progress": 100,
+            "episodes": episodes_data,
+            "total_episodes": len(episodes_data),
+            "title": request.title,
+        })
+        logger.info(f"Background outline complete: task={task_id} episodes={len(episodes_data)}")
+    except Exception as e:
+        logger.error(f"Background outline generation failed task={task_id}: {e}")
+        await _bg_task_set(task_id, {"status": "failed", "error": str(e)})
+
+
+@router.post("/generate/from-outline", response_model=ScriptResponse)
+async def generate_from_outline(
     request: ScriptFromOutlineRequest,
+    background_tasks: BackgroundTasks,
     script_service: ScriptService = Depends(get_script_service)
 ):
-    """从大纲/想法同步生成剧本 — 使用 V2 管线，统一输出格式。
-    设置 stream=true 启用 SSE 流式输出（stage 事件 + done 结果）。"""
+    """从大纲/想法生成剧本 — 异步队列模式。返回 task_id，前端轮询状态。
+    设置 stream=true 启用 SSE 流式输出。"""
     import asyncio as _asyncio
     from app.services.generation_engine import ScriptGenerationEngine
     from app.core.config import settings as app_settings
@@ -658,6 +731,119 @@ async def generate_from_outline_sync(
         mock_mode = getattr(script_service, '_mock_mode', False)
         style = getattr(request, 'style', '') or app_settings.N2S_V2_DEFAULT_STYLE
 
+        # ── 情节结构模板: 自动匹配最佳模板 ──
+        from app.services.plot_templates import match_template
+        plot_template = match_template(
+            style=style,
+            theme=getattr(request, 'theme', ''),
+            outline=getattr(request, 'outline', ''),
+        )
+        template_context = ""
+        plot_target_eps = 0
+        if plot_template:
+            template_context = plot_template.to_prompt_context()
+            plot_target_eps = plot_template.total_episodes
+
+        # ── 海外本土化 context ──
+        target_locale = getattr(request, 'target_locale', 'zh-CN') or 'zh-CN'
+        extra_context = ""
+        if target_locale != 'zh-CN':
+            from app.services.localization_service import ScriptLocalizationService
+            loc_svc = ScriptLocalizationService(llm=None)
+            extra_context = loc_svc.build_locale_system_prompt(target_locale=target_locale, style=style)
+
+        # ── Fetch user preference profile ──
+        user_context = ""
+        user_id = getattr(request, 'user_id', '') or ''
+        if user_id and user_id != 'anonymous':
+            try:
+                from app.services.user_preferences import get_user_preference_service
+                pref_svc = await get_user_preference_service()
+                db_session = getattr(script_service, '_db_session', None)
+                profile = await pref_svc.get_profile(user_id, db_session)
+                user_context = profile.to_prompt_context()
+            except Exception as e:
+                logger.debug(f"User preferences skipped: {e}")
+
+        # Merge contexts
+        full_context = template_context
+        if user_context:
+            full_context = f"{user_context}\n\n{full_context}" if full_context else user_context
+        if extra_context:
+            full_context = f"{full_context}\n\n{extra_context}" if full_context else extra_context
+
+        # ── Parse episode count ──
+        length_to_eps = {
+            "超短篇": 3, "短篇": 10, "中篇": 25, "长篇": 60, "超长篇": 100,
+        }
+        import re as _re
+        cn_num_map = {c: i for i, c in enumerate(
+            ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+             '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十',
+             '二十一', '二十二', '二十三', '二十四', '二十五', '二十六', '二十七', '二十八', '二十九', '三十',
+             '三十一', '三十二', '三十三', '三十四', '三十五', '三十六', '三十七', '三十八', '三十九', '四十',
+             '四十一', '四十二', '四十三', '四十四', '四十五', '四十六', '四十七', '四十八', '四十九', '五十',
+             '五十一', '五十二', '五十三', '五十四', '五十五', '五十六', '五十七', '五十八', '五十九', '六十',
+             '六十一', '六十二', '六十三', '六十四', '六十五', '六十六', '六十七', '六十八', '六十九', '七十',
+             '七十一', '七十二', '七十三', '七十四', '七十五', '七十六', '七十七', '七十八', '七十九', '八十',
+             '八十一', '八十二', '八十三', '八十四', '八十五', '八十六', '八十七', '八十八', '八十九', '九十',
+             '九十一', '九十二', '九十三', '九十四', '九十五', '九十六', '九十七', '九十八', '九十九', '一百',
+             '一百零一', '一百零二', '一百零三', '一百零四', '一百零五', '一百零六', '一百零七', '一百零八', '一百零九', '一百一十',
+             '一百一十一', '一百一十二', '一百一十三', '一百一十四', '一百一十五', '一百一十六', '一百一十七', '一百一十八', '一百一十九', '一百二十'], start=0)}
+        def _parse_ep_count(text: str) -> int:
+            if not text: return 0
+            for m in _re.finditer(r'([一二三四五六七八九十百千\d]+)\s*集', text):
+                num_str = m.group(1)
+                if num_str.isdigit(): return int(num_str)
+                n = cn_num_map.get(num_str, 0)
+                if n > 0: return n
+            return 0
+
+        user_ep_count = _parse_ep_count(request.outline) or _parse_ep_count(request.title)
+        target_eps = user_ep_count if user_ep_count > 0 else length_to_eps.get(getattr(request, 'length', '短篇'), 5)
+        if plot_target_eps > 0:
+            target_eps = plot_target_eps
+
+        # ── Non-streaming: return task_id immediately, generate in background ──
+        if not use_streaming:
+            task_id = str(uuid.uuid4())
+            logger.info(f"[API] 大纲转剧本任务已提交 task_id={task_id} target_eps={target_eps}")
+            try:
+                from app.models import GenerationTask, TaskStatus
+                from app.core.database import AsyncSessionLocal
+                async with AsyncSessionLocal() as db:
+                    gen_task = GenerationTask(
+                        task_id=task_id, status=TaskStatus.PROCESSING.value,
+                        progress=5, start_time=time.time(),
+                    )
+                    db.add(gen_task)
+                    await db.commit()
+            except Exception:
+                pass
+            try:
+                from app.services.task_worker import get_task_worker
+                worker = await get_task_worker()
+                if worker._queue is not None or hasattr(worker, '_consumer'):
+                    await worker.enqueue(task_id, "from-outline",
+                        request.dict() if hasattr(request, 'dict') else vars(request))
+                    backend = "kafka"
+                else:
+                    raise RuntimeError("worker not started")
+            except Exception as e:
+                logger.info(f"Worker unavailable ({e}), using BackgroundTasks for {task_id}")
+                background_tasks.add_task(
+                    _generate_outline_background,
+                    task_id, request, style, target_eps, full_context, plot_template, False,
+                    script_service.llm, mock_mode,
+                )
+                backend = "background"
+            return ScriptResponse(
+                task_id=task_id, status="processing",
+                message=f"Outline script generation started ({backend})",
+                script=None,
+            )
+
+        # ── SSE streaming path below ──
         n2s_v2 = ScriptGenerationEngine(
             llm=script_service.llm if not mock_mode else None,
             mock_mode=mock_mode,

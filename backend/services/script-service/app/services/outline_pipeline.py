@@ -79,6 +79,7 @@ class OutlinePipeline:
 
         LLM calls: 1 (framework) + N (episodes) + 1 (quality) = N + 2
         """
+        logger.info(f"[outline.generate] ENTER target_eps={target_episodes} input_len={len(outline_text)}")
         style = style or self._engine.default_style
 
         result: Dict[str, Any] = {
@@ -258,7 +259,7 @@ class OutlinePipeline:
 
         async def _run():
             try:
-                result = await self.run(
+                result = await self.generate(
                     outline_text=outline_text, style=style,
                     target_episodes=target_episodes, progress_callback=progress_callback,
                     user_context=user_context,
@@ -573,7 +574,7 @@ class OutlinePipeline:
 
         prev_hint = f"这是第{ep_num}集，前面已讲了前{ep_num-1}集的内容" if ep_num > 1 else "这是第1集，开场要吸引眼球"
         next_hint = f"这是倒数第{total_episodes - ep_num + 1}集，要为结局做铺垫" if total_episodes - ep_num < 3 else ""
-        mock_content = f"【场景地点】办公室 - 白天\n【场景类型】内景\n△{ep_title}的场景\n主角：（坚定）这就是大纲{ep_num}的内容。"
+        mock_content = f"【场景1：办公室 - 白天】\n【场景类型】内景\n△{ep_title}的场景\n主角：（坚定）这就是大纲{ep_num}的内容。\n\n【分镜明细】\n镜号：1 | 镜头类型：中景 | 运镜：固定 | 时长：5s | 画面：办公室内主角面对镜头"
 
         if self._engine.mock_mode:
             return {"episode_number": ep_num, "title": ep_title, "content": mock_content,
@@ -597,6 +598,9 @@ class OutlinePipeline:
 
 【输出格式】
 【分集标题】（一句话概括本集核心冲突或转折，5-15字）
+【场景N：地点名 - 白天/黑夜】
+【场景类型】外景/内景
+
 【节拍表】（必须放在剧本正文之前）
 00:00-00:15 | 开场钩子 | （具体用什么抓住观众）
 00:15-00:30 | 冲突推进 | （核心矛盾如何升级）
@@ -604,14 +608,15 @@ class OutlinePipeline:
 00:45-01:00 | 反转/高潮 | （本集最出人意料的事件）
 01:00-01:15 | 结尾钩子 | （一句话悬念或新冲突引入）
 
-【场景地点】地点名 - 白天/黑夜
-【场景类型】外景/内景
-
 △环境描写（一句话）
 
 角色名：（情绪）对白内容
 角色名：（情绪）对白内容
 ...
+
+【分镜明细】
+镜号：1 | 镜头类型：全景/中景/近景/特写 | 运镜：推/拉/摇/移/固定 | 时长：3-8s | 画面：详细描述
+镜号：2 | ...
 
 【结尾钩子】
 一句话悬念提示或剧情爆点
@@ -620,6 +625,8 @@ class OutlinePipeline:
 - 短剧风格：3秒一反转、10秒一记忆点
 - 节拍表严格遵守格式，每个节拍都要写具体内容，不能留空
 - 付费卡点必须放在剧情最关键的信息差时刻，画面突然定格
+- 分镜明细必须列出至少5个镜头，覆盖节拍表的每个节拍点
+- 每个镜头的画面描述要具体（谁在哪里做什么），时长按镜头类型合理分配
 - 对白简洁有力，每句不超过20字，能用动作表达就不用台词
 - 结尾钩子必须让人有「必须看下一集」的冲动（除非最后一集）
 - 对白:动作:环境 = 5:3:2"""
@@ -651,7 +658,7 @@ class OutlinePipeline:
         except Exception as e:
             logger.warning(f"Episode {ep_num} initial generation failed: {e}")
             return {"episode_number": ep_num, "title": ep_title,
-                    "content": f"【场景地点】未知 - 白天\n△本集剧情概述：{ep_outline_text[:500]}",
+                    "content": f"【场景1：未知 - 白天】\n△本集剧情概述：{ep_outline_text[:500]}",
                     "storyboard": [], "hook": "", "review_score": 0, "review_attempts": 0}
 
         # ── Multi-agent review loop ──

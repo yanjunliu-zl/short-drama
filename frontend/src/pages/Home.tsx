@@ -604,7 +604,8 @@ const Home: React.FC = () => {
           const uid = reduxUserId || (window as any).__USER_ID__ || 'anonymous';
           clearPipelineStorage(uid);
           localStorage.removeItem(`script_page_state_${uid}`);
-          navigate('/script');
+          sessionStorage.removeItem('current_script');
+          navigate('/script', { replace: true });
         }}>创建新作品</Button>
         <Button style={{ marginLeft: 12 }}>导入作品</Button>
         <Button style={{ marginLeft: 12 }} type="dashed">查看全部作品</Button>

@@ -581,6 +581,23 @@ class StoryboardAIService:
         scene_refs_str = "、".join(scene_refs) if scene_refs else "由AI根据剧本自动推断"
         character_names_str = "、".join(character_names) if character_names else "由AI根据剧本自动推断"
 
+        # Build mandatory assignment instruction
+        scene_constraint = ""
+        char_constraint = ""
+        if scene_refs:
+            scene_constraint = f"""\n## ⚠️ 场景分配硬性要求
+每个镜头的 sceneRef 字段**必须**从以下场景列表中选择一个：
+【{scene_refs_str}】
+- 禁止使用列表之外的场景名称
+- 禁止留空 sceneRef — 宁可重复使用已有场景名"""
+        if character_names:
+            char_constraint = f"""\n## ⚠️ 角色分配硬性要求
+每个镜头的 characters 字段**必须**从以下角色列表中选择至少一个：
+【{character_names_str}】
+- 禁止使用列表之外的角色名称
+- 禁止留空 characters — 至少填入一个角色名
+- 如果镜头为纯环境/空镜，characters 可填 []，但 sceneRef 必须指定场景"""
+
         return f"""你是一个专业的影视分镜师，擅长将剧本拆分为详细的镜头级分镜脚本。
 
 ## 创作要求
@@ -613,6 +630,8 @@ class StoryboardAIService:
 
 ## 可用角色参考
 {character_names_str}
+{scene_constraint}
+{char_constraint}
 
 ## 输出格式
 严格按照JSON格式输出，每个镜头必须包含：

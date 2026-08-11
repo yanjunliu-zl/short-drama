@@ -12,12 +12,27 @@ class JSONFormatter(logging.Formatter):
         self.service_name = service_name
 
     def format(self, record: logging.LogRecord) -> str:
+        # Extract OTEL trace context if available
+        trace_id = ""
+        span_id = ""
+        try:
+            from opentelemetry import trace as otel_trace
+            span = otel_trace.get_current_span()
+            if span and span.get_span_context().is_valid:
+                ctx = span.get_span_context()
+                trace_id = format(ctx.trace_id, '032x')
+                span_id = format(ctx.span_id, '016x')
+        except Exception:
+            pass
+
         log_data = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
             "service": self.service_name,
+            "trace_id": trace_id,
+            "span_id": span_id,
             "module": record.module,
             "function": record.funcName,
             "line": record.lineno,

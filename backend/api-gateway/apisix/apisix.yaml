@@ -10,8 +10,11 @@ global_rules:
     plugins:
       prometheus:
         prefer_name: true
+      opentelemetry:
+        sampler:
+          name: always_on
       cors:
-        allow_credential: true
+        allow_credential: false
         allow_headers: "*"
         allow_methods: "GET,POST,PUT,DELETE,OPTIONS,PATCH"
         allow_origins: "http://localhost:3000,http://localhost:8080"
@@ -30,10 +33,10 @@ upstreams:
         type: http
         http_path: /health
         healthy:
-          interval: 5s
+          interval: 5
           successes: 2
         unhealthy:
-          interval: 5s
+          interval: 5
           http_failures: 2
 
   - id: 2
@@ -46,7 +49,7 @@ upstreams:
         type: http
         http_path: /health
         healthy:
-          interval: 5s
+          interval: 5
           successes: 2
 
   - id: 3
@@ -59,7 +62,7 @@ upstreams:
         type: http
         http_path: /health
         healthy:
-          interval: 5s
+          interval: 5
           successes: 2
 
   - id: 4
@@ -104,7 +107,7 @@ upstreams:
 routes:
   # ── User Service ──
   - id: 1
-    uri: "/api/v1/users/*"
+    uri: "/api/v1/users*"
     upstream_id: 1
     priority: 10
     plugins:
@@ -118,7 +121,7 @@ routes:
 
   # ── Content Service (Public) ──
   - id: 2
-    uri: "/api/v1/cases/*"
+    uri: "/api/v1/cases*"
     upstream_id: 2
     priority: 5
     plugins:
@@ -131,37 +134,37 @@ routes:
         cache_key: ["$uri", "$args"]
 
   - id: 3
-    uri: "/api/v1/works/*"
+    uri: "/api/v1/works*"
     upstream_id: 2
     priority: 5
 
   - id: 12
-    uri: "/api/v1/scenes/*"
+    uri: "/api/v1/scenes*"
     upstream_id: 2
     priority: 5
 
   - id: 13
-    uri: "/api/v1/characters/*"
+    uri: "/api/v1/characters*"
     upstream_id: 2
     priority: 5
 
   - id: 14
-    uri: "/api/v1/payments/*"
+    uri: "/api/v1/payments*"
     upstream_id: 2
     priority: 5
 
   - id: 15
-    uri: "/api/v1/usage/*"
+    uri: "/api/v1/usage*"
     upstream_id: 2
     priority: 5
 
   - id: 16
-    uri: "/api/v1/credits/*"
+    uri: "/api/v1/credits*"
     upstream_id: 2
     priority: 5
 
   - id: 17
-    uri: "/api/v1/assets/*"
+    uri: "/api/v1/assets*"
     upstream_id: 2
     priority: 5
     plugins:
@@ -171,7 +174,7 @@ routes:
 
   # ── Script Service (AI Generation) ──
   - id: 4
-    uri: "/api/v1/scripts/*"
+    uri: "/api/v1/scripts*"
     upstream_id: 3
     priority: 10
     plugins:
@@ -202,7 +205,7 @@ routes:
 
   # ── Storyboard Service ──
   - id: 6
-    uri: "/api/v1/storyboard/*"
+    uri: "/api/v1/storyboard*"
     upstream_id: 4
     priority: 10
     plugins:
@@ -256,7 +259,7 @@ routes:
 
   # ── Final Cut Service ──
   - id: 9
-    uri: "/api/v1/final-cut/*"
+    uri: "/api/v1/final-cut*"
     upstream_id: 7
     priority: 10
     plugins:
@@ -279,7 +282,7 @@ routes:
 
   # ── Recommendation Service ──
   - id: 11
-    uri: "/api/v1/recommendations/*"
+    uri: "/api/v1/recommendations*"
     upstream_id: 8
     priority: 5
     plugins:

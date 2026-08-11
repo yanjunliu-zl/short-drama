@@ -4,24 +4,22 @@ import { usePipelinePersistence } from '@/hooks/usePipelinePersistence';
 import { useCollaboration } from '@/hooks/useCollaboration';
 import { useCredits } from '@/hooks/useCredits';
 import {
-  Typography, Button, Space, Tag, message, Radio, Select, Progress,
-  Modal, Drawer, List, Upload, Input, InputNumber, Spin, Tooltip,
+  Typography, Button, Space, Tag, message, Radio, Select,
+  Modal, Upload, Input, Spin, Tooltip,
 } from 'antd';
-import type { UploadFile } from 'antd';
 import {
   PlayCircleOutlined, PauseCircleOutlined, VideoCameraOutlined,
   SoundOutlined, MutedOutlined, FullscreenOutlined, MoreOutlined,
-  StarOutlined, ThunderboltOutlined, LoadingOutlined,
+  ThunderboltOutlined, LoadingOutlined,
   CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined,
-  PictureOutlined, CopyOutlined, EyeOutlined, PlusOutlined,
-  AppstoreOutlined, CaretRightOutlined, UploadOutlined,
-  InboxOutlined, UserOutlined, SwapOutlined,
-  CameraOutlined, SettingOutlined,
+  PictureOutlined, CaretRightOutlined, UploadOutlined,
+  InboxOutlined, UserOutlined, EnvironmentOutlined,
+  CameraOutlined,
 } from '@ant-design/icons';
 import { scriptService } from '@/services/scriptService';
 import { assetService, CharacterAsset, SceneTemplate } from '@/services/assetService';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 
 interface VideoTask {
@@ -29,6 +27,8 @@ interface VideoTask {
   shotNumber?: number; shotDescription?: string; shotType?: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
   progress: number; duration: number; videoUrl?: string; thumbnailUrl?: string; fileSize?: number; createdAt: string;
+  // Storyboard context
+  sceneRef?: string; characters?: string[];
   // Cinematography
   cameraRig?: string; cameraMovement?: string; movementSpeed?: string; focalLength?: string;
   lightingStyle?: string; lightingDirection?: string; colorTemperature?: string;
@@ -63,7 +63,7 @@ const Video: React.FC = () => {
   const [genAll, setGenAll] = useState(false);
   const [genProgress, setGenProgress] = useState(0);
   const [quality, setQuality] = useState('720P');
-  const [videoModel, setVideoModel] = useState('seedance');
+  const [videoModel, setVideoModel] = useState('comfyui');
   const [cineProfile, setCineProfile] = useState('classic-cinematic');
   const [characterLock, setCharacterLock] = useState(true);
   const [activeTab, setActiveTab] = useState('edit');
@@ -89,12 +89,30 @@ const Video: React.FC = () => {
   const [perspectiveModalOpen, setPerspectiveModalOpen] = useState(false);
   const [perspectiveImage, setPerspectiveImage] = useState<string | null>(null);
 
-  // ── 分镜画布 ──
+  // 缩略图存储（仅作首帧兜底，无独立UI）
   const [shotThumbnails, setShotThumbnails] = useState<Record<number, string>>({});
-  const [generatingThumbnails, setGeneratingThumbnails] = useState(false);
-  const [cinePanelOpen, setCinePanelOpen] = useState(false);
-  const [cineShot, setCineShot] = useState<VideoTask | null>(null);
-  const [selectedCanvasShots, setSelectedCanvasShots] = useState<Set<number>>(new Set());
+
+  /** 持久化渲染页状态到 pipeline（后端 Redis + localStorage 缓存） */
+  const persist = useCallback((tasks: VideoTask[], frames: Record<string, any>, thumbs: Record<number, string>) => {
+    const wId = getWorkId();
+    if (!wId) return;
+    const payload = {
+      episodes: episodes.map(ep => ({
+        id: ep.id, title: ep.title, number: ep.number,
+        videoResults: tasks
+          .filter(t => t.episodeId === ep.id)
+          .map(t => ({
+            shot_id: t.shotNumber, status: t.status,
+            video_url: t.videoUrl, image_url: t.thumbnailUrl,
+            progress: t.progress,
+          })),
+      })),
+      frameImages: frames,
+      shotThumbnails: thumbs,
+      generatedAt: new Date().toISOString(),
+    };
+    saveState('videoResults', payload, wId);
+  }, [episodes, getWorkId, saveState]);
 
   const SHOT_TYPE_COLORS: Record<string, string> = {
     '远景': '#3b82f6', '全景': '#6366f1', '中景': '#10b981',
@@ -102,32 +120,6 @@ const Video: React.FC = () => {
     '过肩镜头': '#8b5cf6',
   };
   const getShotColor = (s: string) => SHOT_TYPE_COLORS[s] || '#6b7280';
-
-  const handleGenerateThumbnails = async (taskIds?: number[]) => {
-    const tasks = epTasks.filter(t => taskIds ? taskIds.includes(t.id) : true);
-    if (!tasks.length) { message.warning('没有可生成的镜头'); return; }
-    setGeneratingThumbnails(true);
-    let done = 0;
-    for (const t of tasks) {
-      if (shotThumbnails[t.id]) { done++; continue; }
-      try {
-        const resp = await scriptService.generatePreviewImage({
-          description: t.shotDescription?.slice(0, 200) || `镜头${t.shotNumber}`,
-          category: 'scene',
-        });
-        if (resp?.task_id) {
-          const poll = setInterval(async () => {
-            try {
-              const s = await scriptService.getPreviewImageStatus(resp.task_id);
-              if (s?.status === 'completed' && s.image_url) { clearInterval(poll); setShotThumbnails(prev => ({ ...prev, [t.id]: s.image_url! })); done++; if (done >= tasks.length) setGeneratingThumbnails(false); }
-              else if (s?.status === 'failed') { clearInterval(poll); done++; if (done >= tasks.length) setGeneratingThumbnails(false); }
-            } catch { clearInterval(poll); done++; if (done >= tasks.length) setGeneratingThumbnails(false); }
-          }, 2000);
-        } else { done++; }
-      } catch { done++; }
-    }
-    if (done >= tasks.length) { setGeneratingThumbnails(false); message.success(`缩略图生成完成 (${tasks.length}个)`); }
-  };
 
   const shotFrameKey = useCallback((task: VideoTask | null) => {
     if (!task) return '';
@@ -137,27 +129,31 @@ const Video: React.FC = () => {
   /** 构建参考图像：从 pipeline 状态收集角色和场景参考图作为一致性锚点 */
   const buildReferenceImages = useCallback(() => {
     const refs: any = { characters: {}, scenes: {}, props: {} };
-    if (!characterLock) return refs;
-    // 从 pipeline 状态加载角色数据（缓存同步读取，即时渲染）
-    const chars = loadCached('characters');
-    if (Array.isArray(chars)) {
-      for (const char of chars) {
-        const imgs = char.reference_images || {};
-        if (imgs.front) refs.characters[char.name] = imgs.front;
-        if (imgs.side) refs.characters[`${char.name}_侧脸`] = imgs.side;
-        if (imgs.threeQuarter) refs.characters[`${char.name}_3/4`] = imgs.threeQuarter;
-      }
-    }
-    // 从 pipeline 状态加载场景参考图
-    const scns = loadCached('scenes');
-    if (Array.isArray(scns)) {
-      for (const sc of scns) {
-        if (sc.reference_images?.[0]) {
-          refs.scenes[sc.name] = sc.reference_images[0];
+    // 从 pipeline 缓存读取之前已生成的资源图（不是现生成，是读取 Scene 页持久化的结果）
+    // 角色 — array of CharacterItem + reference_images（三视图）
+    if (characterLock) {
+      const chars = loadCached('characters');
+      if (Array.isArray(chars)) {
+        for (const char of chars) {
+          const imgs = char.reference_images || {};
+          if (imgs.front) refs.characters[char.name] = imgs.front;
+          if (imgs.side) refs.characters[`${char.name}_侧脸`] = imgs.side;
+          if (imgs.threeQuarter) refs.characters[`${char.name}_3/4`] = imgs.threeQuarter;
         }
       }
     }
-    return Object.keys(refs.characters).length > 0 || Object.keys(refs.scenes).length > 0 ? refs : undefined;
+    // 场景 — 对象格式 { list, referenceImages: { scenes: { name: url } } }
+    const scns = loadCached('scenes');
+    if (scns && !Array.isArray(scns)) {
+      if (scns.referenceImages?.scenes) {
+        Object.assign(refs.scenes, scns.referenceImages.scenes);
+      }
+      // 道具（如有）
+      if (scns.referenceImages?.props) {
+        Object.assign(refs.props, scns.referenceImages.props);
+      }
+    }
+    return Object.keys(refs.characters).length > 0 || Object.keys(refs.scenes).length > 0 || Object.keys(refs.props).length > 0 ? refs : undefined;
   }, [characterLock, loadCached]);
 
   const fmt = (t: number) => { const m = Math.floor(t / 60), s = Math.floor(t % 60); return `${m}:${s.toString().padStart(2, '0')}`; };
@@ -218,11 +214,15 @@ const Video: React.FC = () => {
         const tasks: VideoTask[] = []; let tid = 0;
         for (const ep of allEps) {
           for (const s of (ep.shots || [])) { tid++;
-            const r = (videoData?.episodes?.find((ve: any) => ve.id === ep.id)?.videoResults || ep.videoResults || []).find((x: any) => x.shot_id === s.id);
-            tasks.push({ id: tid, name: `${ep.title} 镜头${s.number}`, episodeId: ep.id, episodeTitle: ep.title, shotNumber: s.number, shotDescription: s.description, shotType: s.shotType, status: (r?.status === 'completed' ? 'completed' : r?.status === 'failed' ? 'failed' : 'pending') as any, progress: r?.status === 'completed' ? 100 : 0, duration: s.duration || 5, resolution: '1920x1080', format: 'mp4', videoUrl: r?.video_url, thumbnailUrl: r?.image_url, fileSize: r?.file_size, createdAt: videoData?.generatedAt || storyData?.generatedAt || '' } as any);
+            const r = (videoData?.episodes?.find((ve: any) => ve.id === ep.id)?.videoResults || ep.videoResults || []).find((x: any) => x.shot_id === s.number);
+            tasks.push({ id: tid, name: `${ep.title} 镜头${s.number}`, episodeId: ep.id, episodeTitle: ep.title, shotNumber: s.number, shotDescription: s.description, shotType: s.shotType, sceneRef: s.sceneRef || '', characters: s.characters || [], status: (r?.status === 'completed' ? 'completed' : r?.status === 'failed' ? 'failed' : 'pending') as any, progress: r?.status === 'completed' ? 100 : 0, duration: s.duration || 5, resolution: '1920x1080', format: 'mp4', videoUrl: r?.video_url, thumbnailUrl: r?.image_url, fileSize: r?.file_size, createdAt: videoData?.generatedAt || storyData?.generatedAt || '' } as any);
           }
         }
         setVideoTasks(tasks);
+
+        // 恢复持久化的帧图和缩略图
+        if (videoData?.frameImages) setFrameImages(videoData.frameImages);
+        if (videoData?.shotThumbnails) setShotThumbnails(videoData.shotThumbnails);
 
         if (urlEpId && urlShotNum) {
           const target = tasks.find(t => t.episodeId === urlEpId && t.shotNumber === Number(urlShotNum));
@@ -249,14 +249,39 @@ const Video: React.FC = () => {
       const sEp = sb?.episodes?.find((e: any) => e.id === task.episodeId);
       const shot = sEp?.shots?.find((s: any) => s.number === task.shotNumber);
       if (!shot) throw new Error('Shot not found');
+      // 注入首帧图 URL 作为 I2V 起始帧（优先使用已生成的首帧，否则用缩略图兜底）
+      const sk = shotFrameKey(task);
+      const currentFrames = frameImages[sk] || {};
+      const firstFrameUrl = currentFrames.firstFrame || shotThumbnails[task.id];
+      const shotWithFrame = { ...shot, startImageUrl: firstFrameUrl };
       const refs = buildReferenceImages();
-      const resp = await scriptService.generateShotsVideo({ episodes: [{ ...ep, shots: [shot] }] as any, fps: 24, model: videoModel, style: cineProfile, characterLock, referenceImages: refs });
+      const resp = await scriptService.generateShotsVideo({ episodes: [{ ...ep, shots: [shotWithFrame] }] as any, fps: 24, model: videoModel, style: cineProfile, characterLock, referenceImages: refs });
       if (!resp?.task_id) throw new Error('No task');
       const poll = setInterval(async () => {
-        const s = await scriptService.getShotsVideoStatus(resp.task_id);
-        setVideoTasks(prev => prev.map(t => t.id === task.id ? { ...t, progress: s?.progress || 10 } : t));
-        if (s?.status === 'completed') { clearInterval(poll); const r = await scriptService.getShotsVideoResult(resp.task_id); const fr = r.results?.[0]; setVideoTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: 'completed' as const, progress: 100, videoUrl: fr?.video_url, thumbnailUrl: fr?.image_url } : t)); credits.refreshAfterDeduct(); message.success(`镜头${task.shotNumber} 生成完成`); }
-        else if (s?.status === 'failed') { clearInterval(poll); setVideoTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: 'failed' as const } : t)); }
+        try {
+          const s = await scriptService.getShotsVideoStatus(resp.task_id);
+          setVideoTasks(prev => prev.map(t => t.id === task.id ? { ...t, progress: s?.progress || 10 } : t));
+          if (s?.status === 'completed') {
+            clearInterval(poll);
+            console.log('[poll] completed, fetching result...', resp.task_id);
+            const r = await scriptService.getShotsVideoResult(resp.task_id);
+            const fr = r.results?.[0];
+            console.log('[poll] result:', fr);
+            let nextSingle: VideoTask[] = [];
+            setVideoTasks(prev => {
+              nextSingle = prev.map(t => t.id === task.id ? { ...t, status: 'completed' as const, progress: 100, videoUrl: fr?.video_url, thumbnailUrl: fr?.image_url } : t);
+              const done = nextSingle.find(t => t.id === task.id);
+              if (done) { setSelectedTask(done); setTimeout(() => { if (videoRef.current && done.videoUrl) { videoRef.current.src = done.videoUrl; videoRef.current.play().catch(() => {}); setPlaying(true); } }, 100); }
+              return nextSingle;
+            });
+            setTimeout(() => persist(nextSingle, frameImages, shotThumbnails), 0);
+            credits.refreshAfterDeduct();
+            message.success(`镜头${task.shotNumber} 生成完成`);
+          } else if (s?.status === 'failed') {
+            clearInterval(poll);
+            setVideoTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: 'failed' as const } : t));
+          }
+        } catch (e) { console.error('[poll] error:', e); }
       }, 3000);
     } catch { setVideoTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: 'failed' as const } : t)); }
   };
@@ -266,11 +291,25 @@ const Video: React.FC = () => {
     setGenAll(true); setGenProgress(5);
     try {
       const sb = await loadState('storyboard', getWorkId() ?? undefined);
-      const epData = episodes.map(e => ({ ...e, shots: sb?.episodes?.find((x: any) => x.id === e.id)?.shots || [] }));
+      // 注入首帧图 URL 到每个 shot
+      const epData = episodes.map(e => {
+        const epShots = sb?.episodes?.find((x: any) => x.id === e.id)?.shots || [];
+        return {
+          ...e,
+          shots: epShots.map((s: any) => {
+            const sk = `${e.id}_${s.number}`;
+            const currentFrames = frameImages[sk] || {};
+            // 找到对应的 VideoTask 获取缩略图兜底
+            const vTask = videoTasks.find(t => t.episodeId === e.id && t.shotNumber === s.number);
+            const fallbackUrl = vTask ? shotThumbnails[vTask.id] : undefined;
+            return { ...s, startImageUrl: currentFrames.firstFrame || fallbackUrl };
+          }),
+        };
+      });
       const refs = buildReferenceImages();
       const resp = await scriptService.generateShotsVideo({ episodes: epData, fps: 24, model: videoModel, style: cineProfile, characterLock, referenceImages: refs });
       if (!resp?.task_id) throw new Error('No task');
-      const poll = setInterval(async () => { const s = await scriptService.getShotsVideoStatus(resp.task_id); setGenProgress(s?.progress || 10); if (s?.status === 'completed') { clearInterval(poll); setGenAll(false); const r = await scriptService.getShotsVideoResult(resp.task_id); setVideoTasks(prev => prev.map(t => { const m = r.results?.find((x: any) => x.shot_id === t.shotNumber && x.episode_id === t.episodeId); return m ? { ...t, status: 'completed' as const, progress: 100, videoUrl: m.video_url, thumbnailUrl: m.image_url } : t; })); credits.refreshAfterDeduct(); message.success('全部生成完成'); } else if (s?.status === 'failed') { clearInterval(poll); setGenAll(false); message.error('生成失败'); } }, 3000);
+      const poll = setInterval(async () => { try { const s = await scriptService.getShotsVideoStatus(resp.task_id); setGenProgress(s?.progress || 10); if (s?.status === 'completed') { clearInterval(poll); setGenAll(false); console.log('[genAll] completed, fetching result...', resp.task_id); const r = await scriptService.getShotsVideoResult(resp.task_id); console.log('[genAll] result:', r); let nextAll: VideoTask[] = []; setVideoTasks(prev => { nextAll = prev.map(t => { const m = r.results?.find((x: any) => x.shot_id === t.shotNumber && x.episode_id === t.episodeId); return m ? { ...t, status: 'completed' as const, progress: 100, videoUrl: m.video_url, thumbnailUrl: m.image_url } : t; }); return nextAll; }); setTimeout(() => persist(nextAll, frameImages, shotThumbnails), 0); credits.refreshAfterDeduct(); message.success('全部生成完成'); } else if (s?.status === 'failed') { clearInterval(poll); setGenAll(false); message.error('生成失败'); } } catch (e) { console.error('[genAll] poll error:', e); } }, 3000);
     } catch { setGenAll(false); message.error('生成失败'); }
   };
 
@@ -283,11 +322,20 @@ const Video: React.FC = () => {
     setGeneratingFrame(key);
     try {
       const desc = selectedTask.shotDescription || selectedTask.name || '分镜画面';
-      const frameHint = frameType === 'first' ? '开场画面' : '结束画面';
+      // 从场景/角色/道具资源库加载参考图，注入视觉锚定
+      const refs = buildReferenceImages();
       const resp = await scriptService.generatePreviewImage({
-        description: `${frameHint}：${desc}`,
+        description: desc,
         category: 'scene',
         style: cineProfile,
+        reference_images: refs,
+        frame_type: frameType,
+        shot_type: selectedTask.shotType,
+        characters: selectedTask.characters,
+        lighting: [selectedTask.lightingStyle, selectedTask.lightingDirection, selectedTask.colorTemperature]
+          .filter(Boolean).join('，'),
+        emotion: selectedTask.emotionTags,
+        camera_movement: selectedTask.cameraMovement,
       });
       if (!resp?.task_id) throw new Error('No task_id');
       const poll = setInterval(async () => {
@@ -295,12 +343,15 @@ const Video: React.FC = () => {
           const status = await scriptService.getPreviewImageStatus(resp.task_id);
           if (status?.status === 'completed' && status.image_url) {
             clearInterval(poll);
+            let newFrames: Record<string, any> = {};
             setFrameImages(prev => {
               const sk = shotFrameKey(selectedTask);
               const cur = prev[sk] || {};
               const field = frameType === 'first' ? 'firstFrame' : 'lastFrame';
-              return { ...prev, [sk]: { ...cur, [field]: status.image_url } };
+              newFrames = { ...prev, [sk]: { ...cur, [field]: status.image_url } };
+              return newFrames;
             });
+            setTimeout(() => persist(videoTasks, newFrames, shotThumbnails), 0);
             setGeneratingFrame(null);
             message.success(`${frameType === 'first' ? '首帧' : '尾帧'}生成完成`);
           } else if (status?.status === 'failed') {
@@ -315,14 +366,18 @@ const Video: React.FC = () => {
       setGeneratingFrame(null);
       message.error(e?.message || 'AI生成失败');
     }
-  }, [selectedTask, cineProfile, shotFrameKey]);
+  }, [selectedTask, cineProfile, shotFrameKey, buildReferenceImages]);
 
   /** 打开角色库 */
   const handleOpenCharLibrary = useCallback(async (frameType: string) => {
     setCharModalTarget(frameType); setCharModalOpen(true); setCharLoading(true);
     try {
-      const res = await assetService.listCharacters({ limit: 50 });
-      if (res?.data) setCharacters((res.data as any).data || (res.data as any));
+      const res = await assetService.listCharacters({ limit: 200 });
+      if (res?.data) {
+        const seen = new Set<string>();
+        const deduped = res.data.filter(c => !seen.has(c.name) && seen.add(c.name));
+        setCharacters(deduped);
+      }
     } catch { message.error('加载角色库失败'); }
     setCharLoading(false);
   }, []);
@@ -333,23 +388,31 @@ const Video: React.FC = () => {
     if (!imgUrl) { message.warning('该角色暂无参考图'); return; }
     if (!selectedTask) return;
     const sk = shotFrameKey(selectedTask);
+    let newFrames: Record<string, any> = {};
     setFrameImages(prev => {
       const cur = prev[sk] || {};
       const upd: any = {};
       if (charModalTarget === 'first' || charModalTarget === 'both') upd.firstFrame = imgUrl;
       if (charModalTarget === 'last' || charModalTarget === 'both') upd.lastFrame = imgUrl;
-      return { ...prev, [sk]: { ...cur, ...upd } };
+      newFrames = { ...prev, [sk]: { ...cur, ...upd } };
+      return newFrames;
     });
+    setTimeout(() => persist(videoTasks, newFrames, shotThumbnails), 0);
     setCharModalOpen(false);
     message.success(`已应用「${char.name}」参考图`);
-  }, [selectedTask, charModalTarget, shotFrameKey]);
+  }, [selectedTask, charModalTarget, shotFrameKey, persist, videoTasks, shotThumbnails]);
 
   /** 打开素材库 */
   const handleOpenMaterialLibrary = useCallback(async (frameType: string) => {
     setMaterialModalTarget(frameType); setMaterialModalOpen(true); setSceneLoading(true);
     try {
-      const res = await assetService.listScenes({ limit: 50 });
-      if (res?.data) setScenes((res.data as any).data || (res.data as any));
+      const res = await assetService.listScenes({ limit: 200 });
+      if (res?.data) {
+        const raw = (res.data as any).data || (res.data as any);
+        const seen = new Set<string>();
+        const deduped = raw.filter((s: any) => !seen.has(s.name) && seen.add(s.name));
+        setScenes(deduped);
+      }
     } catch { message.error('加载素材库失败'); }
     setSceneLoading(false);
   }, []);
@@ -360,61 +423,19 @@ const Video: React.FC = () => {
     if (!imgUrl) { message.warning('该场景暂无素材图'); return; }
     if (!selectedTask) return;
     const sk = shotFrameKey(selectedTask);
+    let newFrames: Record<string, any> = {};
     setFrameImages(prev => {
       const cur = prev[sk] || {};
       const upd: any = {};
       if (materialModalTarget === 'first' || materialModalTarget === 'both') upd.firstFrame = imgUrl;
       if (materialModalTarget === 'last' || materialModalTarget === 'both') upd.lastFrame = imgUrl;
-      return { ...prev, [sk]: { ...cur, ...upd } };
+      newFrames = { ...prev, [sk]: { ...cur, ...upd } };
+      return newFrames;
     });
+    setTimeout(() => persist(videoTasks, newFrames, shotThumbnails), 0);
     setMaterialModalOpen(false);
     message.success(`已应用「${scene.name}」素材`);
-  }, [selectedTask, materialModalTarget, shotFrameKey]);
-
-  /** 重新生成 */
-  const handleRegenerate = useCallback(() => {
-    if (!selectedTask) return;
-    if (frameMode === 'first' || frameMode === 'both') handleAIGenerateFrame('first');
-    if (frameMode === 'last' || frameMode === 'both') handleAIGenerateFrame('last');
-  }, [selectedTask, frameMode, handleAIGenerateFrame]);
-
-  /** 复制图链 */
-  const handleCopyFrame = useCallback(() => {
-    if (!selectedTask) return;
-    const cur = frameImages[shotFrameKey(selectedTask)];
-    const url = cur?.firstFrame || cur?.lastFrame;
-    if (url && url.startsWith('http')) {
-      navigator.clipboard.writeText(url).then(() => message.success('已复制链接'));
-    } else { message.info('暂无生成图片'); }
-  }, [selectedTask, frameImages, shotFrameKey]);
-
-  /** 收藏 */
-  const handleStarFrame = useCallback(() => {
-    const cur = selectedTask ? frameImages[shotFrameKey(selectedTask)] : null;
-    if (!cur?.firstFrame && !cur?.lastFrame) { message.info('暂无图片可收藏'); return; }
-    message.success('已收藏');
-  }, [selectedTask, frameImages, shotFrameKey]);
-
-  /** 上传图片作为帧图 */
-  const handleUploadFrame = useCallback((file: File, frameType: string) => {
-    if (!selectedTask) return false;
-    const sk = shotFrameKey(selectedTask);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const dataUrl = e.target?.result as string;
-      setFrameImages(prev => {
-        const cur = prev[sk] || {};
-        if (frameType === 'first' || frameType === 'perspective')
-          return { ...prev, [sk]: { ...cur, firstFrame: dataUrl } };
-        if (frameType === 'last')
-          return { ...prev, [sk]: { ...cur, lastFrame: dataUrl } };
-        return prev;
-      });
-      message.success('图片上传成功');
-    };
-    reader.readAsDataURL(file);
-    return false;
-  }, [selectedTask, shotFrameKey]);
+  }, [selectedTask, materialModalTarget, shotFrameKey, persist, videoTasks, shotThumbnails]);
 
   /** 透视/视角：上传或 AI 生成 */
   const handlePerspectiveAction = useCallback((action: 'upload' | 'generate') => {
@@ -424,7 +445,7 @@ const Video: React.FC = () => {
       if (!selectedTask) return;
       const desc = selectedTask.shotDescription || '分镜画面';
       setGeneratingFrame(`${shotFrameKey(selectedTask)}_perspective`);
-      scriptService.generatePreviewImage({ description: `多角度视图：${desc}`, category: 'scene', style: cineProfile })
+      scriptService.generatePreviewImage({ description: `多角度视图：${desc}`, category: 'scene', style: cineProfile, reference_images: buildReferenceImages() })
         .then(resp => {
           if (!resp?.task_id) throw new Error('No task_id');
           const poll = setInterval(async () => {
@@ -449,75 +470,11 @@ const Video: React.FC = () => {
     }
   }, [selectedTask, cineProfile, shotFrameKey]);
 
-  // 当前选中镜头的帧图
-  const currentFrames = selectedTask ? (frameImages[shotFrameKey(selectedTask)] || {}) : {} as { firstFrame?: string; lastFrame?: string };
-
-  // Drawer 样式常量
-  const fs: React.CSSProperties = { border: '1px solid #e5e7eb', borderRadius: 6, padding: 10 };
-  const lg: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: '#111', padding: '0 4px' };
-  const grid2: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 };
-  const fl: React.CSSProperties = { fontSize: 10, color: '#6b7280', marginBottom: 2 };
-  const openCinePanel = (task: VideoTask) => { setCineShot(task); setCinePanelOpen(true); };
-
-  // ── 分镜画布渲染 ──
-  const renderShotCanvas = () => {
-    const maxDuration = Math.max(1, ...epTasks.map(t => t.duration || 5));
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexShrink: 0 }}>
-          <Space>
-            <Text strong style={{ fontSize: 13 }}>分镜画布</Text>
-            <Text style={{ color: '#6b7280', fontSize: 11 }}>{epTasks.length} 镜头</Text>
-          </Space>
-          <Button size="small" icon={<PictureOutlined />} loading={generatingThumbnails}
-            onClick={() => handleGenerateThumbnails()}>
-            {generatingThumbnails ? '生成中…' : '生成全部缩略图'}
-          </Button>
-        </div>
-        <div style={{ flex: 1, overflow: 'auto' }}>
-          {epTasks.length === 0 ? (
-            <Text style={{ color: '#9ca3af', fontSize: 12 }}>暂无镜头数据</Text>
-          ) : (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {epTasks.map((t) => {
-                const color = getShotColor(t.shotType || '中景');
-                const barWidth = Math.max(20, ((t.duration || 5) / maxDuration) * 100);
-                const isSelected = selectedTask?.id === t.id;
-                return (
-                  <div key={t.id}
-                    onClick={() => openCinePanel(t)}
-                    onDoubleClick={() => { setSelectedTask(t); if (t.videoUrl && videoRef.current) { videoRef.current.src = t.videoUrl; videoRef.current.play(); setPlaying(true); } }}
-                    style={{ width: 'calc(25% - 6px)', minWidth: 90, borderRadius: 8, overflow: 'hidden', border: isSelected ? '2px solid #2563eb' : '1px solid #e5e7eb', background: '#fff', cursor: 'pointer', transition: 'box-shadow 0.15s, transform 0.15s', boxShadow: isSelected ? '0 4px 16px rgba(37,99,235,0.25)' : '0 1px 4px rgba(0,0,0,0.06)' }}
-                    onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.12)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.boxShadow = isSelected ? '0 4px 16px rgba(37,99,235,0.25)' : '0 1px 4px rgba(0,0,0,0.06)'; e.currentTarget.style.transform = ''; }}>
-                    <div style={{ height: 70, background: `${color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-                      {shotThumbnails[t.id] ? (
-                        <img src={shotThumbnails[t.id]} alt={`镜头${t.shotNumber}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      ) : t.thumbnailUrl ? (
-                        <img src={t.thumbnailUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      ) : (
-                        <CameraOutlined style={{ fontSize: 22, color: `${color}60` }} />
-                      )}
-                      <div style={{ position: 'absolute', top: 2, left: 4, background: `${color}cc`, color: '#fff', fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3 }}>{t.shotNumber}</div>
-                      <div style={{ position: 'absolute', bottom: 2, right: 4, background: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: 9, padding: '0px 4px', borderRadius: 3 }}>{t.duration || 5}s</div>
-                      {t.status === 'completed' && <CheckCircleOutlined style={{ position: 'absolute', top: 2, right: 4, color: '#52c41a', fontSize: 10 }} />}
-                    </div>
-                    <div style={{ padding: '6px 6px 4px' }}>
-                      <div style={{ fontSize: 10, fontWeight: 600, color: '#111', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.shotType || '中景'}</div>
-                      <div style={{ fontSize: 9, color: '#6b7280', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.shotDescription?.slice(0, 20) || ''}</div>
-                    </div>
-                    <div style={{ height: 4, background: '#f3f4f6' }}>
-                      <div style={{ height: '100%', width: `${barWidth}%`, background: color, borderRadius: '0 2px 2px 0' }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
+  /** 更新选中镜头的参数（同步更新 selectedTask + videoTasks） */
+  const updateSelectedTask = useCallback((patch: Partial<VideoTask>) => {
+    setSelectedTask(prev => prev ? { ...prev, ...patch } : prev);
+    setVideoTasks(prev => prev.map(t => t.id === selectedTask?.id ? { ...t, ...patch } : t));
+  }, [selectedTask?.id]);
 
   return (
     <div style={{ height: 'calc(100vh - 64px)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -657,74 +614,154 @@ const Video: React.FC = () => {
           </div>
         </div>
 
-        {/* ── 分镜画布 ── */}
-        <div style={{ flex: 1, overflow: 'auto', padding: '10px 12px' }}>
-          {renderShotCanvas()}
-        </div>
+        {/* ── 镜头列表（紧凑） + 选中镜头详情 ── */}
+        <div style={{ flex: 1, overflow: 'auto' }}>
+          {epTasks.length === 0 ? (
+            <Text style={{ color: '#9ca3af', fontSize: 12, padding: 20, display: 'block', textAlign: 'center' }}>暂无镜头数据</Text>
+          ) : (
+            <>
+              {/* 选中镜头详情 + 操作 */}
+              {selectedTask && (() => {
+                const t = selectedTask;
+                const sk = shotFrameKey(t);
+                const frames = frameImages[sk] || {};
+                const color = getShotColor(t.shotType || '中景');
+                return (
+                  <div style={{ borderTop: '2px solid #2563eb', background: '#fff', padding: '10px 12px' }}>
+                    {/* 基础信息 */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
+                      <span style={{ background: color, color: '#fff', fontSize: 13, fontWeight: 700, padding: '2px 10px', borderRadius: 3 }}>镜头 {t.shotNumber}</span>
+                      {t.sceneRef && <Tag color="green" style={{ margin: 0, fontSize: 12, fontWeight: 600 }}><EnvironmentOutlined style={{ marginRight: 2, fontSize: 10 }} />{t.sceneRef}</Tag>}
+                      {t.characters?.map((c: string) => <Tag key={c} color="purple" style={{ margin: 0, fontSize: 12, fontWeight: 600 }}><UserOutlined style={{ marginRight: 2, fontSize: 10 }} />{c}</Tag>)}
+                    </div>
+                    {/* 描述 */}
+                    {t.shotDescription && (
+                      <Text style={{ fontSize: 12, fontWeight: 500, color: '#374151', display: 'block', marginBottom: 4 }}>
+                        {t.shotDescription.slice(0, 80)}{t.shotDescription.length > 80 ? '…' : ''}
+                      </Text>
+                    )}
+                    {/* 摄影参数 — 分组折叠 */}
+                    <div style={{ fontSize: 10, marginBottom: 6 }}>
+                      {[
+                        { key: 'basic', icon: '🎬', label: '基础', defaultOpen: true, fields: [
+                          { k: 'shotType', label: '景别', type: 'select', opts: Object.keys(SHOT_TYPE_COLORS) },
+                          { k: 'duration', label: '时长(秒)', type: 'number', min: 1, max: 60 },
+                        ]},
+                        { key: 'camera', icon: '📷', label: '摄影机', defaultOpen: true, fields: [
+                          { k: 'cameraRig', label: '设备', type: 'select', opts: ['三脚架','手持','斯坦尼康','滑轨','摇臂','无人机','肩扛'] },
+                          { k: 'cameraMovement', label: '运镜', type: 'select', opts: ['推','拉','摇','移','跟','升','降','固定'] },
+                          { k: 'movementSpeed', label: '速度', type: 'select', opts: ['缓慢流畅','自然晃动','快速','紧张晃动','极少运动'] },
+                          { k: 'focalLength', label: '焦距', type: 'text' },
+                        ]},
+                        { key: 'lighting', icon: '💡', label: '灯光', defaultOpen: true, fields: [
+                          { k: 'lightingStyle', label: '风格', type: 'select', opts: ['自然光','三点布光','高调光','低调光','侧光','逆光','霓虹光','烛光'] },
+                          { k: 'lightingDirection', label: '方向', type: 'select', opts: ['正面光','侧光','逆光','顶光','底光','柔光'] },
+                          { k: 'colorTemperature', label: '色温', type: 'text' },
+                        ]},
+                        { key: 'focus', icon: '🔍', label: '焦点', defaultOpen: true, fields: [
+                          { k: 'depthOfField', label: '景深', type: 'select', opts: ['浅景深','中等景深','深景深','移焦'] },
+                          { k: 'focusTarget', label: '主体', type: 'text' },
+                        ]},
+                        { key: 'mood', icon: '🎭', label: '情绪与氛围', defaultOpen: true, fields: [
+                          { k: 'emotionTags', label: '情绪', type: 'tags' },
+                          { k: 'narrativeFunction', label: '叙事', type: 'text' },
+                          { k: 'atmosphericEffects', label: '氛围', type: 'select', opts: ['无','雾','雨','雪','烟','灰尘','烛光','粒子'] },
+                        ]},
+                      ].map(group => (
+                        <details key={group.key} open={group.defaultOpen} style={{ marginBottom: 2 }}>
+                          <summary style={{ cursor: 'pointer', padding: '4px 6px', borderRadius: 3, background: '#f9fafb', fontSize: 12, fontWeight: 600, color: '#111', listStyle: 'none' }}>
+                            {group.icon} {group.label}
+                          </summary>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 8px', padding: '3px 4px' }}>
+                            {group.fields.map(f => {
+                              const value = (t as any)[f.k];
+                              const labelEl = <Text style={{ color: '#6b7280', fontSize: 11, fontWeight: 600, display: 'block' }}>{f.label}</Text>;
+                              if (f.type === 'select' && f.opts) {
+                                return <div key={f.k}>{labelEl}<Select size="middle" value={value || undefined} allowClear style={{ width: '100%' }} placeholder="—" onChange={(v: any) => updateSelectedTask({ [f.k]: v } as any)}>{f.opts.map((o: string) => <Option key={o} value={o}>{o}</Option>)}</Select></div>;
+                              }
+                              if (f.type === 'number') {
+                                const nf = f as typeof f & { min?: number; max?: number };
+                                return <div key={f.k}>{labelEl}<Input size="middle" type="number" min={nf.min} max={nf.max} value={value ?? (f.k === 'duration' ? 5 : '')} style={{ width: '100%' }} onChange={e => { const v = parseInt(e.target.value) || (f.k === 'duration' ? 5 : 0); updateSelectedTask({ [f.k]: f.k === 'duration' ? Math.max(1, Math.min(60, v)) : v } as any); }} /></div>;
+                              }
+                              if (f.type === 'tags') {
+                                return <div key={f.k}>{labelEl}<Select size="middle" mode="tags" value={value || []} style={{ width: '100%' }} placeholder="—" onChange={(v: any) => updateSelectedTask({ [f.k]: v } as any)} /></div>;
+                              }
+                              // text
+                              return <div key={f.k}>{labelEl}<Input size="middle" value={value || ''} style={{ width: '100%' }} placeholder="—" onChange={e => updateSelectedTask({ [f.k]: e.target.value } as any)} /></div>;
+                            })}
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                    {/* 首帧/尾帧预览 + 操作 */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      {(frameMode === 'first' || frameMode === 'both') && (
+                        <div style={{ textAlign: 'center', flexShrink: 0 }}>
+                          <Text style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', display: 'block', marginBottom: 2 }}>首帧</Text>
+                          <div style={{ width: 150, height: 188, borderRadius: 4, background: '#f9fafb', border: '2px solid #2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', cursor: 'pointer' }}
+                            onClick={() => { const url = frames.firstFrame || t.thumbnailUrl; if (url) window.open(url, '_blank'); }}>
+                            {generatingFrame === `${sk}_first` ? <LoadingOutlined style={{ fontSize: 10 }} /> :
+                              frames.firstFrame ? <img src={frames.firstFrame} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> :
+                              t.thumbnailUrl ? <img src={t.thumbnailUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> :
+                              <PictureOutlined style={{ fontSize: 12, color: '#ccc' }} />}
+                          </div>
+                        </div>
+                      )}
+                      {(frameMode === 'last' || frameMode === 'both') && (
+                        <div style={{ textAlign: 'center', flexShrink: 0 }}>
+                          <Text style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', display: 'block', marginBottom: 2 }}>尾帧</Text>
+                          <div style={{ width: 150, height: 188, borderRadius: 4, background: '#f9fafb', border: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', cursor: 'pointer' }}
+                            onClick={() => { if (frames.lastFrame) window.open(frames.lastFrame, '_blank'); }}>
+                            {generatingFrame === `${sk}_last` ? <LoadingOutlined style={{ fontSize: 10 }} /> :
+                              frames.lastFrame ? <img src={frames.lastFrame} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> :
+                              <PictureOutlined style={{ fontSize: 12, color: '#ccc' }} />}
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ flex: 1 }}>
+                        <Space size={4} wrap>
+                          <Button size="small" type="primary" ghost icon={<ThunderboltOutlined />} loading={!!generatingFrame}
+                            onClick={() => { if (frameMode === 'first' || frameMode === 'both') handleAIGenerateFrame('first'); if (frameMode === 'last' || frameMode === 'both') handleAIGenerateFrame('last'); }}>
+                            AI生成帧
+                          </Button>
+                          <Button size="small" icon={<UserOutlined />} onClick={() => handleOpenCharLibrary(frameMode)}>角色库</Button>
+                          <Button size="small" icon={<InboxOutlined />} onClick={() => handleOpenMaterialLibrary(frameMode)}>素材库</Button>
+                          {t.status !== 'processing' && (
+                            <Button size="small" type="primary" icon={<ThunderboltOutlined />}
+                              onClick={() => handleGenSingle(t)}>
+                              {t.status === 'completed' ? '重新生成' : '生成视频'}
+                            </Button>
+                          )}
+                        </Space>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
-        {/* ── 选中镜头操作面板 ── */}
-        {selectedTask && (
-          <div style={{ borderTop: '2px solid #2563eb', background: '#fff', flexShrink: 0, maxHeight: 200, overflow: 'auto' }}>
-            <div style={{ padding: '6px 12px', background: '#fafbfc', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Space size={4}>
-                <Tag color="blue" style={{ margin: 0 }}>镜头 {selectedTask.shotNumber}</Tag>
-                <Text style={{ fontSize: 12, color: '#6b7280' }}>{selectedTask.shotType || '中景'} · {selectedTask.duration || 5}s</Text>
-              </Space>
-              <Space size={4}>
-                <Button size="small" type="primary" ghost icon={<ThunderboltOutlined />} loading={!!generatingFrame}
-                  onClick={() => { if (frameMode === 'first' || frameMode === 'both') handleAIGenerateFrame('first'); if (frameMode === 'last' || frameMode === 'both') handleAIGenerateFrame('last'); }}>
-                  AI生成
-                </Button>
-                <Button size="small" icon={<UserOutlined />} onClick={() => handleOpenCharLibrary(frameMode)}>角色库</Button>
-                <Button size="small" icon={<InboxOutlined />} onClick={() => handleOpenMaterialLibrary(frameMode)}>素材库</Button>
-                <Tooltip title={`将摄影风格预设批量应用到当前集全部 ${epTasks.length} 个镜头`}>
-                <Button size="small" onClick={() => {
-                  const profile: Record<string, string> = {
-                    'classic-cinematic': '经典电影感', 'suspense-thriller': '悬疑惊悚', 'romantic-comedy': '浪漫喜剧',
-                    'wuxia-classic': '武侠经典', 'sci-fi-future': '科幻未来', 'cyberpunk-neon': '赛博朋克',
-                    'japanese-fresh': '日系清新', 'documentary': '纪实风格', 'family-warmth': '家庭温馨',
-                    'hk-retro-90s': '港风复古', 'republican-era': '民国风情', 'ancient-palace': '古装宫廷',
-                  };
-                  message.success(`已对 ${epTasks.length} 个镜头应用「${profile[cineProfile] || cineProfile}」预设`);
-                }} style={{ fontSize: 10 }}>🎬 批量应用</Button>
-              </Tooltip>
-              <Button size="small" icon={<ReloadOutlined />} onClick={handleRegenerate} loading={!!generatingFrame} />
-              </Space>
-            </div>
-            <div style={{ display: 'flex', gap: 8, padding: 8, alignItems: 'flex-start' }}>
-              {(frameMode === 'first' || frameMode === 'both') && (
-                <div style={{ textAlign: 'center', flexShrink: 0 }}>
-                  <Text style={{ fontSize: 10, color: '#6b7280', display: 'block', marginBottom: 2 }}>首帧</Text>
-                  <div style={{ width: 56, height: 70, background: '#f9fafb', borderRadius: 4, border: '2px solid #2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', cursor: 'pointer' }}
-                    onClick={() => { const url = currentFrames.firstFrame || selectedTask.thumbnailUrl; if (url) window.open(url, '_blank'); }}>
-                    {generatingFrame === `${shotFrameKey(selectedTask)}_first` ? <LoadingOutlined style={{ fontSize: 12 }} /> :
-                      currentFrames.firstFrame ? <img src={currentFrames.firstFrame} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> :
-                      selectedTask.thumbnailUrl ? <img src={selectedTask.thumbnailUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> :
-                      <PictureOutlined style={{ fontSize: 14, color: '#ccc' }} />}
-                  </div>
-                </div>
-              )}
-              {(frameMode === 'last' || frameMode === 'both') && (
-                <div style={{ textAlign: 'center', flexShrink: 0 }}>
-                  <Text style={{ fontSize: 10, color: '#6b7280', display: 'block', marginBottom: 2 }}>尾帧</Text>
-                  <div style={{ width: 56, height: 70, background: '#f9fafb', borderRadius: 4, border: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', cursor: 'pointer' }}
-                    onClick={() => { if (currentFrames.lastFrame) window.open(currentFrames.lastFrame, '_blank'); }}>
-                    {generatingFrame === `${shotFrameKey(selectedTask)}_last` ? <LoadingOutlined style={{ fontSize: 12 }} /> :
-                      currentFrames.lastFrame ? <img src={currentFrames.lastFrame} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> :
-                      <PictureOutlined style={{ fontSize: 14, color: '#ccc' }} />}
-                  </div>
-                </div>
-              )}
-              <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 8px', fontSize: 10 }}>
-                <div><Text style={{ color: '#9ca3af' }}>摄影机</Text> <Text>{selectedTask.cameraRig || '—'} {selectedTask.cameraMovement || ''}</Text></div>
-                <div><Text style={{ color: '#9ca3af' }}>灯光</Text> <Text>{selectedTask.lightingStyle || '—'}</Text></div>
-                <div><Text style={{ color: '#9ca3af' }}>景深</Text> <Text>{selectedTask.depthOfField || '—'}</Text></div>
-                <div><Text style={{ color: '#9ca3af' }}>氛围</Text> <Text>{selectedTask.atmosphericEffects || '—'}</Text></div>
+              {/* 紧凑镜头列表：点击选中 */}
+              <div style={{ padding: '4px 6px' }}>
+                {epTasks.map((t) => {
+                  const isSelected = selectedTask?.id === t.id;
+                  const color = getShotColor(t.shotType || '中景');
+                  return (
+                    <div key={t.id}
+                      onClick={() => { setSelectedTask(t); if (t.videoUrl && videoRef.current) { videoRef.current.src = t.videoUrl; videoRef.current.play(); setPlaying(true); } }}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', margin: '2px 4px 2px 0', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                        background: isSelected ? '#2563eb' : '#f3f4f6', color: isSelected ? '#fff' : '#374151',
+                        border: isSelected ? '1px solid #2563eb' : '1px solid transparent' }}>
+                      <span style={{ fontWeight: 700, minWidth: 16, textAlign: 'center' }}>{t.shotNumber || '?'}</span>
+                      <span style={{ opacity: 0.85 }}>{t.shotType || '中景'}</span>
+                      {t.status === 'completed' && <CheckCircleOutlined style={{ fontSize: 10 }} />}
+                      {t.status === 'processing' && <LoadingOutlined style={{ fontSize: 10 }} />}
+                      {t.status === 'failed' && <CloseCircleOutlined style={{ fontSize: 10 }} />}
+                    </div>
+                  );
+                })}
               </div>
-              <Button type="link" size="small" style={{ flexShrink: 0, fontSize: 10 }} onClick={() => openCinePanel(selectedTask)}>详细→</Button>
-            </div>
-          </div>
-        )}
+            </>
+          )}
+        </div>
 
         {/* 状态栏 */}
         <div style={{ borderTop: '1px solid #e5e7eb', padding: '6px 12px', display: 'flex', gap: 12, fontSize: 11, color: '#6b7280', background: '#fafbfc', flexShrink: 0 }}>
@@ -783,7 +820,6 @@ const Video: React.FC = () => {
                 style={{ cursor: 'pointer', flexShrink: 0, width: 140, borderRadius: 8, overflow: 'hidden', border: selectedTask?.id === t.id ? '2px solid #2563eb' : '1px solid #e5e7eb', background: '#f9fafb' }}>
                 <div style={{ height: 120, background: '#1a1a2e', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
                   {t.thumbnailUrl ? <img src={t.thumbnailUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : <VideoCameraOutlined style={{ color: '#555', fontSize: 24 }} />}
-                  {/* 右上角状态 + 时长 */}
                   <div style={{ position: 'absolute', top: 2, right: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
                     <Text style={{ color: '#fff', fontSize: 10, background: 'rgba(0,0,0,0.6)', padding: '1px 4px', borderRadius: 3 }}>{t.duration || 5}s</Text>
                     {t.status === 'completed' && <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 12 }} />}
@@ -795,8 +831,9 @@ const Video: React.FC = () => {
                     </div>
                   )}
                 </div>
-                <div style={{ padding: '3px 4px', textAlign: 'center', lineHeight: 1.3 }}>
-                  <Text style={{ fontSize: 10, color: '#111', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>镜头{t.shotNumber}</Text>
+                <div style={{ padding: '4px 6px', textAlign: 'center', lineHeight: 1.4 }}>
+                  <Text style={{ fontSize: 12, fontWeight: 700, color: '#111', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>镜头{t.shotNumber}</Text>
+                  <Text style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.shotType || '中景'} · {t.duration || 5}s</Text>
                 </div>
               </div>
               </Tooltip>
@@ -818,7 +855,7 @@ const Video: React.FC = () => {
                 onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}>
                 <div style={{ width: 80, height: 80, margin: '0 auto 6px', borderRadius: 8, overflow: 'hidden', background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   {c.reference_images && Object.values(c.reference_images)[0] ? (
-                    <img src={Object.values(c.reference_images)[0] as string} alt={c.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <img src={Object.values(c.reference_images)[0] as string} alt={c.name} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
                   ) : (
                     <UserOutlined style={{ fontSize: 28, color: '#9ca3af' }} />
                   )}
@@ -845,7 +882,7 @@ const Video: React.FC = () => {
                 onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}>
                 <div style={{ width: 80, height: 80, margin: '0 auto 6px', borderRadius: 8, overflow: 'hidden', background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   {s.reference_images?.[0] ? (
-                    <img src={s.reference_images[0]} alt={s.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <img src={s.reference_images[0]} alt={s.name} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
                   ) : (
                     <PictureOutlined style={{ fontSize: 28, color: '#9ca3af' }} />
                   )}
@@ -862,59 +899,6 @@ const Video: React.FC = () => {
       </Modal>
 
       {/* ── 视角上传/生成弹窗 ── */}
-      {/* ── 电影摄影参数 Drawer ── */}
-      <Drawer
-        title={cineShot ? `镜头 ${cineShot.shotNumber} · 摄影参数` : '摄影参数'}
-        placement="right" width={460}
-        open={cinePanelOpen}
-        onClose={() => { setCinePanelOpen(false); setCineShot(null); }}
-        extra={
-          <Button type="primary" size="small" onClick={() => { setCinePanelOpen(false); setCineShot(null); message.success('参数已更新'); }}>
-            完成
-          </Button>
-        }
-      >
-        {cineShot && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <fieldset style={fs}><legend style={lg}>🎬 基础</legend>
-              <div style={grid2}>
-                <div><Text style={fl}>镜头类型</Text><Select size="small" value={cineShot.shotType} style={{ width: '100%' }} onChange={v => setCineShot({ ...cineShot, shotType: v })}>{Object.keys(SHOT_TYPE_COLORS).map(t => <Option key={t} value={t}>{t}</Option>)}</Select></div>
-                <div><Text style={fl}>时长(秒)</Text><InputNumber size="small" min={1} max={60} value={cineShot.duration} style={{ width: '100%' }} onChange={v => setCineShot({ ...cineShot, duration: v || 5 })} /></div>
-              </div>
-            </fieldset>
-            <fieldset style={fs}><legend style={lg}>📷 摄影机</legend>
-              <div style={grid2}>
-                <div><Text style={fl}>拍摄设备</Text><Select size="small" value={cineShot.cameraRig || ''} style={{ width: '100%' }} allowClear onChange={v => setCineShot({ ...cineShot, cameraRig: v })}>{['三脚架','手持','斯坦尼康','滑轨','摇臂','无人机','肩扛'].map(r => <Option key={r} value={r}>{r}</Option>)}</Select></div>
-                <div><Text style={fl}>运镜方式</Text><Select size="small" value={cineShot.cameraMovement || ''} style={{ width: '100%' }} allowClear onChange={v => setCineShot({ ...cineShot, cameraMovement: v })}>{['推','拉','摇','移','跟','升','降','固定'].map(m => <Option key={m} value={m}>{m}</Option>)}</Select></div>
-                <div><Text style={fl}>运动速度</Text><Select size="small" value={cineShot.movementSpeed || ''} style={{ width: '100%' }} allowClear onChange={v => setCineShot({ ...cineShot, movementSpeed: v })}>{['缓慢流畅','自然晃动','快速','紧张晃动','极少运动'].map(s => <Option key={s} value={s}>{s}</Option>)}</Select></div>
-                <div><Text style={fl}>焦距</Text><Input size="small" value={cineShot.focalLength || ''} style={{ width: '100%' }} onChange={e => setCineShot({ ...cineShot, focalLength: e.target.value })} /></div>
-              </div>
-            </fieldset>
-            <fieldset style={fs}><legend style={lg}>💡 灯光</legend>
-              <div style={grid2}>
-                <div><Text style={fl}>灯光风格</Text><Select size="small" value={cineShot.lightingStyle || ''} style={{ width: '100%' }} allowClear onChange={v => setCineShot({ ...cineShot, lightingStyle: v })}>{['自然光','三点布光','高调光','低调光','侧光','逆光','霓虹光','烛光'].map(l => <Option key={l} value={l}>{l}</Option>)}</Select></div>
-                <div><Text style={fl}>灯光方向</Text><Select size="small" value={cineShot.lightingDirection || ''} style={{ width: '100%' }} allowClear onChange={v => setCineShot({ ...cineShot, lightingDirection: v })}>{['正面光','侧光','逆光','顶光','底光','柔光'].map(d => <Option key={d} value={d}>{d}</Option>)}</Select></div>
-                <div><Text style={fl}>色温</Text><Input size="small" value={cineShot.colorTemperature || ''} style={{ width: '100%' }} onChange={e => setCineShot({ ...cineShot, colorTemperature: e.target.value })} /></div>
-              </div>
-            </fieldset>
-            <fieldset style={fs}><legend style={lg}>🔍 焦点</legend>
-              <div style={grid2}>
-                <div><Text style={fl}>景深</Text><Select size="small" value={cineShot.depthOfField || ''} style={{ width: '100%' }} allowClear onChange={v => setCineShot({ ...cineShot, depthOfField: v })}>{['浅景深','中等景深','深景深','移焦'].map(d => <Option key={d} value={d}>{d}</Option>)}</Select></div>
-                <div><Text style={fl}>焦点主体</Text><Input size="small" value={cineShot.focusTarget || ''} style={{ width: '100%' }} onChange={e => setCineShot({ ...cineShot, focusTarget: e.target.value })} /></div>
-              </div>
-            </fieldset>
-            <fieldset style={fs}><legend style={lg}>🎭 情绪与氛围</legend>
-              <div style={grid2}>
-                <div><Text style={fl}>情绪标签</Text><Select size="small" mode="tags" value={cineShot.emotionTags || []} style={{ width: '100%' }} onChange={v => setCineShot({ ...cineShot, emotionTags: v })} /></div>
-                <div><Text style={fl}>叙事功能</Text><Input size="small" value={cineShot.narrativeFunction || ''} style={{ width: '100%' }} onChange={e => setCineShot({ ...cineShot, narrativeFunction: e.target.value })} /></div>
-                <div><Text style={fl}>氛围特效</Text><Select size="small" value={cineShot.atmosphericEffects || ''} style={{ width: '100%' }} allowClear onChange={v => setCineShot({ ...cineShot, atmosphericEffects: v })}>{['无','雾','雨','雪','烟','灰尘','烛光','粒子'].map(a => <Option key={a} value={a}>{a}</Option>)}</Select></div>
-                <div><Text style={fl}>特效强度</Text><Select size="small" value={cineShot.effectIntensity || ''} style={{ width: '100%' }} allowClear onChange={v => setCineShot({ ...cineShot, effectIntensity: v })}>{['轻微','中等','强'].map(e => <Option key={e} value={e}>{e}</Option>)}</Select></div>
-              </div>
-            </fieldset>
-          </div>
-        )}
-      </Drawer>
-
       <Modal title="视角/关键帧" open={perspectiveModalOpen} onCancel={() => setPerspectiveModalOpen(false)} footer={null} width={400}>
         <div style={{ textAlign: 'center', padding: 20 }}>
           <Upload.Dragger

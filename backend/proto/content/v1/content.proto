@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package content.v1;
+
+option go_package = "short-drama-platform/proto/gen/go/content/v1;contentv1";
+
+import "common/common.proto";
+
+// ContentService — cases, works, scenes, characters management
+service ContentService {
+  rpc CreateCase(CreateCaseRequest) returns (CreateCaseResponse);
+  rpc GetCase(GetCaseRequest) returns (GetCaseResponse);
+  rpc ListCases(ListCasesRequest) returns (ListCasesResponse);
+  rpc CreateWork(CreateWorkRequest) returns (CreateWorkResponse);
+  rpc GetWork(GetWorkRequest) returns (GetWorkResponse);
+  rpc ListWorks(ListWorksRequest) returns (ListWorksResponse);
+  rpc GetScene(GetSceneRequest) returns (GetSceneResponse);
+  rpc GetCharacter(GetCharacterRequest) returns (GetCharacterResponse);
+}
+
+message Case {
+  string id = 1;
+  string title = 2;
+  string description = 3;
+  string genre = 4;
+  string cover_url = 5;
+  string status = 6;
+  int64 user_id = 7;
+  int64 created_at = 8;
+  int64 updated_at = 9;
+}
+
+message Work {
+  string id = 1;
+  string case_id = 2;
+  string title = 3;
+  string content = 4;
+  string status = 5;
+  int64 user_id = 6;
+  string pipeline_data = 7;
+  int64 created_at = 8;
+  int64 updated_at = 9;
+}
+
+message Scene {
+  string id = 1;
+  string case_id = 2;
+  string description = 3;
+  int32 scene_number = 4;
+  string setting = 5;
+  repeated string characters = 6;
+}
+
+message Character {
+  string id = 1;
+  string case_id = 2;
+  string name = 3;
+  string description = 4;
+  string role = 5;
+  string avatar_url = 6;
+}
+
+message CreateCaseRequest {
+  string title = 1;
+  string description = 2;
+  string genre = 3;
+  int64 user_id = 4;
+}
+
+message CreateCaseResponse {
+  string case_id = 1;
+}
+
+message GetCaseRequest {
+  string case_id = 1;
+}
+
+message GetCaseResponse {
+  Case case = 1;
+}
+
+message ListCasesRequest {
+  int64 user_id = 1;
+  common.Pagination pagination = 2;
+  string genre_filter = 3;
+}
+
+message ListCasesResponse {
+  repeated Case cases = 1;
+  int32 total = 2;
+}
+
+message CreateWorkRequest {
+  string case_id = 1;
+  string title = 2;
+  string content = 3;
+  int64 user_id = 4;
+}
+
+message CreateWorkResponse {
+  string work_id = 1;
+}
+
+message GetWorkRequest {
+  string work_id = 1;
+}
+
+message GetWorkResponse {
+  Work work = 1;
+}
+
+message ListWorksRequest {
+  string case_id = 1;
+  int64 user_id = 2;
+  common.Pagination pagination = 3;
+}
+
+message ListWorksResponse {
+  repeated Work works = 1;
+  int32 total = 2;
+}
+
+message GetSceneRequest {
+  string scene_id = 1;
+}
+
+message GetSceneResponse {
+  Scene scene = 1;
+}
+
+message GetCharacterRequest {
+  string character_id = 1;
+}
+
+message GetCharacterResponse {
+  Character character = 1;
+}

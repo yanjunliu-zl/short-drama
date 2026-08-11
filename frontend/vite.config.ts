@@ -26,56 +26,64 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api/v1/users': {
-        target: 'http://localhost:8080',
+        target: 'http://localhost:9080',
         changeOrigin: true,
       },
       '/api/v1/comments': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:9080',
         changeOrigin: true,
       },
       '/api/v1/works': {
-        target: 'http://localhost:8082',
+        target: 'http://localhost:9080',
         changeOrigin: true,
       },
       '/api/v1/cases': {
-        target: 'http://localhost:8082',
+        target: 'http://localhost:9080',
         changeOrigin: true,
       },
       '/api/v1/credits': {
-        target: 'http://localhost:8082',
+        target: 'http://localhost:9080',
         changeOrigin: true,
       },
       '/api/v1/recommendations': {
-        target: 'http://localhost:8004',
+        target: 'http://localhost:9080',
         changeOrigin: true,
       },
       '/api/v1/search': {
-        target: 'http://localhost:8005',
+        target: 'http://localhost:9080',
         changeOrigin: true,
       },
       '/api/v1/ws': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:9080',
         changeOrigin: true,
         ws: true,
       },
       '/api/v1/scripts': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:9080',
         changeOrigin: true,
       },
       '/api/v1/storyboard': {
-        target: 'http://localhost:8003',
+        target: 'http://localhost:9080',
+        changeOrigin: true,
+      },
+      '/api/v1/characters': {
+        target: 'http://localhost:9080',
+        changeOrigin: true,
+      },
+      '/api/v1/scenes': {
+        target: 'http://localhost:9080',
         changeOrigin: true,
       },
       '/api/v1/assets': {
-        target: 'http://localhost:8082',
+        target: 'http://localhost:9080',
         changeOrigin: true,
       },
       '/api/v1/render': {
-        target: 'http://localhost:8002',
+        target: 'http://localhost:9080',
         changeOrigin: true,
       },
       '/api/v1/videos': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:9080',
         changeOrigin: true,
       },
     },

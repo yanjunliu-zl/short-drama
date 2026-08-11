@@ -1,4 +1,10 @@
-"""日志转发器 — Docker logs → Elasticsearch (Windows/macOS/Linux 通用)"""
+"""日志转发器 — Docker logs → Elasticsearch (Windows/macOS/Linux 通用)
+
+两种模式:
+  模式 A (默认): Docker → log-shipper → Elasticsearch (直写)
+  模式 B (生产):  Docker → log-shipper → Kafka → ES Consumer (Kafka 缓冲)
+    启用: 设置 KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+"""
 import json
 import logging
 import os
@@ -15,11 +21,58 @@ ES_PORT = int(os.getenv("ES_PORT", "9200"))
 ES_URL = f"http://{ES_HOST}:{ES_PORT}"
 INDEX_PREFIX = "shortdrama-logs"
 
+KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "")
+KAFKA_TOPIC = os.getenv("KAFKA_LOG_TOPIC", "shortdrama-logs")
+
 client = docker.from_env()
+
+# ── Kafka producer (lazy init) ──
+_kafka_producer = None
+
+
+def _get_kafka_producer():
+    """Lazy-init Kafka producer for log buffering."""
+    global _kafka_producer
+    if _kafka_producer is not None:
+        return _kafka_producer
+    try:
+        from kafka import KafkaProducer
+        _kafka_producer = KafkaProducer(
+            bootstrap_servers=KAFKA_BOOTSTRAP,
+            value_serializer=lambda v: json.dumps(v, default=str).encode("utf-8"),
+            compression_type="gzip",
+            max_request_size=1048576,
+            retries=3,
+            acks=1,
+        )
+        logger.info("Kafka producer connected: %s", KAFKA_BOOTSTRAP)
+    except ImportError:
+        logger.warning("kafka-python not installed — falling back to ES direct")
+        _kafka_producer = False  # Sentinel: tried and failed
+    except Exception as e:
+        logger.warning("Kafka connect failed: %s — falling back to ES direct", e)
+        _kafka_producer = False
+    return _kafka_producer
+
+
+def send_to_kafka(entries: list):
+    """Send log entries to Kafka topic (mode B)."""
+    producer = _get_kafka_producer()
+    if not producer:
+        return False
+    try:
+        for entry in entries:
+            producer.send(KAFKA_TOPIC, entry)
+        producer.flush(timeout=5)
+        logger.info("Shipped %d log entries to Kafka topic %s", len(entries), KAFKA_TOPIC)
+        return True
+    except Exception as e:
+        logger.error("Kafka send failed: %s — falling back to ES", e)
+        return False
 
 
 def send_to_es(entries: list):
-    """批量发送日志到 Elasticsearch"""
+    """批量发送日志到 Elasticsearch (mode A)"""
     now = time.strftime("%Y.%m.%d")
     index = f"{INDEX_PREFIX}-{now}"
     # Build bulk payload
@@ -99,7 +152,13 @@ def main():
         try:
             entries, new_ts = collect_logs(since_ts, batch_size=200)
             if entries:
-                send_to_es(entries)
+                # Mode B: Kafka if available, else ES direct
+                if KAFKA_BOOTSTRAP:
+                    sent = send_to_kafka(entries)
+                    if not sent:
+                        send_to_es(entries)  # Fallback to ES direct
+                else:
+                    send_to_es(entries)
             since_ts = new_ts
         except Exception:
             logger.error("Collect loop error: %s", traceback.format_exc())

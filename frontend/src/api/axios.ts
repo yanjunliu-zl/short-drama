@@ -26,6 +26,13 @@ axiosInstance.interceptors.request.use(
     config.headers = config.headers || {}
     ;(config.headers as any)['X-Request-Timestamp'] = Date.now().toString()
 
+    // Debug logging
+    const method = config.method?.toUpperCase() || '?'
+    const url = `${config.baseURL || ''}${config.url || ''}`
+    const body = config.data ? (typeof config.data === 'string' ? config.data : JSON.stringify(config.data)) : ''
+    const bodyPreview = body.length > 500 ? body.substring(0, 500) + '...' : body
+    console.log(`[API] --> ${method} ${url}`, bodyPreview ? `\n  body: ${bodyPreview}` : '')
+
     return config
   },
   (error) => {
@@ -37,7 +44,14 @@ axiosInstance.interceptors.request.use(
 axiosInstance.interceptors.response.use(
   (response: AxiosResponse) => {
     // 处理成功的响应
-    const { data } = response
+    const { data, config } = response
+    const method = config.method?.toUpperCase() || '?'
+    const url = `${config.baseURL || ''}${config.url || ''}`
+
+    // Debug logging
+    const respBody = JSON.stringify(data)
+    const respPreview = respBody.length > 500 ? respBody.substring(0, 500) + '...' : respBody
+    console.log(`[API] <-- ${method} ${url}  ${response.status}`, respPreview ? `\n  resp: ${respPreview}` : '')
 
     // 如果后端返回特定的成功格式
     if (data && typeof data === 'object') {
@@ -57,6 +71,14 @@ axiosInstance.interceptors.response.use(
   },
   async (error) => {
     const originalRequest = error.config
+
+    // Debug logging for errors
+    if (originalRequest) {
+      const method = originalRequest.method?.toUpperCase() || '?'
+      const url = `${originalRequest.baseURL || ''}${originalRequest.url || ''}`
+      const status = error.response?.status || 'NETWORK'
+      console.log(`[API] <-- ${method} ${url}  ${status}  FAILED`, error.response?.data ? `\n  err: ${JSON.stringify(error.response.data).substring(0, 300)}` : `\n  err: ${error.message}`)
+    }
 
     // 处理401错误（token过期）
     if (error.response?.status === 401 && !originalRequest._retry) {

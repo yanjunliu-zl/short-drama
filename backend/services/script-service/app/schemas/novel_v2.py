@@ -49,6 +49,9 @@ class GlobalCharacter(BaseModel):
     name: str = Field(..., description="角色名")
     personality: str = Field(default="", description="性格特征")
     role: str = Field(default="配角", description="主角/配角/反派")
+    appearance: str = Field(default="", description="外貌特征：身高体型、发色发型、五官特征、常穿服饰等")
+    gender: str = Field(default="", description="性别：男/女")
+    age_range: str = Field(default="", description="年龄段：少年/青年/中年/老年")
 
 
 class GlobalScene(BaseModel):

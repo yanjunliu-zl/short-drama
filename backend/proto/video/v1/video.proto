@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package video.v1;
+
+option go_package = "short-drama-platform/proto/gen/go/video/v1;videov1";
+
+import "common/common.proto";
+
+// VideoService — video processing, transcoding, and management
+service VideoService {
+  rpc ProcessVideo(ProcessVideoRequest) returns (ProcessVideoResponse);
+  rpc GetVideoStatus(GetVideoStatusRequest) returns (common.StatusResponse);
+  rpc GetVideo(GetVideoRequest) returns (GetVideoResponse);
+  rpc ListVideos(ListVideosRequest) returns (ListVideosResponse);
+  rpc DeleteVideo(DeleteVideoRequest) returns (common.Empty);
+  rpc GetPresignedURL(GetPresignedURLRequest) returns (GetPresignedURLResponse);
+}
+
+// Video entity
+message Video {
+  int64 id = 1;
+  string task_id = 2;
+  int64 user_id = 3;
+  string title = 4;
+  string url = 5;            // CDN/public URL
+  string thumbnail_url = 6;
+  int64 duration_ms = 7;     // Duration in milliseconds
+  int64 file_size = 8;       // File size in bytes
+  string format = 9;         // "mp4", "mov", "webm"
+  string resolution = 10;    // "1920x1080"
+  string status = 11;        // "processing", "completed", "failed"
+  int64 created_at = 12;
+  int64 updated_at = 13;
+}
+
+// Submit video processing job
+message ProcessVideoRequest {
+  repeated string video_urls = 1;   // Source video URLs
+  string output_format = 2;         // "mp4"
+  string resolution = 3;            // "1920x1080"
+  int64 user_id = 4;
+  string project_id = 5;
+}
+
+message ProcessVideoResponse {
+  string task_id = 1;
+  string status = 2;
+}
+
+// Get video processing status
+message GetVideoStatusRequest {
+  string task_id = 1;
+}
+
+// Get video by ID
+message GetVideoRequest {
+  int64 video_id = 1;
+}
+
+message GetVideoResponse {
+  Video video = 1;
+}
+
+// List user videos
+message ListVideosRequest {
+  int64 user_id = 1;
+  common.Pagination pagination = 2;
+}
+
+message ListVideosResponse {
+  repeated Video videos = 1;
+  int32 total = 2;
+}
+
+// Delete video
+message DeleteVideoRequest {
+  int64 video_id = 1;
+}
+
+// Generate presigned URL for upload/download
+message GetPresignedURLRequest {
+  string object_key = 1;
+  int64 expiry_seconds = 2;  // Default 3600 (1 hour)
+}
+
+message GetPresignedURLResponse {
+  string url = 1;
+  int64 expires_at = 2;
+}

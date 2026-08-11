@@ -270,8 +270,11 @@ async def generate_shots(
     task_id = str(uuid.uuid4())
     script_len = len(request.script) if request.script else 0
     ep_count = request.episodeCount or 0
+    scene_refs = request.sceneRefs or []
+    char_names = request.characterNames or []
     logger.info(f"[API] POST /shots/generate task_id={task_id} title={request.title} "
-                f"script_len={script_len} episodes={ep_count}")
+                f"script_len={script_len} episodes={ep_count} "
+                f"sceneRefs({len(scene_refs)})={scene_refs[:5]} charNames({len(char_names)})={char_names[:10]}")
     try:
         background_tasks.add_task(
             _generate_shots_task,

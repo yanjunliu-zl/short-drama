@@ -1,0 +1,14 @@
+version: v1
+name: buf.build/shortdrama/platform
+lint:
+  use:
+    - STANDARD
+  except:
+    - PACKAGE_VERSION_SUFFIX       # We use v1 packages explicitly
+    - RPC_REQUEST_RESPONSE_UNIQUE  # Allow shared Empty/StatusResponse types
+    - RPC_RESPONSE_STANDARD_NAME   # Allow custom response naming
+breaking:
+  use:
+    - FILE
+  except:
+    - FILE_NO_DELETE  # Allow deleting unused files during migration

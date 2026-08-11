@@ -562,8 +562,8 @@ class ScriptGenerationEngine:
         if self.mock_mode:
             return {
                 "characters": [
-                    {"name": "主角", "personality": "勇敢坚毅", "role": "主角"},
-                    {"name": "配角", "personality": "机智幽默", "role": "配角"},
+                    {"name": "主角", "personality": "勇敢坚毅", "role": "主角", "appearance": "", "gender": "男", "age_range": "青年"},
+                    {"name": "配角", "personality": "机智幽默", "role": "配角", "appearance": "", "gender": "女", "age_range": "青年"},
                 ],
                 "relationships": [
                     {"source": "主角", "target": "配角", "relation_type": "朋友",
@@ -1451,7 +1451,7 @@ class ScriptGenerationEngine:
             for c_name in ch.get("characters", []):
                 name = c_name.strip()
                 if name and name not in chapter_chars:
-                    chapter_chars[name] = {"name": name, "role": "配角", "gender": "", "description": ""}
+                    chapter_chars[name] = {"name": name, "role": "配角", "gender": "", "description": "", "personality": "", "appearance": "", "age_range": ""}
             loc = ch.get("location", "").strip()
             if loc and loc not in chapter_locations:
                 chapter_locations[loc] = {"name": loc, "description": ""}
@@ -1469,6 +1469,9 @@ class ScriptGenerationEngine:
                     "role": gc.get("role", "配角"),
                     "gender": gc.get("gender", ""),
                     "description": gc.get("personality", gc.get("description", "")),
+                    "personality": gc.get("personality", ""),
+                    "appearance": gc.get("appearance", ""),
+                    "age_range": gc.get("age_range", ""),
                 }
 
         # Add global key scenes as locations
@@ -1562,6 +1565,7 @@ class ScriptGenerationEngine:
         progress_callback=None, user_context: str = "",
     ) -> Dict[str, Any]:
         """Generate script from an outline/idea (lightweight pipeline)."""
+        logger.info(f"[generate_from_outline] ENTER outline_len={len(outline_text)} target_eps={target_episodes}")
         return await self.outline.generate(
             outline_text=outline_text, style=style,
             target_episodes=target_episodes,

@@ -385,6 +385,13 @@ export const scriptService = {
     style?: string
     width?: number
     height?: number
+    reference_images?: Record<string, Record<string, string>>
+    frame_type?: string
+    shot_type?: string
+    characters?: string[]
+    lighting?: string
+    emotion?: string[]
+    camera_movement?: string
   }): Promise<{ task_id: string; status: string; image_url?: string; message: string }> => {
     const response = await api.post('/v1/render/preview-image', data)
     return response.data

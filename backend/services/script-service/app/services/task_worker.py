@@ -65,7 +65,7 @@ class TaskWorker:
             from app.services.task_queue import KafkaQueue
         except ImportError:
             import sys, os as _os
-            shared_path = _os.path.join(_os.path.dirname(__file__), '..', '..', '..', 'shared', 'python')
+            shared_path = _os.path.join(_os.path.dirname(__file__), '..', '..', 'shared', 'python')
             if shared_path not in sys.path:
                 sys.path.insert(0, _os.path.abspath(shared_path))
             from task_queue import KafkaQueue
@@ -101,7 +101,7 @@ class TaskWorker:
             # Fallback: try relative import for local dev
             import sys
             import os as _os
-            shared_path = _os.path.join(_os.path.dirname(__file__), '..', '..', '..', 'shared', 'python')
+            shared_path = _os.path.join(_os.path.dirname(__file__), '..', '..', 'shared', 'python')
             if shared_path not in sys.path:
                 sys.path.insert(0, _os.path.abspath(shared_path))
             from task_queue import MemoryQueue, Task as TQTask
@@ -117,6 +117,9 @@ class TaskWorker:
                     continue
                 async with sem:
                     payload = task.to_dict() if hasattr(task, 'to_dict') else task
+                    # Merge actual payload (task_type, request, etc.) into metadata
+                    if hasattr(task, 'payload'):
+                        payload.update(task.payload)
                     await self._execute_task(payload)
 
         asyncio.create_task(_loop())
@@ -130,11 +133,19 @@ class TaskWorker:
 
         Returns task_id immediately — consumer processes asynchronously.
         """
-        from app.services.task_queue import Task as TQTask
+        try:
+            from app.services.task_queue import Task as TQTask
+        except ImportError:
+            import sys
+            import os as _os
+            shared_path = _os.path.join(_os.path.dirname(__file__), '..', '..', 'shared', 'python')
+            if shared_path not in sys.path:
+                sys.path.insert(0, _os.path.abspath(shared_path))
+            from task_queue import Task as TQTask
 
         task = TQTask(
             task_id=task_id,
-            queue_name="script",
+            queue_name="ai-tasks-script",
             payload={"task_type": task_type, "request": request_data, "enqueued_at": time.time()},
         )
 
@@ -203,8 +214,8 @@ class TaskWorker:
         })
 
         n2s_v2 = ScriptGenerationEngine(
-            llm=svc.ai_service.llm,
-            mock_mode=getattr(svc.ai_service, '_mock_mode', False),
+            llm=svc.llm,
+            mock_mode=getattr(svc, '_mock_mode', False),
             config=app_settings,
         )
 
@@ -300,8 +311,8 @@ class TaskWorker:
         })
 
         n2s_v2 = ScriptGenerationEngine(
-            llm=svc.ai_service.llm,
-            mock_mode=getattr(svc.ai_service, '_mock_mode', False),
+            llm=svc.llm,
+            mock_mode=getattr(svc, '_mock_mode', False),
             config=app_settings,
         )
 

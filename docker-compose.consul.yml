@@ -1,0 +1,84 @@
+# Consul 3-node cluster overlay for service discovery
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.consul.yml up -d
+version: '3.8'
+
+services:
+  consul:
+    image: hashicorp/consul:1.20
+    container_name: shortdrama-consul
+    command:
+      - agent
+      - -server
+      - -bootstrap-expect=3
+      - -ui
+      - -client=0.0.0.0
+      - -retry-join=consul
+      - -retry-join=consul-2
+      - -retry-join=consul-3
+      - -datacenter=dc1
+      - -node=consul-1
+    ports:
+      - "8500:8500"       # HTTP API + UI
+      - "8600:8600/udp"   # DNS interface
+    volumes:
+      - consul_data:/consul/data
+    networks:
+      - shortdrama-network
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  consul-2:
+    image: hashicorp/consul:1.20
+    container_name: shortdrama-consul-2
+    command:
+      - agent
+      - -server
+      - -retry-join=consul
+      - -datacenter=dc1
+      - -node=consul-2
+    networks:
+      - shortdrama-network
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  consul-3:
+    image: hashicorp/consul:1.20
+    container_name: shortdrama-consul-3
+    command:
+      - agent
+      - -server
+      - -retry-join=consul
+      - -datacenter=dc1
+      - -node=consul-3
+    networks:
+      - shortdrama-network
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+volumes:
+  consul_data:
+    driver: local

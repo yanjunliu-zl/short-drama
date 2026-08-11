@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/zeromicro/go-zero v1.10.2
+	short-drama-platform/shared v0.0.0
 // github.com/zeromicro/zero-contrib/zrpc/registry/consul v0.0.0-20231026134313-9b883d63c97d
 )
 

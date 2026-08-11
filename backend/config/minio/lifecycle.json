@@ -1,0 +1,64 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-temp-uploads",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "temp/"
+      },
+      "Expiration": {
+        "Days": 1
+      }
+    },
+    {
+      "ID": "expire-failed-tasks",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "failed/"
+      },
+      "Expiration": {
+        "Days": 7
+      }
+    },
+    {
+      "ID": "tier-videos-to-warm-storage",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "video/"
+      },
+      "Transitions": [
+        {
+          "Days": 30,
+          "StorageClass": "WARM_TIER"
+        },
+        {
+          "Days": 90,
+          "StorageClass": "COLD_TIER"
+        }
+      ]
+    },
+    {
+      "ID": "tier-images-to-warm-storage",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "image/"
+      },
+      "Transitions": [
+        {
+          "Days": 30,
+          "StorageClass": "WARM_TIER"
+        }
+      ]
+    },
+    {
+      "ID": "expire-old-versions",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "versions/"
+      },
+      "Expiration": {
+        "Days": 365
+      }
+    }
+  ]
+}

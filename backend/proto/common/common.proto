@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package common;
+
+option go_package = "short-drama-platform/proto/gen/go/common;common";
+
+// Shared types used across all services
+
+message Pagination {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+message Empty {}
+
+message IDRequest {
+  int64 id = 1;
+}
+
+message IDResponse {
+  int64 id = 1;
+}
+
+message StatusResponse {
+  string status = 1;    // "ok", "error", "processing", "completed", "failed"
+  string message = 2;
+  int32 progress = 3;   // 0-100
+}
+
+message Timestamp {
+  int64 created_at = 1;  // Unix timestamp
+  int64 updated_at = 2;
+}
+
+// Task identifiers for async AI operations
+message TaskID {
+  string task_id = 1;
+}

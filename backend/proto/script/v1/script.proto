@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package script.v1;
+
+option go_package = "short-drama-platform/proto/gen/go/script/v1;scriptv1";
+
+import "common/common.proto";
+
+// ScriptService — AI script generation, novel-to-script conversion, script management
+service ScriptService {
+  rpc GenerateScript(GenerateScriptRequest) returns (GenerateScriptResponse);
+  rpc GetScriptStatus(GetScriptStatusRequest) returns (common.StatusResponse);
+  rpc GetScript(GetScriptRequest) returns (GetScriptResponse);
+  rpc ListScripts(ListScriptsRequest) returns (ListScriptsResponse);
+  rpc NovelToScript(NovelToScriptRequest) returns (NovelToScriptResponse);
+  rpc AnalyzeScript(AnalyzeScriptRequest) returns (AnalyzeScriptResponse);
+}
+
+// Script entity
+message Script {
+  int64 id = 1;
+  string task_id = 2;
+  int64 user_id = 3;
+  string title = 4;
+  string content = 5;        // Full script text
+  string genre = 6;
+  string status = 7;         // "draft", "completed", "failed"
+  int32 scene_count = 8;
+  int64 created_at = 9;
+  int64 updated_at = 10;
+}
+
+// Generate script from idea/prompt
+message GenerateScriptRequest {
+  string title = 1;
+  string prompt = 2;         // Creative idea or outline
+  string genre = 3;
+  int64 user_id = 4;
+  int32 episode_count = 5;   // Number of episodes
+  string style = 6;          // Writing style preference
+}
+
+message GenerateScriptResponse {
+  string task_id = 1;
+  string status = 2;         // "processing"
+  string message = 3;
+}
+
+// Get script generation status
+message GetScriptStatusRequest {
+  string task_id = 1;
+}
+
+// Get script by ID
+message GetScriptRequest {
+  int64 script_id = 1;
+}
+
+message GetScriptResponse {
+  Script script = 1;
+}
+
+// List user scripts
+message ListScriptsRequest {
+  int64 user_id = 1;
+  common.Pagination pagination = 2;
+  string status_filter = 3;
+}
+
+message ListScriptsResponse {
+  repeated Script scripts = 1;
+  int32 total = 2;
+}
+
+// Novel to script conversion
+message NovelToScriptRequest {
+  string novel_text = 1;
+  string title = 2;
+  int64 user_id = 3;
+  int32 episode_count = 4;
+  string style = 5;
+}
+
+message NovelToScriptResponse {
+  string task_id = 1;
+  string status = 2;
+}
+
+// Script analysis (characters, scenes, arcs)
+message AnalyzeScriptRequest {
+  int64 script_id = 1;
+}
+
+message AnalyzeScriptResponse {
+  string task_id = 1;
+  string status = 2;
+}

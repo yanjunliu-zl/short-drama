@@ -31,6 +31,13 @@ class StoryboardCacheService:
             "episode_contents_hash": hashlib.md5(
                 json.dumps(request.get('episodeContents', []), sort_keys=True).encode()
             ).hexdigest()[:8],
+            # Include sceneRefs and characterNames so cache varies with asset data
+            "scene_refs_hash": hashlib.md5(
+                json.dumps(request.get('sceneRefs', []), sort_keys=True).encode()
+            ).hexdigest()[:8],
+            "character_names_hash": hashlib.md5(
+                json.dumps(request.get('characterNames', []), sort_keys=True).encode()
+            ).hexdigest()[:8],
         }
         key_str = json.dumps(key_data, sort_keys=True)
         return f"{prefix}:{hashlib.md5(key_str.encode()).hexdigest()}"

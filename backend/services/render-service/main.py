@@ -61,6 +61,15 @@ async def startup_event():
     await get_seedance_service()
     await get_storage_service()
     await get_task_store()
+    # ComfyUI — 本地初始化 (异步，失败不影响主流程)
+    if settings.COMFYUI_ENABLED:
+        try:
+            from app.services.comfyui_service import ComfyUIService
+            _comfyui = ComfyUIService()
+            await _comfyui.initialize()
+            logger.info("ComfyUI service initialized: %s", "enabled" if _comfyui.enabled else "unavailable")
+        except Exception as e:
+            logger.warning("ComfyUI init failed (non-critical): %s", e)
     logger.info("Service started successfully")
 
 

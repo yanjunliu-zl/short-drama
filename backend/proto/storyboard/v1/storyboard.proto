@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package storyboard.v1;
+
+option go_package = "short-drama-platform/proto/gen/go/storyboard/v1;storyboardv1";
+
+import "common/common.proto";
+
+// StoryboardService — AI storyboard generation from scripts
+service StoryboardService {
+  rpc GenerateStoryboard(GenerateStoryboardRequest) returns (GenerateStoryboardResponse);
+  rpc GetStoryboardTask(GetStoryboardTaskRequest) returns (GetStoryboardTaskResponse);
+  rpc ListStoryboardTasks(ListStoryboardTasksRequest) returns (ListStoryboardTasksResponse);
+}
+
+message StoryboardTask {
+  string task_id = 1;
+  int64 user_id = 2;
+  int64 script_id = 3;
+  string status = 4;
+  string result_json = 5;    // Full storyboard output as JSON
+  int32 progress = 6;
+  string error = 7;
+  int64 created_at = 8;
+  int64 updated_at = 9;
+}
+
+message GenerateStoryboardRequest {
+  int64 script_id = 1;
+  string script_content = 2;
+  int64 user_id = 3;
+  int32 max_tokens = 4;
+  int32 max_script_chars = 5;
+  double temperature = 6;
+  int32 timeout = 7;
+}
+
+message GenerateStoryboardResponse {
+  string task_id = 1;
+  string status = 2;
+}
+
+message GetStoryboardTaskRequest {
+  string task_id = 1;
+}
+
+message GetStoryboardTaskResponse {
+  StoryboardTask task = 1;
+}
+
+message ListStoryboardTasksRequest {
+  int64 user_id = 1;
+  common.Pagination pagination = 2;
+}
+
+message ListStoryboardTasksResponse {
+  repeated StoryboardTask tasks = 1;
+  int32 total = 2;
+}

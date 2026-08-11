@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     GOOGLE_CLOUD_LOCATION: str = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
     GOOGLE_API_KEY: Optional[str] = os.getenv("GOOGLE_API_KEY", None)
     VEO_TIMEOUT: int = int(os.getenv("VEO_TIMEOUT", 600))
+    # 本地 ComfyUI + Minimax H3 (视频生成)
+    COMFYUI_ENABLED: bool = os.getenv("COMFYUI_ENABLED", "false").lower() == "true"
+    COMFYUI_API_URL: str = os.getenv("COMFYUI_API_URL", "http://localhost:8188")
+    COMFYUI_TIMEOUT: int = int(os.getenv("COMFYUI_TIMEOUT", 600))
+    COMFYUI_MODEL: str = os.getenv("COMFYUI_MODEL", "minimax-h3")
 
     # Platform compliance — 红果短剧/快手短剧 standard
     PORTRAIT_MODE: bool = os.getenv("PORTRAIT_MODE", "true").lower() == "true"  # 9:16 vertical

@@ -14,6 +14,7 @@ type ContentRepository interface {
 	// 场景
 	CreateScene(ctx context.Context, scene *model.Scene) error
 	FindSceneByID(ctx context.Context, id int64) (*model.Scene, error)
+	FindSceneByTitle(ctx context.Context, title string) (*model.Scene, error)
 	FindScenes(ctx context.Context, caseID string, page, pageSize int) ([]*model.Scene, error)
 	CountScenes(ctx context.Context, caseID string) (int64, error)
 	UpdateScene(ctx context.Context, scene *model.Scene) error
@@ -22,6 +23,7 @@ type ContentRepository interface {
 	// 角色
 	CreateCharacter(ctx context.Context, char *model.Character) error
 	FindCharacterByID(ctx context.Context, id int64) (*model.Character, error)
+	FindCharacterByName(ctx context.Context, name string) (*model.Character, error)
 	FindCharacters(ctx context.Context, caseID string, page, pageSize int) ([]*model.Character, error)
 	CountCharacters(ctx context.Context, caseID string) (int64, error)
 	UpdateCharacter(ctx context.Context, char *model.Character) error
@@ -116,6 +118,18 @@ func (r *mysqlContentRepository) FindSceneByID(ctx context.Context, id int64) (*
 	return &scene, nil
 }
 
+var findSceneByTitleSQL = `SELECT id, case_id, title, description, location, time_of_day, sort_order, created_at, updated_at
+	FROM scenes WHERE title = ? LIMIT 1`
+
+func (r *mysqlContentRepository) FindSceneByTitle(ctx context.Context, title string) (*model.Scene, error) {
+	var scene model.Scene
+	err := r.conn.QueryRowCtx(ctx, &scene, findSceneByTitleSQL, title)
+	if err != nil {
+		return nil, fmt.Errorf("find scene by title %s: %w", title, err)
+	}
+	return &scene, nil
+}
+
 var findScenesSQL = `SELECT id, case_id, title, description, location, time_of_day, sort_order, created_at, updated_at
 	FROM scenes WHERE case_id = ? ORDER BY sort_order ASC`
 
@@ -181,6 +195,18 @@ func (r *mysqlContentRepository) FindCharacterByID(ctx context.Context, id int64
 	err := r.conn.QueryRowCtx(ctx, &char, findCharacterByIDSQL, id)
 	if err != nil {
 		return nil, fmt.Errorf("find character by id %d: %w", id, err)
+	}
+	return &char, nil
+}
+
+var findCharacterByNameSQL = `SELECT id, case_id, name, role, description, avatar_url, created_at, updated_at
+	FROM characters WHERE name = ? LIMIT 1`
+
+func (r *mysqlContentRepository) FindCharacterByName(ctx context.Context, name string) (*model.Character, error) {
+	var char model.Character
+	err := r.conn.QueryRowCtx(ctx, &char, findCharacterByNameSQL, name)
+	if err != nil {
+		return nil, fmt.Errorf("find character by name %s: %w", name, err)
 	}
 	return &char, nil
 }

@@ -18,7 +18,8 @@ def init_tracing(service_name: str, otlp_endpoint: str = None):
     os.environ.setdefault("OTEL_SERVICE_NAME", service_name)
     os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
     os.environ.setdefault("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
-    os.environ.setdefault("OTEL_TRACES_SAMPLER", "parentbased_always_on")
+    os.environ.setdefault("OTEL_TRACES_SAMPLER", "parentbased_traceidratio")
+    os.environ.setdefault("OTEL_TRACES_SAMPLER_ARG", os.getenv("OTEL_TRACES_SAMPLER_ARG", "0.10"))
 
     try:
         from opentelemetry import trace

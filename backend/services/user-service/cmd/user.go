@@ -9,6 +9,8 @@ import (
 	"short-drama-platform/user-service/internal/handler"
 	"short-drama-platform/user-service/internal/svc"
 
+	"short-drama-platform/shared/middleware"
+
 	"github.com/zeromicro/go-zero/core/conf"
 	"github.com/zeromicro/go-zero/rest"
 )
@@ -26,6 +28,7 @@ func main() {
 
 	// 创建HTTP服务
 	server := rest.MustNewServer(c.RestConf)
+	server.Use(middleware.TraceMiddleware)
 	defer server.Stop()
 
 	// 注册路由

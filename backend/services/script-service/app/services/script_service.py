@@ -469,6 +469,10 @@ class ScriptService:
             except Exception:
                 pass
 
+    async def get_script(self, script_id) -> Optional[dict]:
+        """获取剧本详情，委托给 ScriptRepository"""
+        return await self.repo.get_script(int(script_id))
+
     async def get_script_character_graph(self, script_id: int) -> Optional[dict]:
         return await self.repo.get_character_graph(script_id)
 

@@ -208,6 +208,8 @@ export interface Shot {
   // 连续性
   continuityRef?: string
   playbackSpeed?: string
+  // 首帧图URL（前端生成后传入，用作I2V的起始帧）
+  startImageUrl?: string
 }
 
 export interface ReferenceImages {

@@ -68,7 +68,8 @@ nginx_config:
       keepalive: 320
       keepalive_timeout: 60s
       keepalive_requests: 1000
-    send_timeout: 10s
+    send_timeout: 600s
+    proxy_read_timeout: 600s
     underscores_in_headers: 'on'
     real_ip_header: X-Real-IP
     enable_access_log: true
@@ -160,7 +161,7 @@ plugin_attr:
       inactive_timeout: 1
       max_export_batch_size: 16
     collector:
-      address: 127.0.0.1:4318
+      address: jaeger:4318
       request_timeout: 3
       request_headers:
         Authorization: token
@@ -193,7 +194,7 @@ plugin_attr:
     delay: 3
     hooks_file: /usr/local/apisix/plugin_inspect_hooks.lua
 deployment:
-  config_provider: etcd
+  config_provider: yaml
   etcd:
     startup_retry: 2
     host:
@@ -203,9 +204,9 @@ deployment:
       verify: true
     prefix: /apisix
     watch_timeout: 50
-  role_traditional:
-    config_provider: etcd
-  role: traditional
+  role_data_plane:
+    config_provider: yaml
+  role: data_plane
   admin:
     allow_admin:
     - 127.0.0.0/24

@@ -1,24 +1,39 @@
 # Filebeat — Docker logs → Elasticsearch
-filebeat.inputs:
-  - type: docker
-    containers.ids: "*"
-    multiline.pattern: '^{'
-    multiline.negate: true
-    multiline.match: after
-    json.keys_under_root: true
-    json.add_error_key: true
-    processors:
-      - add_docker_metadata:
-          host: "unix:///var/run/docker.sock"
+#
+# 生产环境日志管道有两种模式：
+#
+# 模式 A（默认）: Docker → Filebeat → Elasticsearch（低延迟，ES 故障时可能丢日志）
+# 模式 B（推荐生产）: Docker → Filebeat → Kafka → Logstash/Consumer → Elasticsearch
+#   启用方式：取消下方 kafka output 注释，注释掉 elasticsearch output
 
+filebeat.inputs:
+  - type: filestream
+    id: docker-logs
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    parsers:
+      - ndjson:
+          keys_under_root: true
+          add_error_key: true
+
+# ── 模式 A: 直写 Elasticsearch（默认） ──
 output.elasticsearch:
   hosts: ["elasticsearch:9200"]
   index: "shortdrama-logs-%{+yyyy.MM.dd}"
 
-setup.ilm.enabled: true
-setup.ilm.rollover_alias: "shortdrama-logs"
-setup.ilm.pattern: "{now/d}-000001"
-setup.ilm.policy_name: "shortdrama-logs-policy"
+# ── 模式 B: Kafka 缓冲（取消注释以启用，同时注释掉上方 elasticsearch output） ──
+# 启用条件: TASK_QUEUE_BACKEND=kafka
+# output.kafka:
+#   hosts: ["kafka:9092"]
+#   topic: "shortdrama-logs"
+#   partition.round_robin:
+#     reachable_only: false
+#   required_acks: 1
+#   compression: gzip
+#   max_message_bytes: 1000000
+
+setup.template.enabled: false
+setup.ilm.enabled: false
 
 logging.level: warning
 logging.to_files: false

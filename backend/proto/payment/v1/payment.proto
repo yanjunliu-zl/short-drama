@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package payment.v1;
+
+option go_package = "short-drama-platform/proto/gen/go/payment/v1;paymentv1";
+
+import "common/common.proto";
+
+// PaymentService — WeChat Pay, Alipay integration, order management
+service PaymentService {
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+  rpc ProcessCallback(ProcessCallbackRequest) returns (ProcessCallbackResponse);
+  rpc CreateRefund(CreateRefundRequest) returns (CreateRefundResponse);
+}
+
+message PaymentOrder {
+  string id = 1;
+  string order_no = 2;
+  int64 user_id = 3;
+  string method = 4;          // "wechat", "alipay"
+  int64 amount_cents = 5;     // Amount in cents
+  string currency = 6;        // "CNY"
+  string status = 7;          // "pending", "paid", "refunded", "cancelled"
+  string description = 8;
+  int64 created_at = 9;
+  int64 paid_at = 10;
+}
+
+message RefundOrder {
+  int64 id = 1;
+  string refund_no = 2;
+  string payment_id = 3;
+  int64 amount_cents = 4;
+  string reason = 5;
+  string status = 6;
+  int64 created_at = 7;
+}
+
+message CreateOrderRequest {
+  int64 user_id = 1;
+  string method = 2;
+  int64 amount_cents = 3;
+  string description = 4;
+}
+
+message CreateOrderResponse {
+  string order_id = 1;
+  string order_no = 2;
+  string payment_url = 3;     // Redirect URL or QR code URL
+}
+
+message GetOrderRequest {
+  string order_id = 1;
+}
+
+message GetOrderResponse {
+  PaymentOrder order = 1;
+}
+
+message ListOrdersRequest {
+  int64 user_id = 1;
+  common.Pagination pagination = 2;
+  string status_filter = 3;
+}
+
+message ListOrdersResponse {
+  repeated PaymentOrder orders = 1;
+  int32 total = 2;
+}
+
+message ProcessCallbackRequest {
+  string method = 1;          // "wechat", "alipay"
+  string raw_body = 2;        // Raw callback body
+  map<string, string> headers = 3;
+}
+
+message ProcessCallbackResponse {
+  string status = 1;          // "success", "failed"
+  string message = 2;
+}
+
+message CreateRefundRequest {
+  string payment_id = 1;
+  int64 amount_cents = 2;
+  string reason = 3;
+}
+
+message CreateRefundResponse {
+  string refund_id = 1;
+  string refund_no = 2;
+  string status = 3;
+}

@@ -81,6 +81,7 @@ services:
     image: mysql:8.0
     container_name: shortdrama-mysql
     restart: unless-stopped
+    logging: *logging
     environment:
       MYSQL_ROOT_PASSWORD: password
       MYSQL_DATABASE: shortdrama
@@ -104,6 +105,7 @@ services:
     image: redis:7-alpine
     container_name: shortdrama-redis
     restart: unless-stopped
+    logging: *logging
     ports:
       - "6380:6379"
     volumes:
@@ -123,6 +125,7 @@ services:
     image: rabbitmq:3-management-alpine
     container_name: shortdrama-rabbitmq
     restart: unless-stopped
+    logging: *logging
     environment:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: admin123
@@ -148,11 +151,12 @@ services:
     image: apache/kafka:3.9.0
     container_name: shortdrama-kafka
     restart: unless-stopped
+    logging: *logging
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: "broker,controller"
       KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
-      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,CONTROLLER://kafka:9093"
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
       KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
       KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
@@ -178,6 +182,7 @@ services:
     image: clickhouse/clickhouse-server:24.8-alpine
     container_name: shortdrama-clickhouse
     restart: unless-stopped
+    logging: *logging
     environment:
       CLICKHOUSE_DB: shortdrama
       CLICKHOUSE_USER: default
@@ -204,6 +209,7 @@ services:
     image: apache/apisix:3.10.0-debian
     container_name: shortdrama-apisix
     restart: unless-stopped
+    logging: *logging
     ports:
       - "9080:9080"   # HTTP
       - "9443:9443"   # HTTPS
@@ -226,9 +232,10 @@ services:
     image: quay.io/coreos/etcd:v3.5.15
     container_name: shortdrama-etcd
     restart: unless-stopped
+    logging: *logging
     command: etcd --advertise-client-urls=http://etcd:2379 --listen-client-urls=http://0.0.0.0:2379
     ports:
-      - "2379:2379"
+      - "2378:2379"
     volumes:
       - etcd_data:/etcd-data
     networks:
@@ -243,8 +250,9 @@ services:
     image: apache/apisix-dashboard:3.0.1-alpine
     container_name: shortdrama-apisix-dashboard
     restart: unless-stopped
+    logging: *logging
     ports:
-      - "9002:9000"
+      - "9004:9000"
     volumes:
       - ./backend/api-gateway/apisix/dashboard-conf.yaml:/usr/local/apisix-dashboard/conf/conf.yaml:ro
     networks:
@@ -259,6 +267,7 @@ services:
     image: hashicorp/consul:1.20
     container_name: shortdrama-consul
     restart: unless-stopped
+    logging: *logging
     command: agent -server -bootstrap-expect=1 -ui -client=0.0.0.0 -datacenter=dc1 -node=consul-1
     ports:
       - "8500:8500"
@@ -278,6 +287,7 @@ services:
     image: minio/minio:latest
     container_name: shortdrama-minio
     restart: unless-stopped
+    logging: *logging
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -301,10 +311,11 @@ services:
       context: ./backend/services
       dockerfile: user-service/Dockerfile
       args:
-        - http_proxy=http://host.docker.internal:7890
-        - https_proxy=http://host.docker.internal:7890
+        - http_proxy=http://host.docker.internal:7897
+        - https_proxy=http://host.docker.internal:7897
     container_name: shortdrama-user-service
     restart: unless-stopped
+    logging: *logging
     environment:
       - APP_ENV=development
       - DB_HOST=mysql
@@ -336,9 +347,9 @@ services:
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8080)); s.send(b'GET /health HTTP/1.0\\r\\nHost:localhost\\r\\n\\r\\n'); print('OK' if b'200' in s.recv(256) else 'FAIL'); s.close()"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
 
   # 剧本生成服务 (FastAPI)
@@ -360,6 +371,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/services/script-service:/app
+      - ./backend/services/shared:/app/shared
       - ./backend/data/models:/app/models
     networks:
       - shortdrama-network
@@ -383,10 +395,11 @@ services:
       context: ./backend/services
       dockerfile: content-service/Dockerfile
       args:
-        - http_proxy=http://host.docker.internal:7890
-        - https_proxy=http://host.docker.internal:7890
+        - http_proxy=http://host.docker.internal:7897
+        - https_proxy=http://host.docker.internal:7897
     container_name: shortdrama-content-service
     restart: unless-stopped
+    logging: *logging
     environment:
       - APP_ENV=development
       - DB_HOST=mysql
@@ -415,9 +428,9 @@ services:
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python3", "-c", "import socket; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',8081)); s.send(b'GET /health HTTP/1.0\\r\\nHost:localhost\\r\\n\\r\\n'); print('OK' if b'200' in s.recv(256) else 'FAIL'); s.close()"]
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
 
   # 分镜生成服务 (FastAPI + DeepSeek LLM)
@@ -430,6 +443,7 @@ services:
         PIP_PROXY: ${PIP_PROXY:-}
     container_name: shortdrama-storyboard-service
     restart: unless-stopped
+    logging: *logging
     environment:
       - APP_ENV=development
       - DB_HOST=mysql
@@ -472,6 +486,7 @@ services:
         APT_PROXY: ${APT_PROXY:-}
     container_name: shortdrama-render-service
     restart: unless-stopped
+    logging: *logging
     environment:
       - APP_ENV=development
       - DB_HOST=mysql
@@ -498,6 +513,8 @@ services:
       - PORT=8002
       - LOG_LEVEL=INFO
       - DEBUG=false
+      - COMFYUI_ENABLED=${COMFYUI_ENABLED:-true}
+      - COMFYUI_API_URL=${COMFYUI_API_URL:-http://host.docker.internal:8188}
     ports:
       - "8002:8002"
     volumes:
@@ -524,10 +541,11 @@ services:
       context: ./backend/services/final-cut-service
       dockerfile: Dockerfile
       args:
-        - http_proxy=http://host.docker.internal:7890
-        - https_proxy=http://host.docker.internal:7890
+        - http_proxy=http://host.docker.internal:7897
+        - https_proxy=http://host.docker.internal:7897
     container_name: shortdrama-final-cut-service
     restart: unless-stopped
+    logging: *logging
     environment:
       - APP_ENV=development
       - DB_HOST=mysql
@@ -570,10 +588,11 @@ services:
       context: ./backend/services
       dockerfile: video-service/Dockerfile
       args:
-        - http_proxy=http://host.docker.internal:7890
-        - https_proxy=http://host.docker.internal:7890
+        - http_proxy=http://host.docker.internal:7897
+        - https_proxy=http://host.docker.internal:7897
     container_name: shortdrama-video-service
     restart: unless-stopped
+    logging: *logging
     environment:
       - APP_ENV=development
       - DB_HOST=mysql
@@ -619,6 +638,7 @@ services:
       dockerfile: Dockerfile.worker
     container_name: shortdrama-video-worker
     restart: unless-stopped
+    logging: *logging
     environment:
       - APP_ENV=development
       - CELERY_BROKER_URL=amqp://admin:admin123@rabbitmq:5672//
@@ -642,10 +662,11 @@ services:
       context: ./search-service
       dockerfile: Dockerfile
       args:
-        - http_proxy=http://host.docker.internal:7890
-        - https_proxy=http://host.docker.internal:7890
+        - http_proxy=http://host.docker.internal:7897
+        - https_proxy=http://host.docker.internal:7897
     container_name: shortdrama-search-service
     restart: unless-stopped
+    logging: *logging
     environment:
       - REDIS_ADDR=redis:6379
       - REDIS_DB=12
@@ -671,10 +692,11 @@ services:
       context: ./recommendation-service
       dockerfile: Dockerfile
       args:
-        - http_proxy=http://host.docker.internal:7890
-        - https_proxy=http://host.docker.internal:7890
+        - http_proxy=http://host.docker.internal:7897
+        - https_proxy=http://host.docker.internal:7897
     container_name: shortdrama-recommendation-service
     restart: unless-stopped
+    logging: *logging
     environment:
       - MYSQL_DSN=admin:admin123@tcp(mysql:3306)/shortdrama?parseTime=true
       - REDIS_ADDR=redis:6379
@@ -704,6 +726,7 @@ services:
     image: jaegertracing/all-in-one:latest
     container_name: shortdrama-jaeger
     restart: unless-stopped
+    logging: *logging
     environment:
       - COLLECTOR_OTLP_ENABLED=true
       - COLLECTOR_ZIPKIN_HOST_PORT=:9411
@@ -725,6 +748,7 @@ services:
     image: prom/node-exporter:latest
     container_name: shortdrama-node-exporter
     restart: unless-stopped
+    logging: *logging
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
@@ -743,6 +767,7 @@ services:
     image: gcr.io/cadvisor/cadvisor:latest
     container_name: shortdrama-cadvisor
     restart: unless-stopped
+    logging: *logging
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
@@ -762,6 +787,7 @@ services:
     image: oliver006/redis_exporter:latest
     container_name: shortdrama-redis-exporter
     restart: unless-stopped
+    logging: *logging
     environment:
       - REDIS_ADDR=redis://redis:6379
     ports:
@@ -776,6 +802,7 @@ services:
     image: prom/mysqld-exporter:latest
     container_name: shortdrama-mysqld-exporter
     restart: unless-stopped
+    logging: *logging
     environment:
       - DATA_SOURCE_NAME=admin:admin123@(mysql:3306)/
     ports:
@@ -795,6 +822,7 @@ services:
     image: prom/prometheus:latest
     container_name: shortdrama-prometheus
     restart: unless-stopped
+    logging: *logging
     ports:
       - "9090:9090"
     volumes:
@@ -815,6 +843,7 @@ services:
     image: prom/alertmanager:latest
     container_name: shortdrama-alertmanager
     restart: unless-stopped
+    logging: *logging
     ports:
       - "9093:9093"
     volumes:
@@ -830,6 +859,7 @@ services:
     image: grafana/grafana:latest
     container_name: shortdrama-grafana
     restart: unless-stopped
+    logging: *logging
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
@@ -853,6 +883,7 @@ services:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.17.4
     container_name: shortdrama-elasticsearch
     restart: unless-stopped
+    logging: *logging
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
@@ -876,6 +907,7 @@ services:
     image: docker.elastic.co/kibana/kibana:8.17.4
     container_name: shortdrama-kibana
     restart: unless-stopped
+    logging: *logging
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
       - xpack.security.enabled=false
@@ -900,6 +932,7 @@ services:
       dockerfile: Dockerfile
     container_name: shortdrama-log-shipper
     restart: unless-stopped
+    logging: *logging
     environment:
       ES_HOST: elasticsearch
       ES_PORT: 9200
@@ -910,21 +943,22 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
-    logging: *logging
 
   # Filebeat — Linux 生产环境使用 (Windows 上由 log-shipper 替代)
   filebeat:
     image: docker.elastic.co/beats/filebeat:8.17.4
     container_name: shortdrama-filebeat
     restart: unless-stopped
+    logging: *logging
     user: root  # 需要访问 Docker socket 和容器日志
     volumes:
       - ./backend/monitoring/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
     networks:
       - shortdrama-network
     depends_on:
       elasticsearch:
         condition: service_healthy
-    command: filebeat -e -c /usr/share/filebeat/filebeat.yml -strict.perms=false
+    command: filebeat -e -c /usr/share/filebeat/filebeat.yml --strict.perms=false
 

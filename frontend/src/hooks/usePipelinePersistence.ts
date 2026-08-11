@@ -180,12 +180,30 @@ export function usePipelinePersistence() {
   }
 }
 
-/** Clear all pipeline cache for a user (call on logout) */
+/** Clear all pipeline cache for a user (call on logout / new-work) */
 export function clearPipelineStorage(userId: string) {
+  // 1. Clear per-workId keys (cacheKey reads the active workId from localStorage)
   const allSteps = [...VALID_STEPS, 'workId'] as const
   for (const step of allSteps) {
     try {
       localStorage.removeItem(cacheKey(userId, step))
+    } catch {}
+  }
+  // 2. Clear _noid_ keys — data saved before a workId was created.
+  //    These are NOT covered by step 1 because cacheKey() reads the
+  //    (still-present) workId in the loop above, causing the _noid_ variant
+  //    to be skipped. After clearing workId above, explicitly remove them.
+  for (const step of VALID_STEPS) {
+    try {
+      localStorage.removeItem(`pipeline_cache_${userId}__noid_${step}`)
+    } catch {}
+  }
+  // 3. Clean legacy flat keys without userId prefix
+  for (const step of [...VALID_STEPS, 'workId']) {
+    try {
+      localStorage.removeItem(`script_${step}`)
+      localStorage.removeItem(`pipeline_${step}`)
+      localStorage.removeItem(step)
     } catch {}
   }
 }

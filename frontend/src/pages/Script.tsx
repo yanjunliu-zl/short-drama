@@ -55,6 +55,7 @@ import {
 } from '@ant-design/icons';
 import { scriptService } from '@/services/scriptService';
 import { workService } from '@/services/workService';
+import { assetService } from '@/services/assetService';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -266,6 +267,7 @@ const Script: React.FC = () => {
             setEpisodes(mapped);
             if (mapped.length > 0) setActiveEpisodeId(mapped[0].id);
           } else if (saved.content) {
+            if (saved.scriptId) setScriptId(saved.scriptId);
             parseScriptToEpisodes(saved.content, saved.generatedScriptTitle || '');
           } else if (saved.scriptId) {
             // Set completion state immediately so editor shows
@@ -317,35 +319,39 @@ const Script: React.FC = () => {
         const status = await scriptService.getGenerationStatus(id);
         if (status) {
           setGenerationProgress(status.progress || 0);
-          persistState('script', {
-            generationStatus: 'generating',
-            generationProgress: status.progress || 0,
-            taskId: id,
-            generatedScriptTitle: formTitle,
-          });
 
           if (status.status === 'completed') {
             clearInterval(pollingRef.current!);
             pollingRef.current = null;
             setGenerationStatus('completed');
             setGenerationProgress(100);
-            if ((status as any).script_id) setScriptId((status as any).script_id);
+            const completedScriptId = (status as any).script_id;
+            if (completedScriptId) setScriptId(completedScriptId);
             message.success('剧本生成完成！');
+
+            // 立即持久化 scriptId，不等 setTimeout（防止 workId 创建失败导致 scriptId 丢失）
+            persistState('script', {
+              scriptId: completedScriptId,
+              generationStatus: 'completed',
+              generationProgress: 100,
+              taskId: id,
+              generatedScriptTitle: formTitle,
+            });
 
             const resultEpisodes: any[] = [];
             let resultStoryboard: any = null;
             const title = status.result?.title || generatedScriptTitle || formTitle;
             const content = status.result?.content || '';
 
-            if (status.result) {
-              const script = status.result;
-              setGeneratedScriptTitle(script.title || formTitle);
+            const resultData: any = status.result || status;
+            if (resultData) {
+              setGeneratedScriptTitle(resultData.title || formTitle);
               // Capture V2 storyboard data for smart storyboard
-              if (script.storyboard) {
-                resultStoryboard = script.storyboard;
+              if (resultData.storyboard) {
+                resultStoryboard = resultData.storyboard;
               }
-              if (script.episodes && script.episodes.length > 0) {
-                const backendEpisodes: Episode[] = script.episodes.map((ep: any) => ({
+              if (resultData.episodes && resultData.episodes.length > 0) {
+                const backendEpisodes: Episode[] = resultData.episodes.map((ep: any) => ({
                   id: `ep-${ep.episode_number || ep.episodeNumber || 1}-${Date.now().toString(36)}`,
                   title: ep.title || `第${ep.episode_number || 1}集`,
                   number: ep.episode_number || ep.episodeNumber || 1,
@@ -356,7 +362,7 @@ const Script: React.FC = () => {
                 resultEpisodes.push(...JSON.parse(JSON.stringify(backendEpisodes)));
                 if (backendEpisodes.length > 0) setActiveEpisodeId(backendEpisodes[0].id);
               } else {
-                parseScriptToEpisodes(script.content || '', script.title || formTitle);
+                parseScriptToEpisodes(resultData.content || '', resultData.title || formTitle);
               }
             } else {
               setGeneratedScriptTitle(formTitle);
@@ -407,6 +413,14 @@ const Script: React.FC = () => {
             setGenerationError(status.error || status.error_message || '剧本生成失败，请重试');
             message.error(status.error || status.error_message || '剧本生成失败，请重试');
             persistState('script', { generationStatus: 'failed' });
+          } else {
+            // 仍在生成中：持久化进度以便页面刷新后恢复
+            persistState('script', {
+              generationStatus: 'generating',
+              generationProgress: status.progress || 0,
+              taskId: id,
+              generatedScriptTitle: formTitle,
+            });
           }
         }
       } catch (err: any) {
@@ -614,30 +628,20 @@ const Script: React.FC = () => {
           }
           setGenerationStatus('completed')
         } else {
-          // Standard generation
-          setGenerationProgress(30);
-          const result = await scriptService.generateScriptFromOutlineSync({
+          // Async outline — submit task_id, poll for results
+          setGenerationProgress(10);
+          const resp = await scriptService.generateScriptFromOutline({
             title: formTitle, outline: enrichedOutline,
             theme: formTheme, length: formLength,
             style: formStyle, setting: formSetting,
             user_id: String(userId || 'anonymous'),
-            target_locale: targetLocale,
           });
-          setGenerationProgress(100);
-          setGeneratedScriptTitle(result.title);
-          const parsedEpisodes: Episode[] = result.episodes.map((ep: any) => ({
-            id: `ep-${ep.episode_number || 1}-${Date.now().toString(36)}`,
-            title: ep.title || `第${ep.episode_number || 1}集`,
-            number: ep.episode_number || 1,
-            scenes: [], characters: [],
-            description: ep.content || '',
-          }));
-          setEpisodes(parsedEpisodes);
-          setGenerationStatus('completed');
-          setGenerationProgress(100);
-          if (parsedEpisodes.length > 0) setActiveEpisodeId(parsedEpisodes[0].id);
-          latestEpisodesRef.current = parsedEpisodes
-          latestResultRef.current = result
+          if (resp?.task_id) {
+            persistState('script', { generationStatus: 'generating', generationProgress: 10, taskId: resp.task_id, generatedScriptTitle: formTitle });
+            pollGenerationStatus(resp.task_id);
+            return;
+          }
+          throw new Error('未获取到任务ID');
         }
 
         // 保存到 localStorage 和后端
@@ -1762,6 +1766,7 @@ const Script: React.FC = () => {
       }
       message.loading({ content: '正在提取角色、场景、道具...', key: 'extract', duration: 0 });
 
+      console.log('[extractEntities] scriptId=', scriptId, 'contentLen=', fullText.length, 'contentStart=', fullText.substring(0, 200));
       // Submit extraction task (async)
       const { task_id } = await scriptService.extractEntitiesAsync(fullText, scriptId!);
 
@@ -1775,7 +1780,20 @@ const Script: React.FC = () => {
             const data = status.result;
             (() => {
               const sc = (data.locations || []).map((l: any, i: number) => ({ id: i + 1, name: typeof l === 'string' ? l : (l.name || ''), description: typeof l === 'object' ? (l.description || '') : '', type: '室内', environment: '', size: '中等', tags: [] }));
-              const ch = (data.characters || []).map((c: any, i: number) => ({ id: i + 1, name: c.name || '', description: c.description || '', age: 25, gender: c.gender || (c.role === '反派' ? '男' : ''), occupation: '', personality: c.description || '', appearance: '', tags: [c.role || '配角'] }));
+              const ch = (data.characters || []).map((c: any, i: number) => {
+                const ageMap: Record<string, number> = { '少年': 16, '青年': 25, '中年': 42, '老年': 65 };
+                return {
+                  id: i + 1,
+                  name: c.name || '',
+                  description: c.description || c.personality || '',
+                  age: ageMap[c.age_range] || (c.age_range ? 25 : 25),
+                  gender: c.gender || (c.role === '反派' ? '男' : ''),
+                  occupation: c.occupation || '',
+                  personality: c.personality || c.description || '',
+                  appearance: c.appearance || '',
+                  tags: [c.role || '配角'],
+                };
+              });
               const pr = (data.props || []).map((p: any, i: number) => ({ id: i + 1, name: typeof p === 'string' ? p : (p.name || ''), description: typeof p === 'object' ? (p.description || '') : '', category: '其他', material: '', size: '小型', tags: [] }));
               const wid = getWorkId();
               if (wid) {
@@ -1783,6 +1801,23 @@ const Script: React.FC = () => {
                   persistState('scenes', sc, wid),
                   persistState('characters', ch, wid),
                   persistState('props', pr, wid),
+                ]).catch(() => {});
+                // Also persist to backend database so assets survive across machines
+                Promise.allSettled([
+                  ...ch.map((c: any) => assetService.createCharacter({
+                    name: c.name,
+                    description: c.description,
+                    age: c.age || 25,
+                    gender: c.gender || '其他',
+                    role: (c.tags && c.tags[0]) || '配角',
+                  }).catch(() => {})),
+                  ...sc.map((s: any) => assetService.createScene({
+                    title: s.name,
+                    description: s.description,
+                    location: s.type || '',
+                    timeOfDay: s.environment || '',
+                    content: s.description || '',
+                  }).catch(() => {})),
                 ]).catch(() => {});
               }
               sessionStorage.setItem('current_script', JSON.stringify({ episodes: JSON.parse(JSON.stringify(episodes)), generatedScriptTitle, title: generatedScriptTitle }));

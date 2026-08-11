@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package finalcut.v1;
+
+option go_package = "short-drama-platform/proto/gen/go/finalcut/v1;finalcutv1";
+
+import "common/common.proto";
+
+// FinalCutService — video compositing, ffmpeg final assembly
+service FinalCutService {
+  rpc SubmitFinalCut(SubmitFinalCutRequest) returns (SubmitFinalCutResponse);
+  rpc GetFinalCutStatus(GetFinalCutStatusRequest) returns (common.StatusResponse);
+  rpc GetFinalCutResult(GetFinalCutResultRequest) returns (GetFinalCutResultResponse);
+}
+
+message FinalCutTask {
+  int64 id = 1;
+  string task_id = 2;
+  string project_id = 3;
+  repeated string video_urls = 4;
+  string output_url = 5;
+  string thumbnail_url = 6;
+  string status = 7;
+  int64 file_size = 8;
+  string error = 9;
+  int64 created_at = 10;
+  int64 completed_at = 11;
+}
+
+message SubmitFinalCutRequest {
+  string project_id = 1;
+  repeated string video_urls = 2;   // Source clips to composite
+  string output_format = 3;          // "mp4"
+  string transition = 4;            // "cut", "fade", "dissolve"
+}
+
+message SubmitFinalCutResponse {
+  string task_id = 1;
+  string status = 2;
+}
+
+message GetFinalCutStatusRequest {
+  string task_id = 1;
+}
+
+message GetFinalCutResultRequest {
+  string task_id = 1;
+}
+
+message GetFinalCutResultResponse {
+  string task_id = 1;
+  string status = 2;
+  string output_url = 3;
+  string thumbnail_url = 4;
+  int64 file_size = 5;
+  string error = 6;
+}

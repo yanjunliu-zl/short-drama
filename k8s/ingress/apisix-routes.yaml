@@ -1,0 +1,102 @@
+# APISIX Routes — K8s service upstreams
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apisix-routes
+  namespace: shortdrama
+data:
+  apisix.yaml: |
+    global_rules:
+      - id: 1
+        plugins:
+          cors:
+            allow_credential: true
+            allow_headers: "*"
+            allow_methods: "GET,POST,PUT,DELETE,OPTIONS,PATCH"
+            allow_origins: "http://localhost:3000,http://localhost:8080"
+
+    upstreams:
+      - id: 1
+        name: user-service
+        type: roundrobin
+        nodes:
+          "user-service:8080": 1
+      - id: 2
+        name: content-service
+        type: roundrobin
+        nodes:
+          "content-service:8081": 1
+      - id: 3
+        name: script-service
+        type: roundrobin
+        nodes:
+          "script-service:8000": 1
+      - id: 4
+        name: storyboard-service
+        type: roundrobin
+        nodes:
+          "storyboard-service:8001": 1
+      - id: 5
+        name: render-service
+        type: roundrobin
+        nodes:
+          "render-service:8002": 1
+      - id: 6
+        name: recommendation-service
+        type: roundrobin
+        nodes:
+          "recommendation-service:8004": 1
+
+    routes:
+      - id: 1
+        name: users
+        uri: /api/v1/users*
+        upstream_id: 1
+      - id: 2
+        name: cases
+        uri: /api/v1/cases*
+        upstream_id: 2
+      - id: 3
+        name: works
+        uri: /api/v1/works*
+        upstream_id: 2
+      - id: 4
+        name: scenes
+        uri: /api/v1/scenes*
+        upstream_id: 2
+      - id: 5
+        name: characters
+        uri: /api/v1/characters*
+        upstream_id: 2
+      - id: 6
+        name: scripts
+        uri: /api/v1/scripts*
+        upstream_id: 3
+      - id: 7
+        name: storyboard
+        uri: /api/v1/storyboard*
+        upstream_id: 4
+      - id: 8
+        name: render
+        uri: /api/v1/llmhua*
+        upstream_id: 5
+      - id: 9
+        name: recommendations
+        uri: /api/v1/recommendations*
+        upstream_id: 6
+      - id: 10
+        name: payments
+        uri: /api/v1/payments*
+        upstream_id: 2
+      - id: 11
+        name: usage
+        uri: /api/v1/usage*
+        upstream_id: 2
+      - id: 12
+        name: comments
+        uri: /api/v1/comments*
+        upstream_id: 3
+
+    # fallback: all other /api/* → script-service
+    # (generation, extract-entities, split, etc.)
+    # handled by routes above
