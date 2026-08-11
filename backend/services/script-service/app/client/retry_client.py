@@ -31,26 +31,33 @@ class RetryClient:
         url: str,
         **kwargs
     ) -> aiohttp.ClientResponse:
-        """发送请求并处理重试"""
+        """发送请求并处理重试
+
+        IMPORTANT: 不能使用 async with 包裹 session.request() 再返回 response，
+        因为 async with 退出时会调用 response.release() 释放连接，
+        导致调用方无法读取响应体。改为直接 await 返回 response，
+        由调用方的 async with 负责释放。
+        """
         last_exception = None
 
         for attempt in range(self.max_attempts):
             try:
                 timeout = ClientTimeout(total=settings.RESPONSE_TIMEOUT)
-                async with session.request(
+                response = await session.request(
                     method,
                     url,
                     timeout=timeout,
                     **kwargs
-                ) as response:
-                    # 检查响应状态
-                    if response.status >= 500:
-                        if attempt < self.max_attempts - 1:
-                            delay = self._calculate_delay(attempt)
-                            await asyncio.sleep(delay)
-                            continue
-                        response.raise_for_status()
-                    return response
+                )
+                # 检查响应状态
+                if response.status >= 500:
+                    response.release()  # 手动释放后重试
+                    if attempt < self.max_attempts - 1:
+                        delay = self._calculate_delay(attempt)
+                        await asyncio.sleep(delay)
+                        continue
+                    response.raise_for_status()
+                return response
 
             except aiohttp.ClientError as e:
                 last_exception = e

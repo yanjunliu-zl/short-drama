@@ -267,11 +267,13 @@ async def generate_script_from_novel(
             outline_text=novel_content,
             style=getattr(request, 'style', ''),
         )
+        episodes = result.get("episodes", [])
+        asyncio.create_task(_auto_create_case(title=request.title, episodes=episodes))
         return ScriptResponse(
             task_id="degraded",
             status="completed",
             message="Auto-routed to outline pipeline (no chapter markers detected)",
-            script={"episodes": result.get("episodes", []), "title": request.title},
+            script={"episodes": episodes, "title": request.title},
         )
 
     # Full novel path — enqueue through Kafka/memory worker
@@ -669,6 +671,34 @@ async def get_character_graph(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _auto_create_case(title: str, episodes: list, tags: list = None):
+    """剧本生成完成后，异步创建 case 写入 content-service。
+    失败不影响主流程，只 log warning。
+    """
+    try:
+        from app.client.content_service_client import get_content_service_client
+        client = get_content_service_client()
+        first_ep = episodes[0] if episodes else {}
+        description = first_ep.get("content", "")[:200] if first_ep else title
+        case_tags = tags or ["短剧"]
+        import random
+        colors = ["#1890ff", "#52c41a", "#fa8c16", "#722ed1", "#13c2c2", "#f759ab"]
+        data = {
+            "title": title,
+            "description": description,
+            "author": "AI创作助手",
+            "tags": case_tags,
+            "coverColor": random.choice(colors),
+        }
+        result = await client.create_case(data)
+        if result:
+            logger.info(f"[AutoCase] Created case id={result.get('id')} title={title}")
+        else:
+            logger.warning(f"[AutoCase] Failed to create case (content-service unavailable) title={title}")
+    except Exception as e:
+        logger.warning(f"[AutoCase] Error creating case: {e}")
+
+
 async def _generate_outline_background(
     task_id: str, request: ScriptFromOutlineRequest, style: str,
     target_eps: int, full_context: str, plot_template, use_streaming: bool,
@@ -697,6 +727,7 @@ async def _generate_outline_background(
             "title": request.title,
         })
         logger.info(f"Background outline complete: task={task_id} episodes={len(episodes_data)}")
+        asyncio.create_task(_auto_create_case(title=request.title, episodes=episodes_data))
     except Exception as e:
         logger.error(f"Background outline generation failed task={task_id}: {e}")
         await _bg_task_set(task_id, {"status": "failed", "error": str(e)})
@@ -1047,6 +1078,9 @@ async def generate_from_outline(
         for _ep in all_episodes:
             raw = _ep.get("content", "")
             _ep["content"] = _clean_pattern.sub("", raw, count=2).strip()
+
+        # Auto-create case from generated script (fire-and-forget)
+        asyncio.create_task(_auto_create_case(title=request.title, episodes=all_episodes))
 
         return {
             "script_id": 0, "title": request.title,

@@ -62,6 +62,32 @@ async def _task_get(task_id: str) -> Optional[dict]:
         return None
 
 
+async def _auto_create_case_script_service(title: str, episodes: list, tags: list = None):
+    """剧本生成完成后，异步创建 case 写入 content-service。失败不影响主流程。"""
+    try:
+        from app.client.content_service_client import get_content_service_client
+        import random
+        client = get_content_service_client()
+        first_ep = episodes[0] if episodes else {}
+        description = first_ep.get("content", "")[:200] if first_ep else title
+        case_tags = tags or ["短剧"]
+        colors = ["#1890ff", "#52c41a", "#fa8c16", "#722ed1", "#13c2c2", "#f759ab"]
+        data = {
+            "title": title,
+            "description": description,
+            "author": "AI创作助手",
+            "tags": case_tags,
+            "coverColor": random.choice(colors),
+        }
+        result = await client.create_case(data)
+        if result:
+            logger.info(f"[AutoCase] Created case id={result.get('id')} title={title}")
+        else:
+            logger.warning(f"[AutoCase] Failed to create case (content-service unavailable) title={title}")
+    except Exception as e:
+        logger.warning(f"[AutoCase] Error creating case: {e}")
+
+
 class ScriptService:
     """剧本生成服务，集成LangChain和LangGraph，使用SQLAlchemy持久化"""
 
@@ -426,6 +452,9 @@ class ScriptService:
             await _task_set(task_id, {"status": "completed", "progress": 100, "title": request.title, "script_id": script.id})
             task.end_time = time.time()
             await db.commit()
+
+            # Auto-create case for recommendation system
+            asyncio.create_task(_auto_create_case_script_service(title=request.title, episodes=episodes))
 
             logger.info(f"[V2] 完成 script_id={script.id}, {len(episodes)}集, "
                         f"{len(characters_data)}角色, {len(storyboard_data)}分镜, "
